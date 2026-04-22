@@ -1,0 +1,1254 @@
+{
+  "meta": {
+    "generated_at": "2026-04-07T12:59:47.665985Z",
+    "snapshot_ts": 1775566417,
+    "window_hours": 168,
+    "superroot": "9a84b013cfd0295993711cd04069b911979eeee6a25e27dd1079695b91097ffe",
+    "total_indexed_chains": 38,
+    "acceptance_criteria": {
+      "min_protocols": 6,
+      "actual_protocols": 25,
+      "active_with_fills": 3,
+      "status": "PASS"
+    }
+  },
+  "summary": {
+    "total_fills_168h": 7386,
+    "total_volume_usd_168h": 2258.65,
+    "est_taifoon_revenue_usd_168h": 0.9035,
+    "active_protocols": 3,
+    "dormant_protocols": 22,
+    "active_solver_addresses": 18,
+    "anomaly_count": 18,
+    "fill_velocity": {
+      "1h": 0,
+      "4h": 0,
+      "24h": 4,
+      "168h": 18
+    }
+  },
+  "protocols": [
+    {
+      "id": "t3rn_lwc",
+      "name": "T3RN LWC",
+      "cat": "Intent",
+      "fee_bps": 5,
+      "sla_ms": 15000,
+      "dst_chains": 11,
+      "active_indexed": false,
+      "lambda_tracked": true,
+      "fills_168h": 7367,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 1,
+      "fill_rate": 73.7,
+      "exec_total": 10000,
+      "exec_success": 7367,
+      "exec_expired": 2633,
+      "avg_fee_bps_observed": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "ACTIVE"
+    },
+    {
+      "id": "across_v3",
+      "name": "Across Protocol V3",
+      "cat": "Bridge",
+      "fee_bps": 3,
+      "sla_ms": 10000,
+      "dst_chains": 15,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "relay_protocol",
+      "name": "Relay Protocol",
+      "cat": "Bridge",
+      "fee_bps": 3,
+      "sla_ms": 10000,
+      "dst_chains": 10,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "debridge_dln",
+      "name": "deBridge DLN",
+      "cat": "Intent",
+      "fee_bps": 4,
+      "sla_ms": 8000,
+      "dst_chains": 13,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "stargate_v2",
+      "name": "Stargate V2",
+      "cat": "Bridge",
+      "fee_bps": 2,
+      "sla_ms": 12000,
+      "dst_chains": 17,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 6,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 5,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "ACTIVE"
+    },
+    {
+      "id": "hop_bridge",
+      "name": "Hop Protocol",
+      "cat": "Bridge",
+      "fee_bps": 2,
+      "sla_ms": 15000,
+      "dst_chains": 8,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "lifi_v2",
+      "name": "LiFi V2",
+      "cat": "Aggregator",
+      "fee_bps": 4,
+      "sla_ms": 20000,
+      "dst_chains": 20,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 13,
+      "vol_168h": 2258.6475,
+      "fills_24h": 4,
+      "vol_24h": 97.3978,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 13,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": 49.0,
+      "fee_anomalies": [
+        10000.0,
+        529.0
+      ],
+      "avg_latency_ms": 55417,
+      "est_revenue_168h_usd": 0.9035,
+      "status": "ACTIVE"
+    },
+    {
+      "id": "mayan_swift",
+      "name": "Mayan Swift",
+      "cat": "Bridge",
+      "fee_bps": 5,
+      "sla_ms": 30000,
+      "dst_chains": 6,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "wormhole",
+      "name": "Wormhole",
+      "cat": "Messaging",
+      "fee_bps": 2,
+      "sla_ms": 60000,
+      "dst_chains": 12,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "cctp",
+      "name": "Circle CCTP",
+      "cat": "Bridge",
+      "fee_bps": 2,
+      "sla_ms": 15000,
+      "dst_chains": 8,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "ccip",
+      "name": "Chainlink CCIP",
+      "cat": "Messaging",
+      "fee_bps": 3,
+      "sla_ms": 30000,
+      "dst_chains": 10,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "layerzero_v2",
+      "name": "LayerZero V2",
+      "cat": "Messaging",
+      "fee_bps": 2,
+      "sla_ms": 30000,
+      "dst_chains": 15,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "synapse",
+      "name": "Synapse Protocol",
+      "cat": "Bridge",
+      "fee_bps": 3,
+      "sla_ms": 20000,
+      "dst_chains": 12,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "celer_cbridge",
+      "name": "Celer cBridge",
+      "cat": "Bridge",
+      "fee_bps": 2,
+      "sla_ms": 20000,
+      "dst_chains": 10,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "axelar_gmp",
+      "name": "Axelar GMP",
+      "cat": "Messaging",
+      "fee_bps": 3,
+      "sla_ms": 30000,
+      "dst_chains": 14,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "hyperlane",
+      "name": "Hyperlane",
+      "cat": "Messaging",
+      "fee_bps": 2,
+      "sla_ms": 30000,
+      "dst_chains": 12,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "socket",
+      "name": "Socket Protocol",
+      "cat": "Aggregator",
+      "fee_bps": 3,
+      "sla_ms": 20000,
+      "dst_chains": 12,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "connext",
+      "name": "Connext (Everclear)",
+      "cat": "Bridge",
+      "fee_bps": 2,
+      "sla_ms": 20000,
+      "dst_chains": 10,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "allbridge",
+      "name": "Allbridge",
+      "cat": "Bridge",
+      "fee_bps": 3,
+      "sla_ms": 25000,
+      "dst_chains": 8,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "router_protocol",
+      "name": "Router Protocol",
+      "cat": "Bridge",
+      "fee_bps": 4,
+      "sla_ms": 20000,
+      "dst_chains": 10,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "symbiosis",
+      "name": "Symbiosis Finance",
+      "cat": "Bridge",
+      "fee_bps": 3,
+      "sla_ms": 20000,
+      "dst_chains": 8,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "meson_finance",
+      "name": "Meson Finance",
+      "cat": "Bridge",
+      "fee_bps": 2,
+      "sla_ms": 30000,
+      "dst_chains": 10,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "orbiter_finance",
+      "name": "Orbiter Finance",
+      "cat": "Bridge",
+      "fee_bps": 2,
+      "sla_ms": 15000,
+      "dst_chains": 12,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "squid_router",
+      "name": "Squid Router",
+      "cat": "Aggregator",
+      "fee_bps": 2,
+      "sla_ms": 20000,
+      "dst_chains": 15,
+      "active_indexed": true,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    },
+    {
+      "id": "multichain",
+      "name": "Multichain",
+      "cat": "Bridge",
+      "fee_bps": 3,
+      "sla_ms": 30000,
+      "dst_chains": 10,
+      "active_indexed": false,
+      "lambda_tracked": false,
+      "fills_168h": 0,
+      "vol_168h": 0.0,
+      "fills_24h": 0,
+      "vol_24h": 0.0,
+      "fills_1h": 0,
+      "fills_4h": 0,
+      "active_solvers": 0,
+      "fill_rate": null,
+      "exec_total": null,
+      "avg_fee_bps_observed": null,
+      "fee_anomalies": [],
+      "avg_latency_ms": null,
+      "est_revenue_168h_usd": 0.0,
+      "status": "DORMANT"
+    }
+  ],
+  "solvers": [
+    {
+      "address": "0x2a2019b30c157db6c1c01306b8025167dbe1803b",
+      "short": "0x2a2019b3\u2026e1803b",
+      "fills": 2,
+      "vol_usd": 0.0,
+      "protocols": [
+        "stargate-v2"
+      ],
+      "chains": [
+        "Scroll",
+        "Linea"
+      ],
+      "avg_latency_ms": 0,
+      "fee_bps_obs": null,
+      "fee_bps_default": 2,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0x9f729e2482d6afe096bfbdb17c8014909fc533cb",
+      "short": "0x9f729e24\u2026c533cb",
+      "fills": 1,
+      "vol_usd": 14.6286,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Ethereum",
+        "Manta"
+      ],
+      "avg_latency_ms": 7000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.005851,
+      "anomaly": false
+    },
+    {
+      "address": "0x2e2e5c79f571ef1658d4c2d3684a1fe97dd30570",
+      "short": "0x2e2e5c79\u2026d30570",
+      "fills": 1,
+      "vol_usd": 1.0157,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Optimism",
+        "Ethereum"
+      ],
+      "avg_latency_ms": 78000,
+      "fee_bps_obs": 10000.0,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.000406,
+      "anomaly": true
+    },
+    {
+      "address": "0x47fa0c6b40b4dfb925ae81f199c3e7ccbfdf0497",
+      "short": "0x47fa0c6b\u2026df0497",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Lisk",
+        "zkSync Era"
+      ],
+      "avg_latency_ms": 2000,
+      "fee_bps_obs": 49.0,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0x64739640e38f55e6bf1e72a3b10405395f71fb45",
+      "short": "0x64739640\u202671fb45",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Manta",
+        "Linea"
+      ],
+      "avg_latency_ms": 3000,
+      "fee_bps_obs": 529.0,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.0,
+      "anomaly": true
+    },
+    {
+      "address": "0x33377bf8e48ebfea6b7ce3b90fe59af24e2e89a3",
+      "short": "0x33377bf8\u20262e89a3",
+      "fills": 1,
+      "vol_usd": 200.0,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Ethereum",
+        "Sei"
+      ],
+      "avg_latency_ms": 206000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.08,
+      "anomaly": false
+    },
+    {
+      "address": "0x8c2c3117a3d4b925ae81f199c3e7ccbfdf0497aa",
+      "short": "0x8c2c3117\u20260497aa",
+      "fills": 1,
+      "vol_usd": 500.0,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Optimism",
+        "Gnosis"
+      ],
+      "avg_latency_ms": 126000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.2,
+      "anomaly": false
+    },
+    {
+      "address": "0x93b102c65d46dd2672ba3582b63c41e9aeb1ddbe",
+      "short": "0x93b102c6\u2026b1ddbe",
+      "fills": 1,
+      "vol_usd": 38.3141,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Linea",
+        "BSC"
+      ],
+      "avg_latency_ms": 3000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.015326,
+      "anomaly": false
+    },
+    {
+      "address": "0xe1d8006cf8f105023fb6bdc9fa986f586813982a",
+      "short": "0xe1d8006c\u202613982a",
+      "fills": 1,
+      "vol_usd": 2.1362,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Ethereum",
+        "Manta"
+      ],
+      "avg_latency_ms": 6000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.000854,
+      "anomaly": false
+    },
+    {
+      "address": "0x2ab56f5662dfb7789a2c2a65927caad2cf33d796",
+      "short": "0x2ab56f56\u202633d796",
+      "fills": 1,
+      "vol_usd": 42.3188,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Linea",
+        "Ethereum"
+      ],
+      "avg_latency_ms": 2000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.016928,
+      "anomaly": false
+    },
+    {
+      "address": "0x4af6a9dbb48b85cc2fc5b2de35a3b3bdd47bbdd9",
+      "short": "0x4af6a9db\u20267bbdd9",
+      "fills": 1,
+      "vol_usd": 500.0,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Optimism",
+        "Gnosis"
+      ],
+      "avg_latency_ms": 111000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.2,
+      "anomaly": false
+    },
+    {
+      "address": "0x1d0adcc97f7bb8af13e2c9cfa9d6595d44832a11",
+      "short": "0x1d0adcc9\u2026832a11",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Chain 143",
+        "BSC"
+      ],
+      "avg_latency_ms": 0,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0x42b1427090dfe989f170a73996f1be6db45efeba",
+      "short": "0x42b14270\u20265efeba",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Chain 143",
+        "BSC"
+      ],
+      "avg_latency_ms": 1000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0x8c64f398e474033433b2958dabc135ab6446f6b4",
+      "short": "0x8c64f398\u202646f6b4",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "stargate-v2"
+      ],
+      "chains": [
+        "Manta",
+        "Chain 30320"
+      ],
+      "avg_latency_ms": 0,
+      "fee_bps_obs": null,
+      "fee_bps_default": 2,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0xbe64c1265dfb753ed6e7c76cb5ff8f276c7e6b43",
+      "short": "0xbe64c126\u20267e6b43",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "stargate-v2"
+      ],
+      "chains": [
+        "Manta",
+        "Chain 30320"
+      ],
+      "avg_latency_ms": 0,
+      "fee_bps_obs": null,
+      "fee_bps_default": 2,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0xac78ba3e4f41a8b930c157db6c1c01306b802516",
+      "short": "0xac78ba3e\u2026802516",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "stargate-v2"
+      ],
+      "chains": [
+        "Scroll",
+        "Optimism"
+      ],
+      "avg_latency_ms": 0,
+      "fee_bps_obs": null,
+      "fee_bps_default": 2,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0xd4b925ae81f199c3e7ccbfdf0497aa4f6b40b4df",
+      "short": "0xd4b925ae\u202640b4df",
+      "fills": 1,
+      "vol_usd": 0.0,
+      "protocols": [
+        "stargate-v2"
+      ],
+      "chains": [
+        "Linea",
+        "Blast"
+      ],
+      "avg_latency_ms": 0,
+      "fee_bps_obs": null,
+      "fee_bps_default": 2,
+      "est_rev_usd": 0.0,
+      "anomaly": false
+    },
+    {
+      "address": "0xc3e7ccbfdf0497aa4f6b40b4dfb925ae81f199c3",
+      "short": "0xc3e7ccbf\u2026f199c3",
+      "fills": 1,
+      "vol_usd": 960.234,
+      "protocols": [
+        "lifi-v2"
+      ],
+      "chains": [
+        "Ethereum",
+        "Arbitrum"
+      ],
+      "avg_latency_ms": 120000,
+      "fee_bps_obs": null,
+      "fee_bps_default": 4,
+      "est_rev_usd": 0.384094,
+      "anomaly": false
+    }
+  ],
+  "anomalies": [
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0x2a2019b3\u2026e1803b",
+      "detail": "2 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "FEE_SPIKE",
+      "solver": "0x2e2e5c79\u2026d30570",
+      "detail": "10000.0 bps observed (protocol default: 4 bps)",
+      "severity": "HIGH"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0x47fa0c6b\u2026df0497",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "FEE_SPIKE",
+      "solver": "0x64739640\u202671fb45",
+      "detail": "529.0 bps observed (protocol default: 4 bps)",
+      "severity": "HIGH"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0x64739640\u202671fb45",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "HIGH_LATENCY",
+      "solver": "0x33377bf8\u20262e89a3",
+      "detail": "206s avg latency (SLA breach)",
+      "severity": "MEDIUM"
+    },
+    {
+      "type": "HIGH_LATENCY",
+      "solver": "0x8c2c3117\u20260497aa",
+      "detail": "126s avg latency (SLA breach)",
+      "severity": "MEDIUM"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0x1d0adcc9\u2026832a11",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0x42b14270\u20265efeba",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0x8c64f398\u202646f6b4",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0xbe64c126\u20267e6b43",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0xac78ba3e\u2026802516",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "ZERO_VOLUME",
+      "solver": "0xd4b925ae\u202640b4df",
+      "detail": "1 fill(s) with $0 volume \u2014 USD tracking gap",
+      "severity": "LOW"
+    },
+    {
+      "type": "PROTOCOL_DORMANT",
+      "solver": "Across Protocol V3",
+      "detail": "0 fills in 168h window",
+      "severity": "INFO"
+    },
+    {
+      "type": "PROTOCOL_DORMANT",
+      "solver": "Relay Protocol",
+      "detail": "0 fills in 168h window",
+      "severity": "INFO"
+    },
+    {
+      "type": "PROTOCOL_DORMANT",
+      "solver": "deBridge DLN",
+      "detail": "0 fills in 168h window",
+      "severity": "INFO"
+    },
+    {
+      "type": "PROTOCOL_DORMANT",
+      "solver": "Hop Protocol",
+      "detail": "0 fills in 168h window",
+      "severity": "INFO"
+    },
+    {
+      "type": "PROTOCOL_DORMANT",
+      "solver": "Mayan Swift",
+      "detail": "0 fills in 168h window",
+      "severity": "INFO"
+    }
+  ],
+  "t3rn_lambda": {
+    "total_orders": 10000,
+    "by_state": {
+      "Executed": 7367,
+      "Expired": 2633
+    },
+    "by_chain": {
+      "1329": 350,
+      "324": 375,
+      "56": 2896,
+      "250": 139,
+      "2741": 35,
+      "143": 199,
+      "252": 22,
+      "100": 290,
+      "84532": 137,
+      "42161": 1560,
+      "59144": 229,
+      "81457": 38,
+      "130": 50,
+      "1284": 26,
+      "1": 1993,
+      "1135": 35,
+      "747": 56,
+      "999": 346,
+      "33139": 53,
+      "10": 160,
+      "534352": 613,
+      "43114": 398
+    }
+  },
+  "recency_matrix": {
+    "t3rn_lwc": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\ud83d\udfe2"
+    },
+    "across_v3": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "relay_protocol": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "debridge_dln": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "stargate_v2": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\ud83d\udfe2"
+    },
+    "hop_bridge": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "lifi_v2": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\ud83d\udfe2",
+      "168h": "\ud83d\udfe2"
+    },
+    "mayan_swift": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "wormhole": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "cctp": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "ccip": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "layerzero_v2": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "synapse": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "celer_cbridge": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "axelar_gmp": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "hyperlane": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "socket": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "connext": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "allbridge": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "router_protocol": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "symbiosis": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "meson_finance": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "orbiter_finance": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "squid_router": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    },
+    "multichain": {
+      "1h": "\u2b1c",
+      "4h": "\u2b1c",
+      "24h": "\u2b1c",
+      "168h": "\u2b1c"
+    }
+  }
+}

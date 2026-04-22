@@ -6,6 +6,7 @@ use tracing::{error, info};
 
 const GENOME_SSE_URL: &str = "https://api.taifoon.dev/api/genome/subscribe/sse";
 const MIN_PROFIT_USD: f64 = 1.0;
+const SOLVER_INTEL_PATH: &str = "config/solver_intel.json";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,7 +24,14 @@ async fn main() -> Result<()> {
 
     // Initialize components
     let genome_client = GenomeClient::new(GENOME_SSE_URL);
-    let profit_calc = ProfitCalculator::new(MIN_PROFIT_USD);
+    let mut profit_calc = ProfitCalculator::new(MIN_PROFIT_USD);
+
+    // Load solver intel
+    if let Err(e) = profit_calc.load_solver_intel(SOLVER_INTEL_PATH) {
+        error!("⚠️  Failed to load solver intel: {}", e);
+        info!("   Continuing with default 10 bps fee for unknown protocols");
+    }
+
     // let executor = Executor::new(); // TODO: Enable when ready
 
     // Create intent channel
