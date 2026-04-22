@@ -1,0 +1,13 @@
+[package]
+name = "executor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+genome-client = { path = "../genome-client" }
+serde.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
