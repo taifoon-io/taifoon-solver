@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taifoon-solver
+  namespace: default
+  labels:
+    app: taifoon-solver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taifoon-solver
+  template:
+    metadata:
+      labels:
+        app: taifoon-solver
+    spec:
+      containers:
+      - name: taifoon-solver
+        image: taifoon-solver:latest
+        imagePullPolicy: Never  # Use local image
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: GENOME_SSE_URL
+          value: "https://api.taifoon.dev/api/genome/subscribe/sse"
+        - name: MIN_PROFIT_USD
+          value: "1.0"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        # No health checks for now - just let it run and log
+      restartPolicy: Always
