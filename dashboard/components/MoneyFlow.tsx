@@ -7,7 +7,7 @@ interface MoneyFlowData {
   gas_costs_usd: number
   liquidity_costs_usd: number
   net_profit_usd: number
-  roi_percentage: number
+  roi: number
 }
 
 export default function MoneyFlow() {
@@ -78,8 +78,8 @@ export default function MoneyFlow() {
         </div>
         <div className="flex justify-between items-center">
           <span className="text-gray-400">ROI</span>
-          <span className={`font-mono ${data.roi_percentage >= 0 ? 'text-[#00FF88]' : 'text-[#FF3366]'}`}>
-            {data.roi_percentage.toFixed(1)}%
+          <span className={`font-mono ${data.roi >= 0 ? 'text-[#00FF88]' : 'text-[#FF3366]'}`}>
+            {(data.roi * 100).toFixed(1)}%
           </span>
         </div>
       </div>
