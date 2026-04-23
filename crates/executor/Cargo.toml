@@ -6,6 +6,9 @@ authors.workspace = true
 
 [dependencies]
 genome-client = { path = "../genome-client" }
+profit-calc = { path = "../profit-calc" }
+t3rn-sidecar = { path = "../t3rn-sidecar" }
+alloy.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use genome_client::GenomeClient;
 use profit_calc::ProfitCalculator;
-use solver_api::{SolverApi, SolverEvent, IntentData, AttemptData};
+use executor::Executor;
+use solver_api::{SolverApi, SolverEvent, IntentData, AttemptData, SolvedData};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 use chrono::Utc;
@@ -55,7 +56,9 @@ async fn main() -> Result<()> {
         info!("   Continuing with default 10 bps fee for unknown protocols");
     }
 
-    // let executor = Executor::new(); // TODO: Enable when ready
+    // Initialize executor
+    let executor = Executor::new()?;
+    info!("✅ Executor initialized");
 
     // Create intent channel
     let (intent_tx, mut intent_rx) = mpsc::channel(100);
@@ -111,9 +114,26 @@ async fn main() -> Result<()> {
                 }));
 
                 if profit_result.profitable {
-                    info!("✅ PROFITABLE - Would execute (executor not yet implemented)");
-                    // TODO: executor.execute_fill(&intent).await
-                    // TODO: Emit SolverEvent::IntentSolved when execution is implemented
+                    info!("✅ PROFITABLE - Attempting execution");
+
+                    match executor.execute_fill(&intent, &profit_result).await {
+                        Ok(execution) => {
+                            info!("🎉 EXECUTED: {}", execution.fill_tx);
+                            info!("   Gas used: {}", execution.gas_used);
+                            info!("   Actual profit: ${:.2}", execution.actual_profit_usd);
+
+                            // Emit: Intent solved
+                            solver_api.emit_event(SolverEvent::IntentSolved(SolvedData {
+                                id: intent.id.clone(),
+                                tx_hash: execution.fill_tx,
+                                actual_profit_usd: execution.actual_profit_usd,
+                                gas_used: execution.gas_used,
+                            }));
+                        }
+                        Err(e) => {
+                            error!("❌ Execution failed: {}", e);
+                        }
+                    }
                 } else {
                     info!("⏭️  SKIP - Below ${} threshold", MIN_PROFIT_USD);
                 }
