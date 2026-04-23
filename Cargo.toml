@@ -4,7 +4,7 @@ members = [
     "crates/genome-client",
     "crates/profit-calc",
     "crates/executor",
-    "crates/solver-main",
+    "crates/solver-main", "crates/solver-api",
 ]
 
 [workspace.package]
@@ -44,3 +44,4 @@ config = "0.14"
 # Utilities
 futures = "0.3"
 async-stream = "0.3"
+chrono = { version = "0.4", features = ["serde"] }

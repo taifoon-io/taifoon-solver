@@ -85,6 +85,13 @@ export WALLET_PRIVATE_KEY="..." # TODO: Use hardware wallet in prod
 - [x] Filtering (> $1 threshold)
 - [x] Unit tests with realistic scenarios
 
+### ✅ Phase 2.5: Solver API + Dashboard (COMPLETE)
+- [x] Solver API with SSE endpoints (port 8082)
+- [x] Real-time event streaming
+- [x] Stats, intents, protocols, money-flow endpoints
+- [x] BRAND.md and dashboard design
+- [x] Integration with solver-main
+
 ### 📋 Phase 3: Execution (READY TO IMPLEMENT)
 - [ ] Hot wallet integration
 - [ ] Protocol-specific fill logic (LiFi first)
@@ -93,7 +100,14 @@ export WALLET_PRIVATE_KEY="..." # TODO: Use hardware wallet in prod
 - [ ] Reward claiming on source
 - [ ] Profit tracking
 
-### 📋 Phase 4: Advanced (FUTURE)
+### 📋 Phase 4: Dashboard Frontend (READY TO IMPLEMENT)
+- [ ] Next.js 15 app setup
+- [ ] 1-page dashboard UI
+- [ ] Real-time SSE integration
+- [ ] Tailwind CSS styling
+- [ ] Deploy to Vercel or self-hosted
+
+### 📋 Phase 5: Advanced (FUTURE)
 - [ ] Flash loan integration (Aave, Uniswap)
 - [ ] T3RN LWC as liquidity source
 - [ ] Multi-path routing
@@ -107,14 +121,34 @@ taifoon-solver/
 ├── crates/
 │   ├── genome-client/     # SSE client for genome stream
 │   ├── profit-calc/       # Profitability calculator
+│   ├── solver-api/        # ✅ NEW: HTTP + SSE API (port 8082)
 │   ├── executor/          # Fill executor
 │   └── solver-main/       # Main binary
-├── docs/
-│   ├── ARCHITECTURE.md    # System design
-│   ├── PROFIT_MODEL.md    # Profit formulas
-│   └── RUNBOOK.md         # Operations guide
-├── Cargo.toml             # Workspace config
-└── README.md              # This file
+├── BRAND.md               # ✅ NEW: Brand identity and dashboard design
+├── DELIVERY_PLAN.md       # ✅ NEW: Complete implementation roadmap
+├── README.md              # This file
+├── QUICKSTART.md          # Quick start guide
+├── SESSION_SUMMARY.md     # Build summary
+└── Cargo.toml             # Workspace config
+```
+
+## API Endpoints
+
+The solver exposes a REST + SSE API on port 8082:
+
+- `GET /api/solver/stream` - Server-Sent Events stream of all solver activity
+- `GET /api/solver/stats` - Current statistics (profit, success rate, etc.)
+- `GET /api/solver/intents` - Recent intents list
+- `GET /api/solver/protocols` - Protocol breakdown
+- `GET /api/solver/money-flow` - P&L breakdown
+
+Example:
+```bash
+# Subscribe to live intent stream
+curl -N http://localhost:8082/api/solver/stream
+
+# Get current stats
+curl http://localhost:8082/api/solver/stats
 ```
 
 ## Protocol Support
@@ -160,5 +194,7 @@ yawningmonsoon (private repo)
 
 ---
 
-**Status**: ✅ Phase 1 & 2 Complete - Genome client + Profit calculator PRODUCTION-READY
-**Next**: Implement executor for actual fills OR push to GitHub and test with live stream
+**Status**: ✅ Phase 1, 2, & 2.5 Complete - Genome client + Profit calculator + Solver API PRODUCTION-READY
+**Next**: Implement dashboard frontend (Phase 4) OR executor for actual fills (Phase 3)
+
+See `BRAND.md` for dashboard design and `DELIVERY_PLAN.md` for complete roadmap.

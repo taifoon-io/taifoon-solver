@@ -1,12 +1,15 @@
 use anyhow::Result;
 use genome_client::GenomeClient;
 use profit_calc::ProfitCalculator;
+use solver_api::{SolverApi, SolverEvent, IntentData, AttemptData};
 use tokio::sync::mpsc;
 use tracing::{error, info};
+use chrono::Utc;
 
 const GENOME_SSE_URL: &str = "https://api.taifoon.dev/api/genome/subscribe/sse";
 const MIN_PROFIT_USD: f64 = 1.0;
 const SOLVER_INTEL_PATH: &str = "config/solver_intel.json";
+const API_PORT: u16 = 8082;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,6 +24,26 @@ async fn main() -> Result<()> {
     info!("🚀 Taifoon Solver Starting...");
     info!("📡 Genome SSE: {}", GENOME_SSE_URL);
     info!("💰 Min Profit: ${}", MIN_PROFIT_USD);
+    info!("🌐 API Port: {}", API_PORT);
+
+    // Initialize solver API
+    let solver_api = SolverApi::new();
+    let api_router = solver_api.router();
+
+    // Spawn API server in background
+    let api_handle = tokio::spawn(async move {
+        let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", API_PORT)).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                error!("Failed to bind API server to port {}: {}", API_PORT, e);
+                return;
+            }
+        };
+        info!("✅ API server listening on port {}", API_PORT);
+        if let Err(e) = axum::serve(listener, api_router).await {
+            error!("API server error: {}", e);
+        }
+    });
 
     // Initialize components
     let genome_client = GenomeClient::new(GENOME_SSE_URL);
@@ -45,6 +68,7 @@ async fn main() -> Result<()> {
     });
 
     info!("✅ Genome stream consumer started");
+    info!("✅ Solver API started");
     info!("⏳ Waiting for intents...");
 
     // Main solver loop
@@ -55,6 +79,19 @@ async fn main() -> Result<()> {
         info!("   Amount: {} {}", intent.amount, intent.src_token);
         info!("   User: {} → {}", intent.depositor, intent.recipient);
 
+        // Emit: Intent detected
+        solver_api.emit_event(SolverEvent::IntentDetected(IntentData {
+            id: intent.id.clone(),
+            protocol: intent.protocol.clone(),
+            src_chain: intent.src_chain,
+            dst_chain: intent.dst_chain,
+            amount: intent.amount.clone(),
+            token: intent.src_token.clone(),
+            depositor: intent.depositor.clone(),
+            recipient: intent.recipient.clone(),
+            timestamp: Utc::now(),
+        }));
+
         // Calculate profitability
         match profit_calc.calculate(&intent).await {
             Ok(profit_result) => {
@@ -63,9 +100,20 @@ async fn main() -> Result<()> {
                 info!("   Spread: ${:.2}", profit_result.breakdown.spread_usd);
                 info!("   Gas Cost: ${:.2}", profit_result.breakdown.gas_cost_usd);
 
+                // Emit: Intent attempted
+                solver_api.emit_event(SolverEvent::IntentAttempted(AttemptData {
+                    id: intent.id.clone(),
+                    profitable: profit_result.profitable,
+                    profit_usd: profit_result.net_profit_usd,
+                    protocol_fee_usd: profit_result.breakdown.protocol_fee_usd,
+                    gas_cost_usd: profit_result.breakdown.gas_cost_usd,
+                    decision: if profit_result.profitable { "execute".to_string() } else { "skip".to_string() },
+                }));
+
                 if profit_result.profitable {
                     info!("✅ PROFITABLE - Would execute (executor not yet implemented)");
                     // TODO: executor.execute_fill(&intent).await
+                    // TODO: Emit SolverEvent::IntentSolved when execution is implemented
                 } else {
                     info!("⏭️  SKIP - Below ${} threshold", MIN_PROFIT_USD);
                 }
