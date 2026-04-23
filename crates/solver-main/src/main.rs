@@ -8,7 +8,7 @@ use tracing::{error, info};
 use chrono::Utc;
 
 const GENOME_SSE_URL: &str = "https://api.taifoon.dev/api/genome/subscribe/sse";
-const MIN_PROFIT_USD: f64 = 1.0;
+const MIN_PROFIT_USD: f64 = 0.10; // $0.10 threshold - realistic for catching most profitable intents
 const SOLVER_INTEL_PATH: &str = "config/solver_intel.json";
 const API_PORT: u16 = 8082;
 

@@ -39,9 +39,9 @@ impl Executor {
             .unwrap_or(true);
 
         let min_profit_usd = std::env::var("MIN_PROFIT_USD")
-            .unwrap_or_else(|_| "1.0".to_string())
+            .unwrap_or_else(|_| "0.10".to_string())
             .parse()
-            .unwrap_or(1.0);
+            .unwrap_or(0.10);
 
         // Initialize T3RN sidecar if enabled
         let t3rn_sidecar = if std::env::var("T3RN_LWC_ENABLED").unwrap_or_default() == "true" {
