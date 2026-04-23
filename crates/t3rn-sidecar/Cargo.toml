@@ -1,0 +1,13 @@
+[package]
+name = "t3rn-sidecar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+alloy.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+genome-client = { path = "../genome-client" }
+hex = "0.4"
