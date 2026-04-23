@@ -1,0 +1,773 @@
+{
+  "meta": {
+    "generated_at": "2026-04-23T00:00:00Z",
+    "source": "spinner/rust/crates/header-collector/protocols.xml",
+    "version": "1.0.0",
+    "total_protocols": 31,
+    "total_bridge_protocols": 21,
+    "total_aggregators": 4,
+    "total_messaging": 5,
+    "total_dex": 6,
+    "active_with_volume": 3,
+    "dormant": 22
+  },
+  "protocols": [
+    {
+      "id": "across_v3",
+      "name": "Across Protocol V3",
+      "category": "bridge",
+      "description": "Intent-based bridge with sub-10s finality on 15 chains",
+      "fee_bps": 3,
+      "sla_ms": 10000,
+      "chains": [1, 10, 8453, 42161, 137, 534352, 59144, 81457, 252, 324, 33139, 747, 999, 143, 1329],
+      "events": {
+        "deposit": [
+          "0x32ed1a409ef04c7b0227189c3a103dc5ac10e775a15b785dcc510201f7c25ad3",
+          "0xa123dc29aebf7d0c3322c8eeb5b999e859f39937950ed31056532713d0de396f"
+        ],
+        "fill": [
+          "0x44b559f101f8fbcc8a0ea43fa91a05a729a5ea6e14a7c75aa750374690137208",
+          "0x571749edf1d5c9599318cdbc4e28a6475d65e87fd3b2df5ff0de7b3a5b4d72de",
+          "0xb14eec2d5dd83f6573fd5ad37e355653c479dd7aa2785caaf53bf1deeb5ae84e"
+        ]
+      },
+      "contracts": {
+        "1": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
+        "10": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
+        "8453": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
+        "42161": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
+        "137": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"
+      },
+      "priority": 1,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "stargate_v2",
+      "name": "Stargate V2",
+      "category": "bridge",
+      "description": "LayerZero OFT bridge with 1-2 bps fees on 17 chains",
+      "fee_bps": 2,
+      "sla_ms": 12000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 59144, 534352, 81457, 324, 169, 252, 33139, 999, 1329],
+      "events": {
+        "deposit": [
+          "0x85496b760a4b7f8d66384b9df21b381f5d1b1e79f229a47aaf4c232edc2fe59a",
+          "0xe8d23d927749ec8e512eb885679c2977d57068839d8cca1a85685dbbea0648f6"
+        ],
+        "fill": [
+          "0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c"
+        ]
+      },
+      "contracts": {
+        "1": "0x77b2043768d28E9C9aB44E1aBfC95944bcE57931",
+        "10": "0x77b2043768d28E9C9aB44E1aBfC95944bcE57931",
+        "8453": "0x77b2043768d28E9C9aB44E1aBfC95944bcE57931",
+        "42161": "0x77b2043768d28E9C9aB44E1aBfC95944bcE57931"
+      },
+      "priority": 1,
+      "status": "ACTIVE",
+      "fills_168h": 6,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "lifi_v2",
+      "name": "LI.FI",
+      "category": "aggregator",
+      "description": "Cross-chain aggregator routing through 20+ chains",
+      "fee_bps": 4,
+      "sla_ms": 20000,
+      "chains": [1, 10, 8453, 42161, 137, 56, 43114, 250, 100, 324, 59144, 81457, 534352, 252, 169, 33139, 999, 143, 1329, 1135],
+      "events": {
+        "deposit": [
+          "0xcba69f43792f9f399347222505213b55af8e0b0b54b893085c2e27ecbe1644f1",
+          "0xcba69f43792fcd97be2cec30c47f08aa73f30e9e5640af82e3baf888b29f12b3",
+          "0x7bfdfdb5e3a3776976e53cb0607060f54c5312701c8cba1155cc4d5394440b38",
+          "0x38eee76fd911eabac79da7af16053e809be0e12c8637f156e77e1af309b99537"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+        "10": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+        "8453": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+        "42161": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+      },
+      "priority": 1,
+      "status": "ACTIVE",
+      "fills_168h": 13,
+      "volume_usd_168h": 2258.65,
+      "avg_fee_bps_observed": 49.0
+    },
+    {
+      "id": "debridge_dln",
+      "name": "deBridge DLN",
+      "category": "bridge",
+      "description": "Intent-based bridge with 2-4 bps fees on 13 chains",
+      "fee_bps": 4,
+      "sla_ms": 8000,
+      "chains": [1, 10, 8453, 42161, 137, 56, 43114, 250, 100, 324, 59144, 534352, 252],
+      "events": {
+        "deposit": [
+          "0x5bc61d0fa7d507a10d3cb0a2647a22d5e5b699b27f37e8fcc5ced7eb02df47c8",
+          "0xfc8703fd57380f9dd234a89dce51333782d49c5902f307b02f03e014d18fe471"
+        ],
+        "fill": [
+          "0x68f99a6de5e9d34cce40430ee30c8b4ad2cb0f7e6fda52c9e8f10f9c35fcd5df"
+        ]
+      },
+      "contracts": {
+        "1": "0xeF4fB24aD0916217251F553c0596F8Edc630EB66",
+        "10": "0xeF4fB24aD0916217251F553c0596F8Edc630EB66",
+        "42161": "0xeF4fB24aD0916217251F553c0596F8Edc630EB66",
+        "8453": "0xeF4fB24aD0916217251F553c0596F8Edc630EB66"
+      },
+      "priority": 1,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "mayan_swift",
+      "name": "Mayan Swift",
+      "category": "bridge",
+      "description": "Wormhole-based bridge connecting EVM and Solana",
+      "fee_bps": 5,
+      "sla_ms": 30000,
+      "chains": [1, 42161, 200, 56, 137, 43114],
+      "events": {
+        "deposit": [
+          "0xbf150db6b4a14b084f7346b4bc300f552ce867afe55be27bce2d6b37e3307cda",
+          "0x918554b6bd6e2895ce6553de5de0e1a69db5289aa0e4fe193a0dcd1f14347477"
+        ],
+        "fill": [
+          "0x8fb2c26b66af59de39b1b2f4e1fba157f4408a9b52495599333e37e3191b0869"
+        ]
+      },
+      "contracts": {
+        "1": "0x337685fdab40d39bd02028545a4ffa7d287cc3e2",
+        "42161": "0x337685fdab40d39bd02028545a4ffa7d287cc3e2",
+        "56": "0x337685fdab40d39bd02028545a4ffa7d287cc3e2"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "wormhole",
+      "name": "Wormhole Token Bridge",
+      "category": "bridge",
+      "description": "Multi-chain messaging and token bridge",
+      "fee_bps": 2,
+      "sla_ms": 60000,
+      "chains": [1, 10, 42161, 56, 137, 43114, 250, 100, 200, 637, 500, 324],
+      "events": {
+        "deposit": [
+          "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
+        ],
+        "fill": [
+          "0xbccc00b713f54173962e7de6098f643d8ebf53d488d71f4b2a5171496d038f9e"
+        ]
+      },
+      "contracts": {
+        "1": "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B",
+        "10": "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B",
+        "42161": "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "hyperlane",
+      "name": "Hyperlane",
+      "category": "messaging",
+      "description": "Permissionless interchain messaging protocol",
+      "fee_bps": 2,
+      "sla_ms": 30000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 100, 59144, 534352, 324],
+      "events": {
+        "deposit": [
+          "0x769f711d20c679153d382254f59892613b58a97cc876b249134ac25c80f9c814",
+          "0xcc7de0d5f8a9d2b3f8c8bef4abfe2f1a3c97d79d00a4cb49de11f7add8feafb2"
+        ],
+        "fill": [
+          "0x1cae38cdd3d3919489272725a5ae62a4f48b2989b0dae843d3c279fee18073a9"
+        ]
+      },
+      "contracts": {
+        "1": "0xc005dc82818d67AF737725bD4bf75435d065D239",
+        "137": "0xc005dc82818d67AF737725bD4bf75435d065D239"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "hop_protocol",
+      "name": "Hop Protocol",
+      "category": "bridge",
+      "description": "Optimistic rollup bridge with 30 bps slippage tolerance",
+      "fee_bps": 2,
+      "sla_ms": 15000,
+      "chains": [1, 10, 42161, 137, 100, 8453, 59144, 324],
+      "events": {
+        "deposit": [
+          "0x0a0607688c86ec1775abcdbab7b33a3a35a6c9cde677c9be880150c231cc6b0b"
+        ],
+        "fill": [
+          "0x9475cdbde5fc71fe2ccd413c82878ee54d061b9f74f9e2e1a03f1e2e0e7c62e0",
+          "0x9475cdbde5fc71fe2ccd413c82878ee54d5577b126a3c924b2e063d718f9c7e8"
+        ]
+      },
+      "contracts": {
+        "1": "0xb8901acB165ed027E32754E0FFe830802919727f",
+        "10": "0xb8901acB165ed027E32754E0FFe830802919727f"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "connext",
+      "name": "Connext (Everclear)",
+      "category": "bridge",
+      "description": "Modular bridge protocol with domain-based routing",
+      "fee_bps": 2,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 137, 56, 100, 8453, 43114, 250, 324],
+      "events": {
+        "deposit": [
+          "0x9c6dea23fe3b510bb5d170df49dc62d14f6f04b2e54c0f0a9317f8e7048d36bc"
+        ],
+        "fill": [
+          "0x8cc1bfd43e3c0ad08cf0aa59d4ab7f5a1e08e86e05b23a2d37a50e82d46eedd4"
+        ]
+      },
+      "contracts": {
+        "1": "0x8898B472C54c31894e3B9bb83cEA802a5d0e63C6",
+        "10": "0x8898B472C54c31894e3B9bb83cEA802a5d0e63C6"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "relay_protocol",
+      "name": "Relay",
+      "category": "bridge",
+      "description": "Fast cross-chain bridge with single-amount events",
+      "fee_bps": 3,
+      "sla_ms": 10000,
+      "chains": [1, 10, 8453, 42161, 137, 56, 324, 59144, 534352, 81457],
+      "events": {
+        "deposit": [
+          "0x52b6c83d8e3b65a776c45b0a19c68a7b099d87b4c5de7a77b31e3c99c2dc5d81",
+          "0x6219c28c0459850e930846f9a029e897fae2e4d3bc7a98a21cc50a50bfbbc924"
+        ],
+        "fill": [
+          "0xf295252259035c9c96a3bbb572376fdab28cc06fbef014fca5b6093fec5e3ca9"
+        ]
+      },
+      "contracts": {
+        "1": "0xa5F565650890Fba1824Ee0F21EbbBbdf3c4D0381",
+        "8453": "0xa5F565650890Fba1824Ee0F21EbbBbdf3c4D0381"
+      },
+      "priority": 1,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "cctp",
+      "name": "Circle CCTP",
+      "category": "bridge",
+      "description": "Native USDC bridge by Circle",
+      "fee_bps": 2,
+      "sla_ms": 15000,
+      "chains": [1, 10, 42161, 8453, 137, 43114, 59144, 8453],
+      "events": {
+        "deposit": [
+          "0x2fa9ca894982930190727e75500a97d8dc500233a5065e0f3126c48fbe0343c0",
+          "0xbe3e26cbed8f10ca6ae0e6cda2c833eeedee5511eae34b0e49b57d306e05ce19"
+        ],
+        "fill": [
+          "0x1b2a7ff080b8cb6ff436ce0372e399692bbfb6d4ae5766fd8d58a7b8cc6142e6"
+        ]
+      },
+      "contracts": {
+        "1": "0xBd3fa81B58Ba92a82136038B25aDec7066af3155",
+        "10": "0xBd3fa81B58Ba92a82136038B25aDec7066af3155",
+        "42161": "0xBd3fa81B58Ba92a82136038B25aDec7066af3155"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "arbitrum_native",
+      "name": "Arbitrum Native Bridge",
+      "category": "native_bridge",
+      "description": "Official Arbitrum L1-L2 bridge",
+      "fee_bps": 0,
+      "sla_ms": 900000,
+      "chains": [1, 42161],
+      "events": {
+        "deposit": [
+          "0x23be8e12e420b5da9fb98d8102572f640fb3c11a0085060472dfc0ed194b3cf7"
+        ],
+        "fill": [
+          "0x3073a74ecb728d10be779fe19a74a1428e20468f5b4d167bf9c73d9067847d73"
+        ]
+      },
+      "contracts": {
+        "1": "0x72Ce9c846789fdB6fC1f34aC4AD25Dd9ef7031ef"
+      },
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "optimism_native",
+      "name": "Optimism Native Bridge",
+      "category": "native_bridge",
+      "description": "Official Optimism L1-L2 bridge",
+      "fee_bps": 0,
+      "sla_ms": 900000,
+      "chains": [1, 10],
+      "events": {
+        "deposit": [
+          "0x35d79ab81f2b2017e19afb5c5571778877782d7a8786f5907f93b0f4702f4f23",
+          "0x2849b43074093a05396b6f2a1ada1b5a8a30d36b1985595a7a1bb26bf07cee8d"
+        ],
+        "fill": [
+          "0x67a6208cfcc0801d50f6cbe764733f4fddf66ac0b704eaa379d4d927d4d4661d"
+        ]
+      },
+      "contracts": {
+        "1": "0x99C9fc46f92E8a1c0deC1b1747d010903E884bE1"
+      },
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "socket",
+      "name": "Socket Protocol",
+      "category": "aggregator",
+      "description": "Cross-chain aggregator and router",
+      "fee_bps": 3,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 100, 324, 59144, 534352],
+      "events": {
+        "deposit": [
+          "0x74594da9e31ee4068e17809037db37db496702bf7d8d63afe6f97949277d1609"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x3a23F943181408EAC424116Af7b7790c94Cb97a5",
+        "10": "0x3a23F943181408EAC424116Af7b7790c94Cb97a5"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "squid_router",
+      "name": "Squid Router",
+      "category": "aggregator",
+      "description": "Axelar-powered cross-chain swap aggregator",
+      "fee_bps": 2,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 100, 324, 59144, 534352, 252, 999, 169],
+      "events": {
+        "deposit": [
+          "0x9ed053bb818ff08b8f85f7af64b2f2e5cc22811e66319fef7d5a8738a1c21d9f"
+        ],
+        "fill": [
+          "0x7c3aa10c5d96985be6de7d2e6fa79bdef95a95a9cb272f4113b3fe1ca89fedae"
+        ]
+      },
+      "contracts": {
+        "1": "0xce16F69375520ab01377ce7B88f5BA8C48F8D666",
+        "10": "0xce16F69375520ab01377ce7B88f5BA8C48F8D666"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "rango",
+      "name": "Rango Exchange",
+      "category": "aggregator",
+      "description": "Multi-chain DEX aggregator",
+      "fee_bps": 3,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 137, 56, 43114, 250, 100],
+      "events": {
+        "deposit": [
+          "0xa1bfcc9fc27ca60c4b1c9670a0cdf11bb54b70e7ee8765bc2b0a4c33e5db01d1"
+        ],
+        "fill": []
+      },
+      "contracts": {},
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "layerzero_v2",
+      "name": "LayerZero V2",
+      "category": "messaging",
+      "description": "Omnichain messaging protocol",
+      "fee_bps": 2,
+      "sla_ms": 30000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 100, 324, 59144, 534352, 252, 169, 999],
+      "events": {
+        "deposit": [
+          "0x9ca74e35a90f6c5e09c4b7d4c6c6babb3c06b5bc98917b93a6efa16cf7b3c1b3",
+          "0x1ab700d4ced0c005b164c0f789fd09fcfdd06e55a68882e2f07c8e9df45b6d8d",
+          "0x1ab700d4ced0c005b164c0f789fd09fcbb0156d4c2041b8a3bfbcd961cd1567f"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x1a44076050125825900e736c501f859c50fE728c"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "t3rn_lwc",
+      "name": "t3rn Lambda Witness Contract",
+      "category": "intent",
+      "description": "T3RN protocol order execution via Lambda",
+      "fee_bps": 5,
+      "sla_ms": 15000,
+      "chains": [1, 10, 8453, 42161, 137, 56, 100, 324, 59144, 81457, 43114],
+      "events": {
+        "deposit": [
+          "0x1e5f09566c518bd8ddb1f0c3fd1da318e49162cf94b58c4508d2835fc971e60d",
+          "0x3bb399125b923176baf5098f432689e4843dee54b68daf1d7cadd91d99a63601"
+        ],
+        "fill": [
+          "0xba78a15e874441cf1871e3d2633ba91540bab663ae8664088ace7d60009ddd65"
+        ]
+      },
+      "contracts": {},
+      "priority": 1,
+      "status": "ACTIVE",
+      "fills_168h": 7367,
+      "volume_usd_168h": 0.0,
+      "lambda_tracked": true
+    },
+    {
+      "id": "celer_cbridge",
+      "name": "Celer cBridge",
+      "category": "bridge",
+      "description": "State channel based bridge",
+      "fee_bps": 2,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 56, 137, 43114, 250, 100, 8453, 324],
+      "events": {
+        "deposit": [
+          "0x89d8051e597ab4178a863a5190407b98abfeff406aa8db90c59af76612e58f01"
+        ],
+        "fill": [
+          "0x79fa08de5149d912dce8e5e8da7a7c17ccdf23dd5d3bfe196802e6eb86347c7c"
+        ]
+      },
+      "contracts": {
+        "1": "0x5427FEFA711Eff984124bFBB1AB6fbf5E3DA1820"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "synapse",
+      "name": "Synapse Protocol",
+      "category": "bridge",
+      "description": "Cross-chain bridge and swap protocol",
+      "fee_bps": 3,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 56, 137, 43114, 250, 100, 8453, 324, 59144, 534352],
+      "events": {
+        "deposit": [
+          "0xda5273705dbef4bf1b902a131c2eac086b7e1476a8ab0cb4da08af1fe1bd8e3b",
+          "0x79c15604b92ef54d3f61f0c40caab8857927ca3d5092367163b4562c1699eb5f",
+          "0xdc5bad4651c5fbe9977a696aadc65996c468cde1448dd468ec0d83bf61c4b57c"
+        ],
+        "fill": [
+          "0xbf14b9fde87f6e1c29a7e0787ad1d0d64b4648d8ae63da21524d9fd0f283dd38",
+          "0x8b0afdc777af6946e53045a4a75212769075d30455a212ac51c9b16f9c5c9b26"
+        ]
+      },
+      "contracts": {
+        "1": "0x2796317b0fF8538F253012862c06787Adfb8cEb6"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "axelar_gmp",
+      "name": "Axelar GMP",
+      "category": "messaging",
+      "description": "General message passing protocol",
+      "fee_bps": 3,
+      "sla_ms": 30000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 100, 324, 59144, 534352, 252, 169],
+      "events": {
+        "deposit": [
+          "0x7e50569d26be643bda7757722291ec66b1be66d8283474ae3fab5a98f878a7a2",
+          "0x30ae6cc78c27e651745bf2ad08a11de83910ac1e347a52f7ac898c0fbef94dae",
+          "0x651d93f66c4329630e8d0f62488eff599e3be484da587335e8dc0fcf46062726"
+        ],
+        "fill": []
+      },
+      "contracts": {},
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "1inch_fusion",
+      "name": "1inch Fusion",
+      "category": "dex",
+      "description": "DEX aggregator with order filling",
+      "fee_bps": 30,
+      "sla_ms": 5000,
+      "chains": [1, 10, 42161, 137, 56],
+      "events": {
+        "deposit": [
+          "0xd6d4f5681c246c9f42c203e287975af1601f8df8035a9251f79aab5c8f09e2f8"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x1111111254EEB25477B68fb85Ed929f73A960582"
+      },
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "bancor",
+      "name": "Bancor",
+      "category": "dex",
+      "description": "Automated market maker DEX",
+      "fee_bps": 30,
+      "sla_ms": 1000,
+      "chains": [1],
+      "events": {
+        "deposit": [
+          "0x8a29905c3c36c4f9c01d88c9025ffa6fef31fc75a24eab10f3ec55b739d5d9af"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0xeEF417e1D5CC832e619ae18D2F140De2999dD4fB"
+      },
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "uniswap_v2",
+      "name": "Uniswap V2 / SushiSwap",
+      "category": "dex",
+      "description": "AMM DEX with 30 bps fee",
+      "fee_bps": 30,
+      "sla_ms": 1000,
+      "chains": [1, 10, 42161, 137, 56, 43114, 250, 100, 8453],
+      "events": {
+        "deposit": [
+          "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc"
+      },
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "uniswap_v3",
+      "name": "Uniswap V3",
+      "category": "dex",
+      "description": "Concentrated liquidity AMM",
+      "fee_bps": 30,
+      "sla_ms": 1000,
+      "chains": [1, 10, 42161, 137, 56, 8453],
+      "events": {
+        "deposit": [
+          "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
+      },
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "uniswap_v4",
+      "name": "Uniswap V4",
+      "category": "dex",
+      "description": "Next-gen Uniswap with hooks",
+      "fee_bps": 30,
+      "sla_ms": 1000,
+      "chains": [1],
+      "events": {
+        "deposit": [
+          "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0xE8E23e97Fa135823143d6b9Cba9c699040D51F70"
+      },
+      "priority": 3,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "meson_finance",
+      "name": "Meson Finance",
+      "category": "bridge",
+      "description": "Atomic swap bridge",
+      "fee_bps": 2,
+      "sla_ms": 30000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 100, 324],
+      "events": {
+        "deposit": [
+          "0x3ecd6f00238de8fff9e48bf6ad8f8637004e7b851446dba03320b12b52b3ab90"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x25aB3Efd52e6f14225146D740466ae7986f4B434"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "allbridge",
+      "name": "Allbridge Core",
+      "category": "bridge",
+      "description": "Multi-chain bridge protocol",
+      "fee_bps": 3,
+      "sla_ms": 25000,
+      "chains": [1, 56, 137, 43114, 250, 100, 200, 637],
+      "events": {
+        "deposit": [
+          "0x9cd6008e8d4ebd34fd9d022278fec7f95d133780ecc1a0dea459fae3e9675390"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "router_protocol",
+      "name": "Router Protocol",
+      "category": "bridge",
+      "description": "Cross-chain infra protocol",
+      "fee_bps": 4,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 137, 56, 43114, 250, 100, 8453, 324],
+      "events": {
+        "deposit": [
+          "0x6f223106c8e3df857d691613d18d1478cc7c629a1fdf16c7b461d36729fcc7ad"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0x6e14f48576265272B6CAA3a886F678602eCA1C22"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "symbiosis",
+      "name": "Symbiosis Finance",
+      "category": "bridge",
+      "description": "Cross-chain liquidity protocol",
+      "fee_bps": 3,
+      "sla_ms": 20000,
+      "chains": [1, 10, 42161, 56, 137, 43114, 250, 100],
+      "events": {
+        "deposit": [
+          "0xc48da6148bac99c7f0c0dcd51a15eb0b9b9367cfe3705361e8a7df0f3869a1b6"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0xb8f275fBf7A959F4BCE59999A2EF122A099e81A8"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    },
+    {
+      "id": "ccip",
+      "name": "Chainlink CCIP",
+      "category": "messaging",
+      "description": "Chainlink cross-chain messaging",
+      "fee_bps": 3,
+      "sla_ms": 30000,
+      "chains": [1, 10, 42161, 8453, 137, 56, 43114, 250, 100, 324],
+      "events": {
+        "deposit": [
+          "0xd0c3c799bf9e2639de94f000493d294f38113eae331bd6debdb1305d30db122e"
+        ],
+        "fill": []
+      },
+      "contracts": {
+        "1": "0xe7be8aff3b99786fc77d4430e4152c63c868d453"
+      },
+      "priority": 2,
+      "status": "DORMANT",
+      "fills_168h": 0,
+      "volume_usd_168h": 0.0
+    }
+  ]
+}
