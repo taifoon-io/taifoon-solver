@@ -18,7 +18,7 @@ export default function ProtocolBreakdown() {
         const res = await fetch('http://localhost:8082/api/solver/protocols')
         if (res.ok) {
           const data = await res.json()
-          setProtocols(data)
+          setProtocols(data.protocols || [])
         }
       } catch {
         // Silently fail

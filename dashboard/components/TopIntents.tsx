@@ -20,7 +20,8 @@ export default function TopIntents() {
         if (res.ok) {
           const data = await res.json()
           // Sort by profit and take top 10
-          const sorted = [...data]
+          const intents = data.intents || []
+          const sorted = [...intents]
             .filter((i: any) => i.profit_usd && i.profit_usd > 0)
             .sort((a: any, b: any) => (b.profit_usd || 0) - (a.profit_usd || 0))
             .slice(0, 10)
