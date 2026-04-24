@@ -1,0 +1,32 @@
+# Dockerfile for Taifoon Solver
+FROM ubuntu:24.04
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy pre-built binary
+COPY target/release/taifoon-solver /usr/local/bin/taifoon-solver
+RUN chmod +x /usr/local/bin/taifoon-solver
+
+# Create non-root user
+RUN useradd -m -u 9999 solver
+USER solver
+WORKDIR /home/solver
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q --spider http://localhost:8082/api/solver/stats || exit 1
+
+# Expose API port
+EXPOSE 8082
+
+# Environment defaults (can be overridden)
+ENV GENOME_SSE_URL=http://localhost:30081/api/genome/subscribe/sse \
+    WARMBED_API_URL=http://localhost:8081 \
+    MIN_PROFIT_USD=0.1 \
+    SIMULATION_MODE=true
+
+CMD ["/usr/local/bin/taifoon-solver"]

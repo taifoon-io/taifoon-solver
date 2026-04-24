@@ -6,6 +6,7 @@ import PerformanceStats from '@/components/PerformanceStats'
 import ProtocolBreakdown from '@/components/ProtocolBreakdown'
 import MoneyFlow from '@/components/MoneyFlow'
 import TopIntents from '@/components/TopIntents'
+import RazorGasPresets from '@/components/RazorGasPresets'
 
 export default function Dashboard() {
   const { intents, stats, connected } = useSolverEvents()
@@ -34,6 +35,7 @@ export default function Dashboard() {
         {/* Right column - Stats and Info (takes 1/3 width on large screens) */}
         <div className="space-y-6">
           <PerformanceStats stats={stats} />
+          <RazorGasPresets />
           <ProtocolBreakdown />
           <MoneyFlow />
           <TopIntents />

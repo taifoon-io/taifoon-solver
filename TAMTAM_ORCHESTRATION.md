@@ -1,249 +1,124 @@
-# TamTam Orchestration Guide for Taifoon Solver
+# TamTam Orchestration - Taifoon Solver
 
-**Goal**: Use TamTam (3h4x/tamtam) to automate the complete delivery of the taifoon-solver dashboard and executor.
+**Status**: 🟢 Orchestration Active | Genome Stream Connected | Dashboard Live
 
-## What is TamTam?
+## Complete Autonomous Delivery Workflow
 
-TamTam is an agent management dashboard for Claude CLI. It allows you to:
-- Define reusable instruction blocks (skills)
-- Compose skills into agents
-- Run agents on demand or on schedule
-- Watch output stream in real-time
-- Manage multiple projects from one dashboard
+### System Status RIGHT NOW:
 
-**Location**: `/Users/mbultra/projects/tamtam`
-**Dashboard**: http://localhost:1337 (when running)
+✅ **Genome Stream**: CONNECTED to https://api.taifoon.dev/api/genome/subscribe/sse
+✅ **Solver Backend**: RUNNING on port 8082
+✅ **Dashboard**: RUNNING on port 3000  
+✅ **TamTam Orchestrator**: READY on port 1337
+✅ **7 Agents**: REGISTERED and enabled
 
-## Skills Created
+⚠️ **MIN_PROFIT_USD**: Currently $1, needs to be $0.10
 
-I've created two comprehensive skills in `/Users/mbultra/projects/tamtam/data/skills/taifoon-solver/`:
+## Architecture
 
-### 1. `build-dashboard.md`
-Builds the Next.js 15 dashboard frontend with:
-- SSE integration for real-time updates
-- 1-page design matching BRAND.md
-- Components: IntentsStream, PerformanceStats, etc.
-- Complete implementation code
+```
+TamTam (localhost:1337)
+  └── Orchestrator (Opus) 
+       ├── Agent 1: Protocol XML Analyzer
+       ├── Agent 2: T3RN Sidecar Implementor  
+       ├── Agent 3: Dashboard Builder
+       ├── Agent 4: Executor Builder
+       ├── Agent 5: E2E Integration Tester
+       └── Agent 6: Deployment & Docs
 
-### 2. `build-executor.md`
-Implements the on-chain executor with:
-- LiFi protocol fill execution
-- Safety features (simulation mode, balance checks)
-- Integration with solver-main
-- Testnet testing strategy
-
-## How to Use TamTam to Deliver
-
-### Option A: Manual Execution (Recommended for First Time)
-
-**Step 1**: Start TamTam
-```bash
-cd /Users/mbultra/projects/tamtam
-pnpm dev
+Taifoon Genome Stream (SSE)
+  ↓
+Solver Backend (8082)
+  ├── Profit Calculator
+  ├── Executor (3-tier waterfall)
+  └── SSE Broadcast
+       ↓
+Dashboard (3000)
+  ├── IntentsStream
+  ├── ProtocolBreakdown  
+  ├── MoneyFlow
+  └── TopIntents
 ```
 
-**Step 2**: Open Dashboard
-Navigate to http://localhost:1337
+## Registered Agents
 
-**Step 3**: Configure Workspace
-- Go to Settings
-- Set workspace path to `/Users/mbultra/projects`
-- TamTam will auto-discover taifoon-solver project
+| Agent | Role | Status |
+|-------|------|--------|
+| orchestrator | Pipeline Manager | ✅ Ready |
+| agent-1 | Protocol XML Analyzer | ✅ Ready |
+| agent-2 | T3RN Sidecar | ✅ Ready |
+| agent-3 | Dashboard Builder | ✅ Ready |
+| agent-4 | Executor Builder | ✅ Ready |
+| agent-5 | E2E Tester | ✅ Ready |
+| agent-6 | Deployment Docs | ✅ Ready |
 
-**Step 4**: Create Agent for Dashboard
-1. Go to `/agents`
-2. Click "New Agent"
-3. Fill in:
-   - **Name**: `Taifoon Solver Dashboard Builder`
-   - **Description**: `Build Next.js dashboard with SSE integration`
-   - **Project**: `taifoon-solver`
-   - **Model**: `sonnet` (claude-sonnet-4.5)
-   - **Prompt**:
-     ```
-     Build the complete Next.js 15 dashboard for the taifoon-solver project.
+## Delivery Pipeline (3 Phases)
 
-     Follow the instructions in the "Build Taifoon Solver Dashboard" skill exactly.
+### Phase 1: Foundation (45 min)
+- Agent 1: Parse protocols.xml → protocols_registry.json
+- Agent 2: Build T3RN LWC sidecar
 
-     The solver API is already running on port 8082 with SSE endpoints.
-     Your job is to create the frontend that consumes this API.
+### Phase 2: UI & Execution (90 min)  
+- Agent 3: Build Next.js dashboard (parallel)
+- Agent 4: Build executor with liquidity waterfall (parallel)
 
-     Read BRAND.md and DELIVERY_PLAN.md for design specs.
+### Phase 3: Integration (60 min)
+- Agent 5: Test genome stream → solver → dashboard flow
+- Agent 6: Create DEPLOYMENT.md + finalize docs
 
-     When complete, verify:
-     - Dashboard loads at http://localhost:3000
-     - SSE connection shows "LIVE" status
-     - Intents appear in real-time
-     - All components render correctly
-     ```
-   - **Skills**: Select `Build Taifoon Solver Dashboard` (from taifoon-solver category)
-4. Click "Create Agent"
+## Execute Orchestration
 
-**Step 5**: Run Dashboard Agent
-1. Click "Run" on the Dashboard Builder agent
-2. Watch real-time output as Claude builds the dashboard
-3. Claude will:
-   - Create Next.js app structure
-   - Implement all components
-   - Configure Tailwind CSS
-   - Install dependencies
-   - Test the build
+### Full Autonomous Delivery:
+```bash
+curl -X POST http://localhost:1337/api/agents/orchestrator/run
+```
 
-**Step 6**: Create Agent for Executor
-1. Go to `/agents`
-2. Click "New Agent"
-3. Fill in:
-   - **Name**: `Taifoon Solver Executor Builder`
-   - **Description**: `Implement on-chain fill execution (LiFi first)`
-   - **Project**: `taifoon-solver`
-   - **Model**: `sonnet`
-   - **Prompt**:
-     ```
-     Implement the executor module for on-chain fill execution.
+### Manual Agent Execution:
+```bash
+# Phase 1
+curl -X POST http://localhost:1337/api/agents/agent-1-protocol-analyzer/run
+curl -X POST http://localhost:1337/api/agents/agent-2-t3rn-sidecar/run
 
-     Follow the instructions in the "Build Taifoon Solver Executor" skill exactly.
+# Phase 2 (parallel)
+curl -X POST http://localhost:1337/api/agents/agent-3-dashboard/run &
+curl -X POST http://localhost:1337/api/agents/agent-4-executor/run &
 
-     Start with LiFi protocol and implement:
-     - Basic executor structure
-     - Safety features (SIMULATION_MODE, balance checks)
-     - Integration with solver-main
-     - Placeholder for real execution
+# Phase 3
+curl -X POST http://localhost:1337/api/agents/agent-5-e2e-tester/run
+curl -X POST http://localhost:1337/api/agents/agent-6-deployment/run
+```
 
-     IMPORTANT: Keep SIMULATION_MODE=true by default.
+## Monitor Real-Time Intent Flow
 
-     When complete, verify:
-     - cargo build --release succeeds
-     - Executor wired into solver-main
-     - Events emitted on fill attempts
-     - Logs show simulation mode
-     ```
-   - **Skills**: Select `Build Taifoon Solver Executor`
-4. Click "Create Agent"
+### Check Genome Stream Connection:
+```bash
+# Solver logs
+tail -f solver.log | grep "Intent detected"
 
-**Step 7**: Run Executor Agent
-1. Click "Run" on the Executor Builder agent
-2. Watch as Claude implements the executor
-3. Verify compilation succeeds
+# Solver SSE stream
+curl -N http://localhost:8082/api/solver/stream
 
-### Option B: Scheduled Execution (For Ongoing Maintenance)
+# Solver stats
+curl http://localhost:8082/api/solver/stats
+```
 
-You can schedule these agents to run automatically:
-
-**Dashboard Agent**:
-- Schedule: `0 9 * * *` (daily at 9am)
-- Use case: Keep dashboard up to date with latest design changes
-
-**Executor Agent**:
-- Schedule: `0 10 * * 1` (weekly on Monday at 10am)
-- Use case: Regular security audits and updates
-
-## Verification Checklist
-
-After TamTam completes both agents:
-
-**Dashboard** (`/Users/mbultra/projects/taifoon-solver/dashboard/`):
-- [ ] Directory exists
-- [ ] `package.json` created
-- [ ] All components in `components/` directory
-- [ ] SSE hook in `hooks/` directory
-- [ ] `npm run dev` starts successfully
-- [ ] Dashboard loads at http://localhost:3000
-- [ ] Connects to API at http://localhost:8082
-
-**Executor** (`/Users/mbultra/projects/taifoon-solver/crates/executor/`):
-- [ ] `src/lib.rs` implemented
-- [ ] `Cargo.toml` updated with dependencies
-- [ ] `cargo build --release` succeeds
-- [ ] SIMULATION_MODE enabled by default
-- [ ] Safety features present
-
-**Integration**:
-- [ ] Executor wired into `crates/solver-main/src/main.rs`
-- [ ] Events emitted for IntentSolved
-- [ ] Logs show execution attempts
-
-## Monitoring Execution
-
-TamTam provides real-time monitoring:
-
-1. **Terminal View**: See token-by-token output as Claude works
-2. **Run History**: All past runs with timestamps and status
-3. **Logs**: Detailed logs of every action taken
-4. **Notifications**: Get alerts when runs complete (configure webhooks)
-
-## Advanced: Creating a Complete Pipeline
-
-You can chain agents together for a full release pipeline:
-
-**Agent 1**: Build Dashboard
-**Agent 2**: Build Executor
-**Agent 3**: Run Tests (`cargo test && cd dashboard && npm test`)
-**Agent 4**: Commit Changes (`git add -A && git commit -m "..."`)
-**Agent 5**: Push to GitHub (`git push origin master`)
-
-TamTam's release pipeline feature can orchestrate this automatically with quality gates.
-
-## Troubleshooting
-
-**Skills Not Showing Up**:
-- Restart TamTam: `pnpm restart`
-- Skills are auto-scanned from `data/skills/` on startup
-
-**Agent Fails**:
-- Check TamTam logs: `pnpm logs`
-- Re-run the agent with more context
-- Adjust the prompt to be more specific
-
-**Project Not Found**:
-- Verify workspace path in Settings
-- Ensure taifoon-solver is a git repo
-- Refresh projects list in TamTam
-
-## Benefits of Using TamTam
-
-1. **Automated Execution**: No manual copy-paste of code
-2. **Real-time Monitoring**: Watch Claude work in real-time
-3. **Reproducible**: Skills are versioned, agents can be re-run
-4. **Scheduled**: Run nightly builds, weekly audits automatically
-5. **Multi-project**: Manage solver + spinner + other projects from one dashboard
-6. **CI Integration**: Trigger agents on GitHub webhook events
+### Check Dashboard:
+```bash
+open http://localhost:3000
+# Should show:
+# - LIVE SSE connection
+# - Real-time intent stream
+# - Protocol breakdown (31+ protocols)
+# - Money flow tracking
+```
 
 ## Next Steps
 
-After TamTam completes the build:
-
-1. **Test Dashboard**:
-   ```bash
-   cd /Users/mbultra/projects/taifoon-solver/dashboard
-   npm run dev
-   ```
-   Visit http://localhost:3000
-
-2. **Test Solver + Dashboard Together**:
-   ```bash
-   # Terminal 1: Run solver
-   cd /Users/mbultra/projects/taifoon-solver
-   cargo run --release
-
-   # Terminal 2: Run dashboard
-   cd dashboard
-   npm run dev
-   ```
-
-3. **Commit Results**:
-   ```bash
-   cd /Users/mbultra/projects/taifoon-solver
-   git add -A
-   git commit -m "feat(dashboard+executor): complete Phase 3 & 4 delivery via TamTam
-
-   - Dashboard: Next.js 15 with SSE integration
-   - Executor: LiFi fill execution (simulation mode)
-   - Orchestrated via TamTam skills and agents"
-   git push origin master
-   ```
+1. **Lower MIN_PROFIT_USD** to $0.10 for realistic intent detection
+2. **Monitor genome stream** for incoming intents
+3. **Execute Agent 5** to verify E2E flow works
+4. **Run orchestrator** for complete autonomous delivery
 
 ---
-
-**TamTam makes the complete solver delivery automated, monitored, and reproducible.**
-
-Skills location: `/Users/mbultra/projects/tamtam/data/skills/taifoon-solver/`
-Dashboard: http://localhost:1337
+Generated: 2026-04-23  
+Status: 🟢 Ready for First Autonomous Delivery

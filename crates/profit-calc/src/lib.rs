@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Profit calculation result
 #[derive(Debug, Clone)]
@@ -34,11 +36,45 @@ struct ProtocolInfo {
     fills_168h: Option<u64>,
 }
 
+/// Gas price from Warmbed API
+#[derive(Debug, Clone, Deserialize)]
+struct GasMetrics {
+    chain_id: u64,
+    block_number: u64,
+    timestamp: u64,
+    gas_used: u64,
+    gas_limit: u64,
+    gas_price: Option<u64>,
+    tx_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GasResponse {
+    chain_id: u64,
+    block_number: u64,
+    timestamp: u64,
+    base_fee_per_gas_wei: Option<String>,
+    gas_price_gwei: Option<f64>,
+    gas_used: u64,
+    gas_limit: u64,
+    utilization_pct: f64,
+}
+
+/// Cached gas price data
+#[derive(Debug, Clone)]
+struct CachedGasPrice {
+    gas_price_gwei: f64,
+    timestamp: u64,
+}
+
 /// Profit calculator configuration
 pub struct ProfitCalculator {
     min_profit_usd: f64,
     protocol_fees: HashMap<String, f64>, // protocol_id -> fee in bps
     eth_price_usd: f64,                 // Cached ETH price
+    warmbed_api_url: String,            // Warmbed API base URL
+    http_client: reqwest::Client,       // HTTP client for API calls
+    gas_price_cache: Arc<RwLock<HashMap<u64, CachedGasPrice>>>, // chain_id -> cached price
 }
 
 impl ProfitCalculator {
@@ -48,6 +84,78 @@ impl ProfitCalculator {
             min_profit_usd,
             protocol_fees: HashMap::new(),
             eth_price_usd: 3000.0, // Default, will fetch real price
+            warmbed_api_url: std::env::var("WARMBED_API_URL")
+                .unwrap_or_else(|_| "https://api.taifoon.dev".to_string()),
+            http_client: reqwest::Client::new(),
+            gas_price_cache: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Fetch real gas price from Warmbed API with caching
+    async fn fetch_gas_price(&self, chain_id: u64) -> Result<f64> {
+        const CACHE_TTL_SECS: u64 = 30; // Cache for 30 seconds
+
+        // Check cache first
+        {
+            let cache = self.gas_price_cache.read().await;
+            if let Some(cached) = cache.get(&chain_id) {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                if now - cached.timestamp < CACHE_TTL_SECS {
+                    tracing::debug!("💾 Using cached gas price for chain {}: {} gwei", chain_id, cached.gas_price_gwei);
+                    return Ok(cached.gas_price_gwei);
+                }
+            }
+        }
+
+        // Fetch from API
+        let url = format!("{}/api/gas/latest/{}", self.warmbed_api_url, chain_id);
+        tracing::debug!("🌐 Fetching gas price from Warmbed API: {}", url);
+
+        match self.http_client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<GasResponse>().await {
+                    Ok(gas_data) => {
+                        let gas_price_gwei = gas_data.gas_price_gwei.unwrap_or(25.0);
+
+                        // Update cache
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+
+                        let mut cache = self.gas_price_cache.write().await;
+                        cache.insert(chain_id, CachedGasPrice {
+                            gas_price_gwei,
+                            timestamp: now,
+                        });
+
+                        tracing::info!("✅ Warmbed API returned gas price for chain {}: {} gwei (block {})",
+                            chain_id, gas_price_gwei, gas_data.block_number);
+                        Ok(gas_price_gwei)
+                    }
+                    Err(e) => {
+                        tracing::warn!("⚠️  Failed to parse Warmbed API response: {}", e);
+                        Err(anyhow::anyhow!("Failed to parse gas response"))
+                    }
+                }
+            }
+            Ok(resp) => {
+                tracing::warn!("⚠️  Warmbed API returned error status: {}", resp.status());
+                Err(anyhow::anyhow!("API returned error status"))
+            }
+            Err(e) => {
+                tracing::warn!("⚠️  Failed to fetch from Warmbed API: {}", e);
+                Err(anyhow::anyhow!("Failed to fetch gas price"))
+            }
         }
     }
 
@@ -81,16 +189,41 @@ impl ProfitCalculator {
         // 1. Get protocol fee
         let protocol_fee_bps = self.get_protocol_fee(&intent.protocol);
 
-        // 2. Parse amount (assuming USDC with 6 decimals)
+        // 2. Parse amount and detect token decimals
         let amount_raw: u128 = intent.amount.parse()
             .unwrap_or(0);
-        let amount_usd = amount_raw as f64 / 1_000_000.0; // USDC has 6 decimals
+
+        // Detect decimals from token address
+        let decimals = self.detect_token_decimals(&intent.src_token, intent.src_chain);
+        let token_price_usd = self.get_token_price(&intent.src_token, intent.src_chain);
+
+        // Convert to human-readable amount
+        let divisor = 10_f64.powi(decimals as i32);
+        let amount_human = amount_raw as f64 / divisor;
+        let amount_usd = amount_human * token_price_usd;
+
+        tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        tracing::info!("📊 VERBOSE AMOUNT DECODING:");
+        tracing::info!("   Token Address: {}", intent.src_token);
+        tracing::info!("   Chain ID: {}", intent.src_chain);
+        tracing::info!("   ────────────────────────────────────────────────────────────────");
+        tracing::info!("   RAW AMOUNT (wei/smallest unit): {}", amount_raw);
+        tracing::info!("   DETECTED DECIMALS: {}", decimals);
+        tracing::info!("   CONVERSION DIVISOR: 10^{} = {}", decimals, divisor);
+        tracing::info!("   ────────────────────────────────────────────────────────────────");
+        tracing::info!("   HUMAN-READABLE AMOUNT: {:.18}", amount_human);
+        tracing::info!("   (full precision: {} / {} = {:.18})", amount_raw, divisor, amount_human);
+        tracing::info!("   ────────────────────────────────────────────────────────────────");
+        tracing::info!("   TOKEN PRICE (USD): ${:.6}", token_price_usd);
+        tracing::info!("   TOTAL VALUE (USD): ${:.6}", amount_usd);
+        tracing::info!("   (calculation: {:.18} × ${:.6} = ${:.6})", amount_human, token_price_usd, amount_usd);
+        tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         // 3. Calculate protocol fee in USD
         let protocol_fee_usd = amount_usd * (protocol_fee_bps / 10000.0);
 
         // 4. Estimate gas costs
-        let (src_gas_usd, dst_gas_usd) = self.estimate_gas_costs(intent);
+        let (src_gas_usd, dst_gas_usd) = self.estimate_gas_costs(intent).await;
         let total_gas_usd = src_gas_usd + dst_gas_usd;
 
         // 5. Calculate spread (for now, assume 0 - user gets exact amount they requested)
@@ -101,6 +234,18 @@ impl ProfitCalculator {
 
         // 7. Net profit
         let net_profit_usd = protocol_fee_usd + spread_usd - total_gas_usd - liquidity_cost_usd;
+
+        tracing::info!("💰 PROFIT CALCULATION:");
+        tracing::info!("   Protocol Fee ({} bps): ${:.6}", protocol_fee_bps, protocol_fee_usd);
+        tracing::info!("   (calculation: ${:.6} × {} / 10000 = ${:.6})", amount_usd, protocol_fee_bps, protocol_fee_usd);
+        tracing::info!("   Gas Cost (src: ${:.2} + dst: ${:.2}): ${:.2}", src_gas_usd, dst_gas_usd, total_gas_usd);
+        tracing::info!("   Spread: ${:.2}", spread_usd);
+        tracing::info!("   Liquidity Cost: ${:.2}", liquidity_cost_usd);
+        tracing::info!("   ────────────────────────────────────────────────────────────────");
+        tracing::info!("   NET PROFIT: ${:.6}", net_profit_usd);
+        tracing::info!("   (calculation: ${:.6} + ${:.2} - ${:.2} - ${:.2} = ${:.6})",
+            protocol_fee_usd, spread_usd, total_gas_usd, liquidity_cost_usd, net_profit_usd);
+        tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         Ok(ProfitResult {
             net_profit_usd,
@@ -131,25 +276,111 @@ impl ProfitCalculator {
         10.0
     }
 
-    fn estimate_gas_costs(&self, intent: &Intent) -> (f64, f64) {
-        // Simplified gas estimation based on chain
-        let src_gas_usd = match intent.src_chain {
-            1 => 5.0,      // Ethereum mainnet (expensive)
-            10 => 0.05,    // Optimism (cheap)
-            8453 => 0.05,  // Base (cheap)
-            42161 => 0.10, // Arbitrum (cheap)
-            _ => 1.0,      // Default
-        };
-
-        let dst_gas_usd = match intent.dst_chain {
-            1 => 5.0,      // Ethereum mainnet (expensive)
-            10 => 0.05,    // Optimism (cheap)
-            8453 => 0.05,  // Base (cheap)
-            42161 => 0.10, // Arbitrum (cheap)
-            _ => 1.0,      // Default
-        };
+    async fn estimate_gas_costs(&self, intent: &Intent) -> (f64, f64) {
+        let src_gas_usd = self.estimate_chain_gas_cost(intent.src_chain).await;
+        let dst_gas_usd = self.estimate_chain_gas_cost(intent.dst_chain).await;
 
         (src_gas_usd, dst_gas_usd)
+    }
+
+    async fn estimate_chain_gas_cost(&self, chain_id: u64) -> f64 {
+        // Estimate gas units for a typical cross-chain fill transaction
+        let estimated_gas_units = match chain_id {
+            1 => 150_000u64,   // Ethereum mainnet (complex contract calls)
+            10 => 100_000u64,  // Optimism
+            8453 => 100_000u64, // Base
+            42161 => 100_000u64, // Arbitrum
+            _ => 120_000u64,   // Default
+        };
+
+        tracing::debug!("📊 Estimating gas cost for chain {} (estimated {} gas units)", chain_id, estimated_gas_units);
+
+        // Try to fetch real gas price from Warmbed API
+        match self.fetch_gas_price(chain_id).await {
+            Ok(gas_price_gwei) => {
+                // Calculate cost in USD
+                let gas_cost_eth = (estimated_gas_units as f64 * gas_price_gwei) / 1_000_000_000.0;
+                let gas_cost_usd = gas_cost_eth * self.eth_price_usd;
+
+                tracing::info!("💰 Real gas cost for chain {}: {} gwei × {} units = {:.6} ETH = ${:.2}",
+                    chain_id, gas_price_gwei, estimated_gas_units, gas_cost_eth, gas_cost_usd);
+
+                gas_cost_usd
+            }
+            Err(_) => {
+                // Fallback to hardcoded estimates if API fails
+                let fallback = match chain_id {
+                    1 => 5.0,      // Ethereum mainnet (expensive)
+                    10 => 0.05,    // Optimism (cheap)
+                    8453 => 0.05,  // Base (cheap)
+                    42161 => 0.10, // Arbitrum (cheap)
+                    _ => 1.0,      // Default
+                };
+
+                tracing::warn!("⚠️  Using fallback gas estimate for chain {}: ${:.2} (Warmbed API unavailable)",
+                    chain_id, fallback);
+
+                fallback
+            }
+        }
+    }
+
+    /// Detect token decimals from address
+    fn detect_token_decimals(&self, token_addr: &str, chain_id: u64) -> u8 {
+        let addr_lower = token_addr.to_lowercase();
+
+        tracing::debug!("🔍 Detecting decimals for token: {} on chain {}", addr_lower, chain_id);
+
+        // Common stablecoins (6 decimals)
+        let is_usdc = addr_lower == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" || // USDC mainnet
+                      addr_lower == "0xaf88d065e77c8cc2239327c5edb3a432268e5831" || // USDC Arbitrum
+                      addr_lower == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" || // USDC Base
+                      addr_lower == "0x0b2c639c533813f4aa9d7837caf62653d097ff85" || // USDC Optimism
+                      addr_lower == "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" || // USDC Polygon
+                      addr_lower == "usdc" || addr_lower == "native";
+
+        let is_usdt = addr_lower == "0xdac17f958d2ee523a2206206994597c13d831ec7" || // USDT mainnet
+                      addr_lower == "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" || // USDT Arbitrum
+                      addr_lower == "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58" || // USDT Optimism
+                      addr_lower == "0x55d398326f99059ff775485246999027b3197955" || // USDT BSC
+                      addr_lower == "0x049d68029688eabf473097a2fc38ef61633a3c7a";   // USDT Fantom
+
+        if is_usdc || is_usdt {
+            tracing::info!("✅ Detected 6-decimal stablecoin: {}", addr_lower);
+            return 6;
+        }
+
+        // Native tokens and most ERC20s (18 decimals)
+        tracing::debug!("ℹ️  Defaulting to 18 decimals for token: {}", addr_lower);
+        18
+    }
+
+    /// Get token price in USD
+    fn get_token_price(&self, token_addr: &str, chain_id: u64) -> f64 {
+        let addr_lower = token_addr.to_lowercase();
+
+        // Stablecoins (USDC, USDT, DAI, etc.)
+        let is_stablecoin = addr_lower == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" || // USDC mainnet
+                            addr_lower == "0xaf88d065e77c8cc2239327c5edb3a432268e5831" || // USDC Arbitrum
+                            addr_lower == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" || // USDC Base
+                            addr_lower == "0x0b2c639c533813f4aa9d7837caf62653d097ff85" || // USDC Optimism
+                            addr_lower == "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" || // USDC Polygon
+                            addr_lower == "0xdac17f958d2ee523a2206206994597c13d831ec7" || // USDT mainnet
+                            addr_lower == "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" || // USDT Arbitrum
+                            addr_lower == "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58" || // USDT Optimism
+                            addr_lower == "0x55d398326f99059ff775485246999027b3197955" || // USDT BSC
+                            addr_lower == "0x049d68029688eabf473097a2fc38ef61633a3c7a" || // USDT Fantom
+                            addr_lower == "usdc" || addr_lower == "usdt" ||
+                            (addr_lower == "native" && token_addr.len() < 10);
+
+        if is_stablecoin {
+            tracing::info!("💵 Token price: $1.00 (stablecoin)");
+            return 1.0;
+        }
+
+        // ETH/WETH/Native (use cached ETH price)
+        tracing::info!("💵 Token price: ${:.2} (ETH/WETH)", self.eth_price_usd);
+        self.eth_price_usd
     }
 }
 

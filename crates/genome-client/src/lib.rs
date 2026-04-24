@@ -9,17 +9,19 @@ use tracing::{error, info, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenomeEvent {
     /// Full address (e.g., "T:1745678/proto:lifi_v2/deposit:1:0xabc123")
-    pub address: String,
-    /// Entity type (e.g., "proto")
+    #[serde(default)]
+    pub addr: String,
+    /// Entity type (e.g., "proto", "order")
     pub entity: String,
-    /// Protocol ID (e.g., "lifi_v2")
-    pub id: String,
-    /// Action (e.g., "deposit", "fill")
+    /// Protocol ID or order ID (e.g., "lifi_v2" or full order_id)
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Action (e.g., "deposit", "placed", "executed")
     pub action: String,
     /// Chain ID
     pub chain_id: Option<u64>,
     /// Transaction reference
-    #[serde(rename = "ref")]
+    #[serde(rename = "ref_hash")]
     pub reference: Option<String>,
     /// Source chain (for cross-chain intents)
     pub src_chain: Option<u64>,
@@ -27,14 +29,20 @@ pub struct GenomeEvent {
     pub dst_chain: Option<u64>,
     /// Depositor address
     pub depositor: Option<String>,
-    /// Recipient address
+    /// Recipient address (optional)
     pub recipient: Option<String>,
-    /// Token address
-    pub token: Option<String>,
+    /// Source token address
+    pub src_token: Option<String>,
+    /// Destination token address
+    pub dst_token: Option<String>,
     /// Amount (as string to preserve precision)
-    pub amount: Option<String>,
+    pub input_amount: Option<String>,
     /// Timestamp
-    pub timestamp: Option<u64>,
+    pub ts: Option<u64>,
+    /// Protocol name (for order entities)
+    pub protocol: Option<String>,
+    /// Order ID (for order entities)
+    pub order_id: Option<String>,
 }
 
 /// Simplified intent structure for solver
@@ -73,37 +81,49 @@ impl Intent {
         let dst_chain = event
             .dst_chain
             .context("Missing dst_chain in genome event")?;
-        let amount = event.amount.context("Missing amount in genome event")?;
+
+        // Support both input_amount (new) and amount (old)
+        let amount = event.input_amount.context("Missing input_amount in genome event")?;
+
         let depositor = event
             .depositor
             .context("Missing depositor in genome event")?;
-        let recipient = event
-            .recipient
-            .context("Missing recipient in genome event")?;
+
+        // Recipient may be optional in some protocols
+        let recipient = event.recipient.unwrap_or_else(|| depositor.clone());
+
+        // Use ref_hash as tx hash
         let tx_hash = event
             .reference
-            .context("Missing reference (tx hash) in genome event")?;
-        let token = event.token.context("Missing token in genome event")?;
+            .or_else(|| event.order_id.clone())
+            .context("Missing reference/order_id in genome event")?;
+
+        // Support both src_token (new) and token (old)
+        let src_token = event.src_token.context("Missing src_token in genome event")?;
+        let dst_token = event.dst_token.unwrap_or_else(|| src_token.clone());
+
+        // Protocol: use protocol field if available, otherwise use id
+        let protocol = event.protocol.or(event.id).context("Missing protocol/id in genome event")?;
 
         // Generate unique intent ID from protocol + tx hash
-        let id = format!("{}:{}", event.id, tx_hash);
+        let id = format!("{}:{}", protocol, tx_hash);
 
         Ok(Intent {
             id,
-            protocol: event.id,
+            protocol,
             src_chain,
             dst_chain,
-            src_token: token.clone(),
-            dst_token: token, // Assume same token cross-chain (will need mapping later)
+            src_token,
+            dst_token,
             amount,
             depositor,
             recipient,
             tx_hash,
-            detected_at: event.timestamp.unwrap_or_else(|| {
+            detected_at: event.ts.unwrap_or_else(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_secs()
+                    .as_millis() as u64 / 1000
             }),
         })
     }
@@ -195,8 +215,8 @@ impl GenomeClient {
             }
         }
 
-        // Only process genome events
-        if event_type != Some("genome") {
+        // Accept both "genome" and "genome_entry" event types
+        if event_type != Some("genome") && event_type != Some("genome_entry") {
             return None;
         }
 
@@ -211,8 +231,16 @@ impl GenomeClient {
             }
         };
 
-        // Only interested in proto:deposit events (unfilled intents)
-        if genome_event.entity != "proto" || genome_event.action != "deposit" {
+        // Accept both "proto" (old format) and "order" (new multi-protocol format)
+        // Filter for deposit/placed/executed actions (cross-chain intent initiated)
+        if genome_event.entity != "proto" && genome_event.entity != "order" {
+            return None;
+        }
+
+        // Skip non-actionable states (only process new/pending orders)
+        if genome_event.action != "deposit"
+            && genome_event.action != "placed"
+            && genome_event.action != "executed" {
             return None;
         }
 

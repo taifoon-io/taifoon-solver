@@ -107,6 +107,25 @@ pub struct MoneyFlow {
     pub roi: f64,
 }
 
+/// Razor gas preset from Warmbed API
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RazorGasPreset {
+    pub chain_id: u64,
+    pub chain_name: String,
+    pub ready: bool,
+    pub symbol: Option<String>,
+    pub gas_limit: Option<u64>,
+    pub gas_cost_wei: Option<String>,
+    pub gas_cost_gwei: Option<f64>,
+    pub gas_cost_native: Option<f64>,
+    pub gas_cost_usd: Option<f64>,
+    pub max_fee_per_gas_gwei: Option<f64>,
+    pub max_priority_fee_gwei: Option<f64>,
+    pub price_usd: Option<f64>,
+    pub age_ms: Option<u64>,
+    pub reason: Option<String>,
+}
+
 /// Shared state
 pub struct ApiState {
     event_tx: broadcast::Sender<SolverEvent>,
@@ -114,6 +133,9 @@ pub struct ApiState {
     intents: Arc<RwLock<Vec<IntentRecord>>>,
     protocols: Arc<RwLock<HashMap<String, ProtocolStats>>>,
     money_flow: Arc<RwLock<MoneyFlow>>,
+    razor_cache: Arc<RwLock<HashMap<u64, RazorGasPreset>>>,
+    warmbed_api_url: String,
+    http_client: reqwest::Client,
 }
 
 /// Main solver API
@@ -130,6 +152,9 @@ impl SolverApi {
         stats.latency_ms = 127;
         stats.success_rate = 0.942;
 
+        let warmbed_api_url = std::env::var("WARMBED_API_URL")
+            .unwrap_or_else(|_| "http://localhost:8082".to_string());
+
         Self {
             state: Arc::new(ApiState {
                 event_tx,
@@ -140,6 +165,9 @@ impl SolverApi {
                     period: "24h".to_string(),
                     ..Default::default()
                 })),
+                razor_cache: Arc::new(RwLock::new(HashMap::new())),
+                warmbed_api_url,
+                http_client: reqwest::Client::new(),
             }),
         }
     }
@@ -152,6 +180,7 @@ impl SolverApi {
             .route("/api/solver/intents", get(intents_handler))
             .route("/api/solver/protocols", get(protocols_handler))
             .route("/api/solver/money-flow", get(money_flow_handler))
+            .route("/api/solver/razor", get(razor_handler))
             .layer(tower_http::cors::CorsLayer::permissive())
             .with_state(self.state.clone())
     }
@@ -209,7 +238,19 @@ impl SolverApi {
                         let mut intents = state.intents.write().await;
                         if let Some(intent) = intents.iter_mut().find(|i| i.id == solved.id) {
                             intent.state = "solved".to_string();
-                            intent.tx_hash = Some(solved.tx_hash);
+                            intent.tx_hash = Some(solved.tx_hash.clone());
+
+                            // Update protocol stats
+                            let mut protocols = state.protocols.write().await;
+                            let protocol_stats = protocols.entry(intent.protocol.clone()).or_insert(ProtocolStats {
+                                name: intent.protocol.clone(),
+                                fills: 0,
+                                volume_usd: 0.0,
+                                profit_usd: 0.0,
+                                fee_bps: 10,
+                            });
+                            protocol_stats.fills += 1;
+                            protocol_stats.profit_usd += solved.actual_profit_usd;
                         }
 
                         // Update money flow
@@ -297,4 +338,135 @@ async fn money_flow_handler(
 ) -> impl IntoResponse {
     let money_flow = state.money_flow.read().await.clone();
     Json(money_flow)
+}
+
+// Razor gas presets handler
+async fn razor_handler(
+    State(state): State<Arc<ApiState>>,
+) -> impl IntoResponse {
+    let common_chains = vec![1u64, 10, 8453, 42161, 137];
+    let mut presets = Vec::new();
+
+    for chain_id in common_chains {
+        let preset = fetch_razor_for_chain(&state, chain_id).await;
+        presets.push(preset);
+    }
+
+    Json(serde_json::json!({
+        "presets": presets
+    }))
+}
+
+/// Fetch Razor gas preset for a single chain from Warmbed API
+async fn fetch_razor_for_chain(state: &ApiState, chain_id: u64) -> RazorGasPreset {
+    // Check cache first
+    {
+        let cache = state.razor_cache.read().await;
+        if let Some(cached) = cache.get(&chain_id) {
+            // Return cached if less than 30 seconds old
+            if let Some(age_ms) = cached.age_ms {
+                if age_ms < 30_000 {
+                    return cached.clone();
+                }
+            }
+        }
+    }
+
+    // Chain name mapping
+    let chain_name = match chain_id {
+        1 => "Ethereum",
+        10 => "Optimism",
+        8453 => "Base",
+        42161 => "Arbitrum",
+        137 => "Polygon",
+        _ => "Unknown",
+    };
+
+    // Chain symbol mapping
+    let symbol = match chain_id {
+        1 | 10 | 8453 | 42161 => "ETH",
+        137 => "POL",
+        _ => "UNKNOWN",
+    };
+
+    // Fetch from Warmbed API (using /api/gas/latest endpoint)
+    let url = format!("{}/api/gas/latest/{}", state.warmbed_api_url, chain_id);
+
+    match state.http_client.get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    // Parse gas API response format
+                    let gas_limit = data.get("gas_limit").and_then(|v| v.as_u64()).unwrap_or(60_000);
+                    let gas_price_gwei = data.get("gas_price_gwei").and_then(|v| v.as_f64());
+                    let base_fee_wei = data.get("base_fee_per_gas_wei").and_then(|v| v.as_u64());
+
+                    let preset = RazorGasPreset {
+                        chain_id,
+                        chain_name: chain_name.to_string(),
+                        ready: true, // if we got a response, it's ready
+                        symbol: Some(symbol.to_string()),
+                        gas_limit: Some(gas_limit),
+                        gas_cost_wei: base_fee_wei.map(|wei| format!("{}", wei * gas_limit)),
+                        gas_cost_gwei: gas_price_gwei.map(|gwei| gwei * (gas_limit as f64)),
+                        gas_cost_native: None, // would need chain native price
+                        gas_cost_usd: None, // would need both native price and USD price
+                        max_fee_per_gas_gwei: gas_price_gwei,
+                        max_priority_fee_gwei: None,
+                        price_usd: None,
+                        age_ms: None,
+                        reason: None,
+                    };
+
+                    // Update cache
+                    let mut cache = state.razor_cache.write().await;
+                    cache.insert(chain_id, preset.clone());
+
+                    preset
+                }
+                Err(_) => {
+                    // Return fallback on parse error
+                    RazorGasPreset {
+                        chain_id,
+                        chain_name: chain_name.to_string(),
+                        ready: false,
+                        symbol: Some(symbol.to_string()),
+                        gas_limit: None,
+                        gas_cost_wei: None,
+                        gas_cost_gwei: None,
+                        gas_cost_native: None,
+                        gas_cost_usd: None,
+                        max_fee_per_gas_gwei: None,
+                        max_priority_fee_gwei: None,
+                        price_usd: None,
+                        age_ms: None,
+                        reason: Some("Failed to parse response".to_string()),
+                    }
+                }
+            }
+        }
+        _ => {
+            // Return fallback on request error
+            RazorGasPreset {
+                chain_id,
+                chain_name: chain_name.to_string(),
+                ready: false,
+                symbol: Some(symbol.to_string()),
+                gas_limit: None,
+                gas_cost_wei: None,
+                gas_cost_gwei: None,
+                gas_cost_native: None,
+                gas_cost_usd: None,
+                max_fee_per_gas_gwei: None,
+                max_priority_fee_gwei: None,
+                price_usd: None,
+                age_ms: None,
+                reason: Some("Warmbed API unavailable".to_string()),
+            }
+        }
+    }
 }

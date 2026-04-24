@@ -13,7 +13,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - GENOME_SSE_URL=http://46.4.96.124:30081/api/genome/subscribe/sse
-      - WARMBED_API_URL=http://46.4.96.124:8081
+      - WARMBED_API_URL=https://api.taifoon.dev
       - MIN_PROFIT_USD=0.1
       - SIMULATION_MODE=true
     healthcheck:
@@ -40,13 +40,7 @@ services:
       - solver
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_SOLVER_API_URL=http://solver:8082
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/solver/"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 15s
+      - NEXT_PUBLIC_SOLVER_API_URL=http://88.99.1.32:8082
     logging:
       driver: "json-file"
       options:
