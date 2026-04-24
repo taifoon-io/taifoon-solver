@@ -17,7 +17,7 @@ export default function MoneyFlow() {
   useEffect(() => {
     const fetchMoneyFlow = async () => {
       try {
-        const res = await fetch('http://localhost:8082/api/solver/money-flow')
+        const res = await fetch('/solver-api/money-flow')
         if (res.ok) {
           const flowData = await res.json()
           setData(flowData)
@@ -78,8 +78,8 @@ export default function MoneyFlow() {
         </div>
         <div className="flex justify-between items-center">
           <span className="text-gray-400">ROI</span>
-          <span className={`font-mono ${data.roi >= 0 ? 'text-[#00FF88]' : 'text-[#FF3366]'}`}>
-            {(data.roi * 100).toFixed(1)}%
+          <span className={`font-mono ${(data.roi || 0) >= 0 ? 'text-[#00FF88]' : 'text-[#FF3366]'}`}>
+            {((data.roi || 0) * 100).toFixed(1)}%
           </span>
         </div>
       </div>

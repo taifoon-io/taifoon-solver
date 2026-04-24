@@ -16,7 +16,7 @@ export default function TopIntents() {
   useEffect(() => {
     const fetchTopIntents = async () => {
       try {
-        const res = await fetch('http://localhost:8082/api/solver/intents')
+        const res = await fetch('/solver-api/intents')
         if (res.ok) {
           const data = await res.json()
           // Sort by profit and take top 10

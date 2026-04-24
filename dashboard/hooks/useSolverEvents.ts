@@ -32,7 +32,13 @@ export function useSolverEvents() {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    const eventSource = new EventSource('http://localhost:8082/api/solver/stream')
+    // Load initial intents
+    fetch('/solver-api/intents')
+      .then(res => res.json())
+      .then(data => setIntents(data.intents || []))
+      .catch(err => console.error('Failed to load initial intents:', err))
+
+    const eventSource = new EventSource('/solver-api/stream')
 
     eventSource.onopen = () => setConnected(true)
     eventSource.onerror = () => setConnected(false)
@@ -62,7 +68,7 @@ export function useSolverEvents() {
 
     const statsInterval = setInterval(async () => {
       try {
-        const res = await fetch('http://localhost:8082/api/solver/stats')
+        const res = await fetch('/solver-api/stats')
         if (res.ok) setStats(await res.json())
       } catch {}
     }, 5000)

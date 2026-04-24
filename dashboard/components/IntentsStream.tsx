@@ -50,16 +50,29 @@ export default function IntentsStream({ intents }: { intents: Intent[] }) {
               </div>
             </div>
             <div className="text-sm text-gray-400 space-y-1">
-              <div>
-                Chain {intent.src_chain} → {intent.dst_chain} •{' '}
-                {(parseInt(intent.amount || '0') / 1e6).toFixed(2)} USDC
+              <div className="flex justify-between items-center">
+                <span>Chain {intent.src_chain} → {intent.dst_chain}</span>
+                <span className="text-xs text-gray-500">
+                  {(() => {
+                    const diff = Date.now() - new Date(intent.timestamp).getTime()
+                    const seconds = Math.floor(diff / 1000)
+                    const minutes = Math.floor(seconds / 60)
+                    const hours = Math.floor(minutes / 60)
+                    if (hours > 0) return `${hours}h ago`
+                    if (minutes > 0) return `${minutes}m ago`
+                    return `${seconds}s ago`
+                  })()}
+                </span>
               </div>
-              {intent.profit_usd !== undefined && (
+              <div className="text-xs font-mono text-gray-500">
+                Amount: {intent.amount} wei
+              </div>
+              {typeof intent.profit_usd === 'number' && (
                 <div className={`font-bold ${intent.profit_usd > 0 ? 'text-[#00FF88]' : 'text-gray-500'}`}>
                   Profit: ${intent.profit_usd.toFixed(2)}
                 </div>
               )}
-              {intent.gas_cost_usd !== undefined && intent.protocol_fee_usd !== undefined && (
+              {typeof intent.gas_cost_usd === 'number' && typeof intent.protocol_fee_usd === 'number' && (
                 <div className="text-xs text-gray-500">
                   Gas: ${intent.gas_cost_usd.toFixed(2)} • Fee: ${intent.protocol_fee_usd.toFixed(2)}
                 </div>

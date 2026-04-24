@@ -15,7 +15,7 @@ export default function ProtocolBreakdown() {
   useEffect(() => {
     const fetchProtocols = async () => {
       try {
-        const res = await fetch('http://localhost:8082/api/solver/protocols')
+        const res = await fetch('/solver-api/protocols')
         if (res.ok) {
           const data = await res.json()
           setProtocols(data.protocols || [])
