@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react'
 
 interface ProtocolStats {
-  protocol: string
-  fill_count: number
-  total_profit_usd: number
+  name: string
+  fills: number
+  volume_usd: number
+  profit_usd: number
+  fee_bps: number
 }
 
 export default function ProtocolBreakdown() {
@@ -43,11 +45,11 @@ export default function ProtocolBreakdown() {
       ) : (
         <div className="space-y-2 text-sm">
           {protocols.map((p) => (
-            <div key={p.protocol} className="flex justify-between items-center">
-              <span className="text-gray-300">{p.protocol}</span>
+            <div key={p.name} className="flex justify-between items-center">
+              <span className="text-gray-300">{p.name}</span>
               <div className="flex items-center gap-3">
-                <span className="font-mono text-white">{p.fill_count} fills</span>
-                <span className="font-mono text-[#00FF88]">${p.total_profit_usd.toFixed(2)}</span>
+                <span className="font-mono text-white">{p.fills} fills</span>
+                <span className="font-mono text-[#00FF88]">${p.profit_usd.toFixed(2)}</span>
               </div>
             </div>
           ))}

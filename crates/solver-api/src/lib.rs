@@ -345,12 +345,14 @@ async fn razor_handler(
     State(state): State<Arc<ApiState>>,
 ) -> impl IntoResponse {
     let common_chains = vec![1u64, 10, 8453, 42161, 137];
-    let mut presets = Vec::new();
 
-    for chain_id in common_chains {
-        let preset = fetch_razor_for_chain(&state, chain_id).await;
-        presets.push(preset);
-    }
+    // Fetch all chains in parallel using join_all
+    let futures: Vec<_> = common_chains
+        .into_iter()
+        .map(|chain_id| fetch_razor_for_chain(&state, chain_id))
+        .collect();
+
+    let presets = futures::future::join_all(futures).await;
 
     Json(serde_json::json!({
         "presets": presets
