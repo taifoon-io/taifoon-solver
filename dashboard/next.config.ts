@@ -2,7 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: 'standalone',
-  // basePath and assetPrefix removed - docker serves from root
+  basePath: '/solver',
+  assetPrefix: '/solver',
 };
 
 export default nextConfig;
