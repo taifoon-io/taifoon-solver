@@ -1,0 +1,101 @@
+[
+  {
+    "amount": "5879617512724230000",
+    "dst_chain": 33139,
+    "id": "orbiter_finance:orbiter_finance::0x9e3ed65340a913b96ba7b86d5d5876dde623946e_33139",
+    "profit_usd": 16.58885253817269,
+    "protocol": "orbiter_finance",
+    "src_chain": 10,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:54:54.954951Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "51631363353317720000",
+    "dst_chain": 130,
+    "id": "orbiter_finance:orbiter_finance::0xc7977800676cd410981c57b5228a647603d82371_130",
+    "profit_usd": 51631363351.31772,
+    "protocol": "orbiter_finance",
+    "src_chain": 56,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:54:12.777481Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "1440000000000000000",
+    "dst_chain": 8453,
+    "id": "across_v3:across_v3::across_2251196",
+    "profit_usd": 3.2700000000000005,
+    "protocol": "across_v3",
+    "src_chain": 59144,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:54:07.712729Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "1440000000000000000",
+    "dst_chain": 8453,
+    "id": "across_v3:across_v3::across_2251196",
+    "profit_usd": 3.2700000000000005,
+    "protocol": "across_v3",
+    "src_chain": 59144,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:54:06.632572Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "9494823949000000000000",
+    "dst_chain": 8453,
+    "id": "stargate_v2:stargate_v2::0x7618633fe866a38d764ad76810ab15743545b8e4280eeff06433cfcba5307f8e",
+    "profit_usd": 28483.421847,
+    "protocol": "stargate_v2",
+    "src_chain": 56,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:53:33.730101Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "106036120000",
+    "dst_chain": 8453,
+    "id": "orbiter_finance:orbiter_finance::0x478946bcd4a5a22b316470f5486fafb928c0ba25_8453",
+    "profit_usd": 105.93612,
+    "protocol": "orbiter_finance",
+    "src_chain": 10,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:47:22.825151Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "10526212678293060000",
+    "dst_chain": 59144,
+    "id": "orbiter_finance:orbiter_finance::0x478946bcd4a5a22b316470f5486fafb928c0ba25_59144",
+    "profit_usd": 30.52863803487918,
+    "protocol": "orbiter_finance",
+    "src_chain": 10,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:46:29.620135Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "18968792009496460000",
+    "dst_chain": 130,
+    "id": "orbiter_finance:orbiter_finance::0xa3a573c8d14c93fca8fdecb7db168619563d9b00_130",
+    "profit_usd": 54.90637602848938,
+    "protocol": "orbiter_finance",
+    "src_chain": 1329,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:44:13.179307Z",
+    "tx_hash": null
+  },
+  {
+    "amount": "24311263467927760000",
+    "dst_chain": 130,
+    "id": "orbiter_finance:orbiter_finance::0xb2a2f14979a68c21181c6a63ca55a5b3693c9d2a_130",
+    "profit_usd": 70.93379040378329,
+    "protocol": "orbiter_finance",
+    "src_chain": 1329,
+    "state": "attempted",
+    "timestamp": "2026-04-25T16:44:13.111762Z",
+    "tx_hash": null
+  }
+]

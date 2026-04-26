@@ -1,0 +1,99 @@
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037927962",
+  "protocol": "layerzero_v2",
+  "src_chain": 34443,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:33:35.606955Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037928513",
+  "protocol": "layerzero_v2",
+  "src_chain": 56,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:31:33.983377Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037928262",
+  "protocol": "layerzero_v2",
+  "src_chain": 33139,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:30:18.021584Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037927940",
+  "protocol": "layerzero_v2",
+  "src_chain": 143,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:27:58.873636Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037927956",
+  "protocol": "layerzero_v2",
+  "src_chain": 252,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:26:57.220531Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037927980",
+  "protocol": "layerzero_v2",
+  "src_chain": 59144,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:25:50.733404Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037928059",
+  "protocol": "layerzero_v2",
+  "src_chain": 534352,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:25:35.126600Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037928262",
+  "protocol": "layerzero_v2",
+  "src_chain": 33139,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:25:16.479596Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "layerzero_v2:layerzero_v2::lz2_72057594037928262",
+  "protocol": "layerzero_v2",
+  "src_chain": 33139,
+  "dst_chain": 0,
+  "amount": "0",
+  "timestamp": "2026-04-25T11:25:14.048452Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}

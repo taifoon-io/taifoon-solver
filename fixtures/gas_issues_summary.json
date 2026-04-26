@@ -1,0 +1,57 @@
+{
+  "critical_issues": [
+    {
+      "chain_id": 56,
+      "chain_name": "BSC",
+      "gas_cost_gwei": 0,
+      "severity": "CRITICAL",
+      "impact": "Solver calculates $51 BILLION profit on 51 tokens",
+      "root_cause": "RPC returns zero gas price"
+    },
+    {
+      "chain_id": 10,
+      "chain_name": "Optimism",
+      "gas_cost_gwei": 3.77e-07,
+      "severity": "CRITICAL",
+      "impact": "9 orders of magnitude too low - wrong profit calculations",
+      "root_cause": "Wei vs Gwei unit mismatch in OP Stack chains"
+    },
+    {
+      "chain_id": 59144,
+      "chain_name": "Linea",
+      "gas_cost_gwei": 7e-09,
+      "severity": "CRITICAL",
+      "impact": "$3.27 profit on 1.44 ETH bridge (impossible)",
+      "root_cause": "Wei vs Gwei unit mismatch"
+    }
+  ],
+  "affected_chains": [
+    {"chain_id": 56, "name": "BSC", "gas_gwei": 0},
+    {"chain_id": 10, "name": "Optimism", "gas_gwei": 3.77e-07},
+    {"chain_id": 252, "name": "Fraxtal", "gas_gwei": 2.54e-07},
+    {"chain_id": 34443, "name": "Mode", "gas_gwei": 2.52e-07},
+    {"chain_id": 81457, "name": "Blast", "gas_gwei": 2.52e-07},
+    {"chain_id": 7777777, "name": "Zora", "gas_gwei": 2.52e-07},
+    {"chain_id": 1135, "name": "Lisk", "gas_gwei": 1.015e-06},
+    {"chain_id": 59144, "name": "Linea", "gas_gwei": 7e-09}
+  ],
+  "expected_vs_actual": {
+    "bsc": {
+      "expected_gwei": "0.1 - 3.0",
+      "actual_gwei": 0,
+      "factor": "infinite"
+    },
+    "optimism": {
+      "expected_gwei": "0.001 - 0.01",
+      "actual_gwei": 3.77e-07,
+      "factor": "10000x too low"
+    }
+  },
+  "action_items": [
+    "Fix BSC RPC gas fetching - investigate why it returns 0",
+    "Fix OP Stack wei→gwei conversion in Warmbed API",
+    "Add sanity checks: reject gas < 1e-6 gwei or > 10000 gwei",
+    "Add profit sanity checks: flag profits > $10 for manual review",
+    "Test with unrealistic_profits.json fixtures"
+  ]
+}

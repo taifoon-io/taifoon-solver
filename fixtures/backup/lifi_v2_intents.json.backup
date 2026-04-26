@@ -1,0 +1,220 @@
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x8f402c380754a14c8a216c67e219af96c8a449b6b6cd08553d455945e616bba4",
+  "protocol": "lifi_v2",
+  "src_chain": 59144,
+  "dst_chain": 8453,
+  "amount": "2213850",
+  "timestamp": "2026-04-25T11:35:58.451233Z",
+  "state": "skipped",
+  "profit_usd": -1.0499999999933585,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x8f402c380754a14c8a216c67e219af96c8a449b6b6cd08553d455945e616bba4",
+  "protocol": "lifi_v2",
+  "src_chain": 59144,
+  "dst_chain": 8453,
+  "amount": "2213850",
+  "timestamp": "2026-04-25T11:35:53.852225Z",
+  "state": "skipped",
+  "profit_usd": -1.0499999999933585,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xca7dfe16209a32914686f5c49d948d97fcd41ee117cf78777a68e1a049700622",
+  "protocol": "lifi_v2",
+  "src_chain": 999,
+  "dst_chain": 56,
+  "amount": "10000000",
+  "timestamp": "2026-04-25T11:34:08.690568Z",
+  "state": "skipped",
+  "profit_usd": -1.99999999997,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xa80790f7a1e17fa49eb5bdc64a13bd56e2605d4ec4863704a24ff692ce3a236f",
+  "protocol": "lifi_v2",
+  "src_chain": 34443,
+  "dst_chain": 56,
+  "amount": "2386268",
+  "timestamp": "2026-04-25T11:33:37.762658Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999928413,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xa80790f7a1e17fa49eb5bdc64a13bd56e2605d4ec4863704a24ff692ce3a236f",
+  "protocol": "lifi_v2",
+  "src_chain": 34443,
+  "dst_chain": 56,
+  "amount": "2386268",
+  "timestamp": "2026-04-25T11:33:36.312335Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999928413,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x23ba9f31e5214dd9463c5d132b5fe7d34f84672d81aad015e31f052220d1c137",
+  "protocol": "lifi_v2",
+  "src_chain": 324,
+  "dst_chain": 8453,
+  "amount": "132712896203241",
+  "timestamp": "2026-04-25T11:32:12.947276Z",
+  "state": "skipped",
+  "profit_usd": -1.0496018613113902,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x23ba9f31e5214dd9463c5d132b5fe7d34f84672d81aad015e31f052220d1c137",
+  "protocol": "lifi_v2",
+  "src_chain": 324,
+  "dst_chain": 8453,
+  "amount": "132712896203241",
+  "timestamp": "2026-04-25T11:32:11.237829Z",
+  "state": "skipped",
+  "profit_usd": -1.0496018613113902,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xe923e31c244efd583eb6ed273ca34571f6c0a776ba985a24b38b25ea026ff78e",
+  "protocol": "lifi_v2",
+  "src_chain": 43114,
+  "dst_chain": 999,
+  "amount": "1825985822411639283",
+  "timestamp": "2026-04-25T11:31:47.323388Z",
+  "state": "attempted",
+  "profit_usd": 3.4779574672349174,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x4baa01da3057c307dfc081be7dd943318af5704410994e59d1493d29b662bb4f",
+  "protocol": "lifi_v2",
+  "src_chain": 10,
+  "dst_chain": 8453,
+  "amount": "2372558031799159",
+  "timestamp": "2026-04-25T11:30:34.813934Z",
+  "state": "skipped",
+  "profit_usd": -0.09288232590460253,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x4baa01da3057c307dfc081be7dd943318af5704410994e59d1493d29b662bb4f",
+  "protocol": "lifi_v2",
+  "src_chain": 10,
+  "dst_chain": 8453,
+  "amount": "2372558031799159",
+  "timestamp": "2026-04-25T11:30:32.765570Z",
+  "state": "skipped",
+  "profit_usd": -0.09288232590460253,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xef4e8a6a1f9f2dab703a4bf928b2e7ff49675191471d8f5a05f4a74802b73e15",
+  "protocol": "lifi_v2",
+  "src_chain": 59144,
+  "dst_chain": 42161,
+  "amount": "636843420051273",
+  "timestamp": "2026-04-25T11:29:47.080538Z",
+  "state": "skipped",
+  "profit_usd": -1.0980894697398462,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xef4e8a6a1f9f2dab703a4bf928b2e7ff49675191471d8f5a05f4a74802b73e15",
+  "protocol": "lifi_v2",
+  "src_chain": 59144,
+  "dst_chain": 42161,
+  "amount": "636843420051273",
+  "timestamp": "2026-04-25T11:29:44.678227Z",
+  "state": "skipped",
+  "profit_usd": -1.0980894697398462,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x92c34428344cbea88e0e7045b390ee2c39959f5c936e17f25e34e2c451d72148",
+  "protocol": "lifi_v2",
+  "src_chain": 59144,
+  "dst_chain": 8453,
+  "amount": "946614128357811",
+  "timestamp": "2026-04-25T11:28:46.423848Z",
+  "state": "skipped",
+  "profit_usd": -1.0471601576149265,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x92c34428344cbea88e0e7045b390ee2c39959f5c936e17f25e34e2c451d72148",
+  "protocol": "lifi_v2",
+  "src_chain": 59144,
+  "dst_chain": 8453,
+  "amount": "946614128357811",
+  "timestamp": "2026-04-25T11:28:44.627917Z",
+  "state": "skipped",
+  "profit_usd": -1.0471601576149265,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xe05ae61c4c8b17babaa4ff3b4ca1fcfe0e8290f9ad2ec83de1a8391550f3798c",
+  "protocol": "lifi_v2",
+  "src_chain": 43114,
+  "dst_chain": 8453,
+  "amount": "14581064",
+  "timestamp": "2026-04-25T11:28:11.557079Z",
+  "state": "skipped",
+  "profit_usd": -1.0499999999562568,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x00a5ccc33b2bad8b62f82c9fc5e74f650772a80442bc51df4b51546f4e3cd48a",
+  "protocol": "lifi_v2",
+  "src_chain": 42161,
+  "dst_chain": 57073,
+  "amount": "10782000000000000",
+  "timestamp": "2026-04-25T11:26:57.135552Z",
+  "state": "skipped",
+  "profit_usd": -1.067654,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xb7224a35c61cac2b8ac6cbdab06a0bd747f98f331ba75e7815de2f27cedf9ab5",
+  "protocol": "lifi_v2",
+  "src_chain": 999,
+  "dst_chain": 1,
+  "amount": "50151743826",
+  "timestamp": "2026-04-25T11:26:27.025115Z",
+  "state": "skipped",
+  "profit_usd": -5.999999849544769,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0xb7224a35c61cac2b8ac6cbdab06a0bd747f98f331ba75e7815de2f27cedf9ab5",
+  "protocol": "lifi_v2",
+  "src_chain": 999,
+  "dst_chain": 1,
+  "amount": "50151743826",
+  "timestamp": "2026-04-25T11:26:24.186585Z",
+  "state": "skipped",
+  "profit_usd": -5.999999849544769,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x6278f0b37e6c3156a9b62d3ce815968c9390aae97e00d4ded80a710a87b62ad2",
+  "protocol": "lifi_v2",
+  "src_chain": 100,
+  "dst_chain": 8453,
+  "amount": "404857159120517014",
+  "timestamp": "2026-04-25T11:25:47.374585Z",
+  "state": "attempted",
+  "profit_usd": 0.16457147736155098,
+  "tx_hash": null
+}
+{
+  "id": "lifi_v2:lifi_v2::lifi_0x6278f0b37e6c3156a9b62d3ce815968c9390aae97e00d4ded80a710a87b62ad2",
+  "protocol": "lifi_v2",
+  "src_chain": 100,
+  "dst_chain": 8453,
+  "amount": "404857159120517014",
+  "timestamp": "2026-04-25T11:25:47.305600Z",
+  "state": "attempted",
+  "profit_usd": 0.16457147736155098,
+  "tx_hash": null
+}

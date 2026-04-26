@@ -1,0 +1,99 @@
+{
+  "id": "allbridge:allbridge::0xa67fedab16e65f64328ae749a83c3e42f2ad4fdcc9c8ea06f0a668a94f7eb5f2_48",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 14063474759649143000,
+  "amount": "224",
+  "timestamp": "2026-04-25T11:34:29.455732Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999999993,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xa67fedab16e65f64328ae749a83c3e42f2ad4fdcc9c8ea06f0a668a94f7eb5f2_47",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 4109695538894450000,
+  "amount": "97470693754034345399484951841262234858696432763359943812784988124079871949396",
+  "timestamp": "2026-04-25T11:34:29.400582Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xa67fedab16e65f64328ae749a83c3e42f2ad4fdcc9c8ea06f0a668a94f7eb5f2_48",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 14063474759649143000,
+  "amount": "224",
+  "timestamp": "2026-04-25T11:34:29.333430Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999999993,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xa67fedab16e65f64328ae749a83c3e42f2ad4fdcc9c8ea06f0a668a94f7eb5f2_47",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 4109695538894450000,
+  "amount": "97470693754034345399484951841262234858696432763359943812784988124079871949396",
+  "timestamp": "2026-04-25T11:34:28.641061Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xf4b0277e64e14df77f0ebb9e8b2db6136de89bd328fbfb8f0e6f356bfb53bf5f_1",
+  "protocol": "allbridge",
+  "src_chain": 43114,
+  "dst_chain": 0,
+  "amount": "105452300822291277028901335597499851078036713668899710135541301130536443443086",
+  "timestamp": "2026-04-25T11:31:47.241736Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xa09a39337c21b185f6873b02c262ed5c6b315918ab8171a6878e6dee79ce527b_48",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 14063474759649143000,
+  "amount": "224",
+  "timestamp": "2026-04-25T11:28:59.393381Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999999993,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xa09a39337c21b185f6873b02c262ed5c6b315918ab8171a6878e6dee79ce527b_47",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 4109695538894450000,
+  "amount": "67752643960723412695853302920889036509589472625518032044043465518886519303724",
+  "timestamp": "2026-04-25T11:28:59.340041Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xa09a39337c21b185f6873b02c262ed5c6b315918ab8171a6878e6dee79ce527b_48",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 14063474759649143000,
+  "amount": "224",
+  "timestamp": "2026-04-25T11:28:58.055359Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999999993,
+  "tx_hash": null
+}
+{
+  "id": "allbridge:allbridge::0xa09a39337c21b185f6873b02c262ed5c6b315918ab8171a6878e6dee79ce527b_47",
+  "protocol": "allbridge",
+  "src_chain": 1284,
+  "dst_chain": 4109695538894450000,
+  "amount": "67752643960723412695853302920889036509589472625518032044043465518886519303724",
+  "timestamp": "2026-04-25T11:28:57.999417Z",
+  "state": "skipped",
+  "profit_usd": -2,
+  "tx_hash": null
+}

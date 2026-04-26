@@ -1,0 +1,66 @@
+{
+  "id": "hyperlane:hyperlane::hyp_Some(0xda3a0681cb2bc50225f90156037769a06d7703be44a097dfbb45b076c0dc8e97)_Some(194)",
+  "protocol": "hyperlane",
+  "src_chain": 10,
+  "dst_chain": 42161,
+  "amount": "1357109082893375768439779480573479106156407462960819957948886889759674895384",
+  "timestamp": "2026-04-25T11:30:23.188300Z",
+  "state": "skipped",
+  "profit_usd": -0.15000000000000002,
+  "tx_hash": null
+}
+{
+  "id": "hyperlane:hyperlane::hyp_Some(0xda3a0681cb2bc50225f90156037769a06d7703be44a097dfbb45b076c0dc8e97)_Some(194)",
+  "protocol": "hyperlane",
+  "src_chain": 10,
+  "dst_chain": 42161,
+  "amount": "1357109082893375768439779480573479106156407462960819957948886889759674895384",
+  "timestamp": "2026-04-25T11:30:21.410160Z",
+  "state": "skipped",
+  "profit_usd": -0.15000000000000002,
+  "tx_hash": null
+}
+{
+  "id": "hyperlane:hyperlane::hyp_Some(0xd70b68dd9492122716239a6a7dc080e8e5f771d13fbe75413fa3a0675c3a64bd)_Some(156)",
+  "protocol": "hyperlane",
+  "src_chain": 10,
+  "dst_chain": 8453,
+  "amount": "1357109082682751185102665107177643050789066598323029767147788667251052940312",
+  "timestamp": "2026-04-25T11:28:31.667016Z",
+  "state": "skipped",
+  "profit_usd": -0.1,
+  "tx_hash": null
+}
+{
+  "id": "hyperlane:hyperlane::hyp_Some(0xd70b68dd9492122716239a6a7dc080e8e5f771d13fbe75413fa3a0675c3a64bd)_Some(156)",
+  "protocol": "hyperlane",
+  "src_chain": 10,
+  "dst_chain": 8453,
+  "amount": "1357109082682751185102665107177643050789066598323029767147788667251052940312",
+  "timestamp": "2026-04-25T11:28:31.342270Z",
+  "state": "skipped",
+  "profit_usd": -0.1,
+  "tx_hash": null
+}
+{
+  "id": "hyperlane:hyperlane::hyp_Some(0x3a0a03ae706502deb983b934345a887aad0267e92d5691fb918a85047240e198)_Some(106)",
+  "protocol": "hyperlane",
+  "src_chain": 10,
+  "dst_chain": 42161,
+  "amount": "1357109082472126601765550733781806995421725733685239576346690444742430985240",
+  "timestamp": "2026-04-25T11:26:05.459932Z",
+  "state": "skipped",
+  "profit_usd": -0.15000000000000002,
+  "tx_hash": null
+}
+{
+  "id": "hyperlane:hyperlane::hyp_Some(0x3a0a03ae706502deb983b934345a887aad0267e92d5691fb918a85047240e198)_Some(106)",
+  "protocol": "hyperlane",
+  "src_chain": 10,
+  "dst_chain": 42161,
+  "amount": "1357109082472126601765550733781806995421725733685239576346690444742430985240",
+  "timestamp": "2026-04-25T11:26:03.132426Z",
+  "state": "skipped",
+  "profit_usd": -0.15000000000000002,
+  "tx_hash": null
+}

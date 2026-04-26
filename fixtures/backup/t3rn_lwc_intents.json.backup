@@ -1,0 +1,11 @@
+{
+  "id": "t3rn_lwc:0xc0c81370141d4a2058aeb1a45dc541c32f3f7861aeec186f56eb6f240d7b685f",
+  "protocol": "t3rn_lwc",
+  "src_chain": 8453,
+  "dst_chain": 0,
+  "amount": "1000000000000000",
+  "timestamp": "2026-04-25T11:29:28.801952Z",
+  "state": "skipped",
+  "profit_usd": -1.0470000000000002,
+  "tx_hash": null
+}

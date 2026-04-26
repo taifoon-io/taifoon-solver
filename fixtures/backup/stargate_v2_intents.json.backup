@@ -1,0 +1,88 @@
+{
+  "id": "stargate_v2:stargate_v2::0xd935cfbe33b10b22701c5172db1308fc69f07459ddab728c588bb8d7c59afa84",
+  "protocol": "stargate_v2",
+  "src_chain": 56,
+  "dst_chain": 42161,
+  "amount": "4002402000000000000",
+  "timestamp": "2026-04-25T11:31:34.038081Z",
+  "state": "attempted",
+  "profit_usd": 10.907206,
+  "tx_hash": null
+}
+{
+  "id": "stargate_v2:stargate_v2::0x0000000000000000000000000000000000000000000000000000000000000000",
+  "protocol": "stargate_v2",
+  "src_chain": 10,
+  "dst_chain": 8453,
+  "amount": "500000000",
+  "timestamp": "2026-04-25T11:30:06.482096Z",
+  "state": "skipped",
+  "profit_usd": -0.0999999985,
+  "tx_hash": null
+}
+{
+  "id": "stargate_v2:stargate_v2::0x6b609ac3a47e9ff2f07c629b84b292c322b189b5cf34aa52a910fc5e0cc58081",
+  "protocol": "stargate_v2",
+  "src_chain": 143,
+  "dst_chain": 42161,
+  "amount": "640000000000",
+  "timestamp": "2026-04-25T11:28:00.652142Z",
+  "state": "skipped",
+  "profit_usd": -1.09999808,
+  "tx_hash": null
+}
+{
+  "id": "stargate_v2:stargate_v2::0x6b609ac3a47e9ff2f07c629b84b292c322b189b5cf34aa52a910fc5e0cc58081",
+  "protocol": "stargate_v2",
+  "src_chain": 143,
+  "dst_chain": 42161,
+  "amount": "640000000000",
+  "timestamp": "2026-04-25T11:27:59.006447Z",
+  "state": "skipped",
+  "profit_usd": -1.09999808,
+  "tx_hash": null
+}
+{
+  "id": "stargate_v2:stargate_v2::0xfb67d5f1c0534cf42520626e26b39ccdd3b03b4ebbb13c2be3fca95b024fcf86",
+  "protocol": "stargate_v2",
+  "src_chain": 143,
+  "dst_chain": 30212,
+  "amount": "936283645",
+  "timestamp": "2026-04-25T11:26:58.704114Z",
+  "state": "skipped",
+  "profit_usd": -1.999999997191149,
+  "tx_hash": null
+}
+{
+  "id": "stargate_v2:stargate_v2::0xfb67d5f1c0534cf42520626e26b39ccdd3b03b4ebbb13c2be3fca95b024fcf86",
+  "protocol": "stargate_v2",
+  "src_chain": 143,
+  "dst_chain": 30212,
+  "amount": "936283645",
+  "timestamp": "2026-04-25T11:26:58.226233Z",
+  "state": "skipped",
+  "profit_usd": -1.999999997191149,
+  "tx_hash": null
+}
+{
+  "id": "stargate_v2:stargate_v2::0x1cc1086fc3ede8775b2969246585c6d5ce97b4cc6bec5f03e21716484fc3a2ee",
+  "protocol": "stargate_v2",
+  "src_chain": 10,
+  "dst_chain": 30295,
+  "amount": "217390000000000000",
+  "timestamp": "2026-04-25T11:25:52.152567Z",
+  "state": "skipped",
+  "profit_usd": -0.39783,
+  "tx_hash": null
+}
+{
+  "id": "stargate_v2:stargate_v2::0x1cc1086fc3ede8775b2969246585c6d5ce97b4cc6bec5f03e21716484fc3a2ee",
+  "protocol": "stargate_v2",
+  "src_chain": 10,
+  "dst_chain": 30295,
+  "amount": "217390000000000000",
+  "timestamp": "2026-04-25T11:25:51.078851Z",
+  "state": "skipped",
+  "profit_usd": -0.39783,
+  "tx_hash": null
+}

@@ -1,0 +1,22 @@
+{
+  "id": "squid_router:squid_router::squid_Some(0xd85751f287a20f37a4cacd5347dc50c30eb310cdad8456286026ec7da46dbddb)_Some(0)",
+  "protocol": "squid_router",
+  "src_chain": 250,
+  "dst_chain": 0,
+  "amount": "288",
+  "timestamp": "2026-04-25T11:26:37.505574Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999999991,
+  "tx_hash": null
+}
+{
+  "id": "squid_router:squid_router::squid_Some(0xd85751f287a20f37a4cacd5347dc50c30eb310cdad8456286026ec7da46dbddb)_Some(0)",
+  "protocol": "squid_router",
+  "src_chain": 250,
+  "dst_chain": 0,
+  "amount": "288",
+  "timestamp": "2026-04-25T11:26:35.769876Z",
+  "state": "skipped",
+  "profit_usd": -1.9999999999999991,
+  "tx_hash": null
+}
