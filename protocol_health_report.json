@@ -1,0 +1,139 @@
+{
+  "timestamp": "2026-04-26T23:20:03.576802",
+  "stats": {
+    "total_validated": 100,
+    "total_passed": 0,
+    "total_failed": 22,
+    "total_warnings": 78,
+    "start_time": "2026-04-26T23:19:39.689857"
+  },
+  "protocols": {
+    "across_v3_intents": {
+      "protocol": "across_v3_intents",
+      "total": 8,
+      "passed": 0,
+      "failed": 1,
+      "warnings": 7,
+      "last_check": "2026-04-26T23:19:45.577713",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        57073,
+        130
+      ]
+    },
+    "allbridge_intents": {
+      "protocol": "allbridge_intents",
+      "total": 9,
+      "passed": 0,
+      "failed": 0,
+      "warnings": 9,
+      "last_check": "2026-04-26T23:19:45.577704",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        0,
+        4109695538894450000,
+        14063474759649143000
+      ]
+    },
+    "hyperlane_intents": {
+      "protocol": "hyperlane_intents",
+      "total": 6,
+      "passed": 0,
+      "failed": 0,
+      "warnings": 6,
+      "last_check": "2026-04-26T23:19:45.577695",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": []
+    },
+    "layerzero_v2_intents": {
+      "protocol": "layerzero_v2_intents",
+      "total": 9,
+      "passed": 0,
+      "failed": 0,
+      "warnings": 9,
+      "last_check": "2026-04-26T23:19:45.577686",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        0,
+        33139
+      ]
+    },
+    "lifi_v2_intents": {
+      "protocol": "lifi_v2_intents",
+      "total": 20,
+      "passed": 0,
+      "failed": 3,
+      "warnings": 17,
+      "last_check": "2026-04-26T23:19:51.577281",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        57073,
+        100
+      ]
+    },
+    "orbiter_finance_intents": {
+      "protocol": "orbiter_finance_intents",
+      "total": 37,
+      "passed": 0,
+      "failed": 17,
+      "warnings": 20,
+      "last_check": "2026-04-26T23:20:03.576514",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        1088,
+        130,
+        100,
+        5000,
+        1329,
+        167000,
+        1689
+      ]
+    },
+    "squid_router_intents": {
+      "protocol": "squid_router_intents",
+      "total": 2,
+      "passed": 0,
+      "failed": 0,
+      "warnings": 2,
+      "last_check": "2026-04-26T23:19:45.577622",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        0
+      ]
+    },
+    "stargate_v2_intents": {
+      "protocol": "stargate_v2_intents",
+      "total": 8,
+      "passed": 0,
+      "failed": 1,
+      "warnings": 7,
+      "last_check": "2026-04-26T23:19:45.577612",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        30212,
+        30295
+      ]
+    },
+    "t3rn_lwc_intents": {
+      "protocol": "t3rn_lwc_intents",
+      "total": 1,
+      "passed": 0,
+      "failed": 0,
+      "warnings": 1,
+      "last_check": "2026-04-26T23:19:45.577579",
+      "pass_rate": 0.0,
+      "critical_issues": [],
+      "unsupported_chains": [
+        0
+      ]
+    }
+  }
+}
