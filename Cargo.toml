@@ -7,6 +7,9 @@ members = [
     "crates/solver-main",
     "crates/solver-api",
     "crates/t3rn-sidecar",
+    "crates/protocol-adapters",
+    "crates/mempool-monitor",
+    "crates/taifoon-cli",
 ]
 
 [workspace.package]
@@ -47,3 +50,9 @@ config = "0.14"
 futures = "0.3"
 async-stream = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
+
+# Storage (outcome log)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Hex
+hex = "0.4"

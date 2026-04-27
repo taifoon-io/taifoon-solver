@@ -4,9 +4,17 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
+[lib]
+name = "solver_main"
+path = "src/lib.rs"
+
 [[bin]]
 name = "taifoon-solver"
 path = "src/main.rs"
+
+[[bin]]
+name = "estimate_one"
+path = "src/bin/estimate_one.rs"
 
 [dependencies]
 genome-client = { path = "../genome-client" }
@@ -19,3 +27,6 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 chrono.workspace = true
+alloy.workspace = true
+serde.workspace = true
+serde_json.workspace = true

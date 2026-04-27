@@ -5,7 +5,16 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-/// Genome event from DA API SSE stream
+/// Genome event from DA API SSE stream.
+///
+/// Legacy field names (`token`, `amount`, `timestamp`, `ref`) are honored via
+/// serde aliases so older fixtures still parse — but ONLY when the canonical
+/// keys (`src_token`, `input_amount`, `ts`, `ref_hash`) are absent. Real-shaped
+/// fixtures from the spinner genome_encoder include both the legacy and
+/// canonical keys; for those, deserialize via [`GenomeEvent::from_json_value`]
+/// (or [`GenomeEvent::from_json_str`]) which strips the legacy duplicates
+/// before invoking serde. The plain `serde::Deserialize` impl is preserved
+/// for the in-process SSE consumer where each event carries only one key set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenomeEvent {
     /// Full address (e.g., "T:1745678/proto:lifi_v2/deposit:1:0xabc123")
@@ -21,7 +30,7 @@ pub struct GenomeEvent {
     /// Chain ID
     pub chain_id: Option<u64>,
     /// Transaction reference
-    #[serde(rename = "ref_hash", alias = "ref")]
+    #[serde(default, rename = "ref_hash", alias = "ref")]
     pub reference: Option<String>,
     /// Source chain (for cross-chain intents)
     pub src_chain: Option<u64>,
@@ -46,10 +55,59 @@ pub struct GenomeEvent {
     pub protocol: Option<String>,
     /// Order ID (for order entities)
     pub order_id: Option<String>,
+
+    // ── Protocol-specific fields the executor needs (B.1) ─────────────────────
+    /// Negotiated output amount (Across: V3FundsDeposited.outputAmount;
+    /// LiFi: minAmountOut). String to preserve precision.
+    #[serde(default, alias = "min_amount_out")]
+    pub output_amount: Option<String>,
+    /// Across V3 depositId (int64 in the deployed adapter).
+    #[serde(default)]
+    pub deposit_id: Option<i64>,
+    /// deBridge maker order nonce (uint64).
+    #[serde(default)]
+    pub maker_order_nonce: Option<u64>,
+    /// deBridge give-amount in source-token base units (string for precision).
+    #[serde(default)]
+    pub give_amount: Option<String>,
+    /// deBridge take-amount in destination-token base units.
+    #[serde(default)]
+    pub take_amount: Option<String>,
+}
+
+impl GenomeEvent {
+    /// Deserialize from a JSON value while tolerating fixtures that carry
+    /// both the canonical key and its legacy alias (e.g. both `src_token`
+    /// and `token`). When both are present, the canonical key wins; the
+    /// legacy duplicate is stripped before serde sees it.
+    pub fn from_json_value(mut v: serde_json::Value) -> Result<Self> {
+        if let Some(obj) = v.as_object_mut() {
+            // (canonical, legacy) pairs — strip legacy if canonical is present.
+            const PAIRS: &[(&str, &str)] = &[
+                ("src_token", "token"),
+                ("input_amount", "amount"),
+                ("ts", "timestamp"),
+                ("ref_hash", "ref"),
+            ];
+            for (canonical, legacy) in PAIRS {
+                if obj.contains_key(*canonical) && obj.contains_key(*legacy) {
+                    obj.remove(*legacy);
+                }
+            }
+        }
+        serde_json::from_value(v).context("deserialize GenomeEvent")
+    }
+
+    /// Convenience: deserialize from a JSON string with the same legacy-key
+    /// tolerance as [`from_json_value`].
+    pub fn from_json_str(s: &str) -> Result<Self> {
+        let v: serde_json::Value = serde_json::from_str(s).context("parse JSON")?;
+        Self::from_json_value(v)
+    }
 }
 
 /// Simplified intent structure for solver
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Intent {
     /// Unique intent ID
     pub id: String,
@@ -73,6 +131,26 @@ pub struct Intent {
     pub tx_hash: String,
     /// Timestamp when detected
     pub detected_at: u64,
+
+    // ── Protocol-specific fields plumbed through to executor (B.1) ────────────
+    /// Negotiated output amount on the destination chain (string base units).
+    #[serde(default)]
+    pub output_amount: Option<String>,
+    /// Across V3 depositId.
+    #[serde(default)]
+    pub deposit_id: Option<i64>,
+    /// deBridge maker order nonce.
+    #[serde(default)]
+    pub maker_order_nonce: Option<u64>,
+    /// deBridge give-amount.
+    #[serde(default)]
+    pub give_amount: Option<String>,
+    /// deBridge take-amount.
+    #[serde(default)]
+    pub take_amount: Option<String>,
+    /// Order ID (deBridge orderId, Mayan order_id, etc.) preserved alongside `id`.
+    #[serde(default)]
+    pub order_id: Option<String>,
 }
 
 impl Intent {
@@ -140,10 +218,11 @@ impl Intent {
             })
             .context(format!("Missing src_token field for protocol '{}' - genome stream data incomplete", protocol_name))?;
 
-        let dst_token = event.dst_token.unwrap_or_else(|| src_token.clone());
+        let dst_token = event.dst_token.clone().unwrap_or_else(|| src_token.clone());
 
         // Protocol: use protocol field if available, otherwise use id
-        let protocol = event.protocol.or(event.id).context("Missing protocol/id in genome event")?;
+        let protocol = event.protocol.clone().or_else(|| event.id.clone())
+            .context("Missing protocol/id in genome event")?;
 
         // Generate unique intent ID from protocol + tx hash
         let id = format!("{}:{}", protocol, tx_hash);
@@ -165,6 +244,12 @@ impl Intent {
                     .unwrap()
                     .as_millis() as u64 / 1000
             }),
+            output_amount: event.output_amount,
+            deposit_id: event.deposit_id,
+            maker_order_nonce: event.maker_order_nonce,
+            give_amount: event.give_amount,
+            take_amount: event.take_amount,
+            order_id: event.order_id,
         })
     }
 }
@@ -262,8 +347,8 @@ impl GenomeClient {
 
         let data = data?;
 
-        // Parse JSON data
-        let genome_event: GenomeEvent = match serde_json::from_str(data) {
+        // Parse JSON data, tolerating legacy/canonical key duplicates.
+        let genome_event: GenomeEvent = match GenomeEvent::from_json_str(data) {
             Ok(event) => event,
             Err(e) => {
                 warn!("Failed to parse genome event: {}", e);

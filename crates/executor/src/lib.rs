@@ -2,8 +2,29 @@ use anyhow::{Result, anyhow};
 use genome_client::Intent;
 use profit_calc::ProfitResult;
 use t3rn_sidecar::T3RNSidecar;
+use protocol_adapters::AdapterFactory;
 use alloy::signers::local::PrivateKeySigner;
-use tracing::{info, warn, error};
+use tracing::{info, warn};
+
+pub mod across_executor;
+pub mod estimate;
+pub mod evm_estimate;
+pub mod outcome_log;
+pub mod skip_rules;
+pub mod spinner_solver;
+
+pub use across_executor::{AcrossExecutor, AcrossExecutorConfig, ChainWiring, ChainWiringConfig};
+pub use estimate::{
+    classify_evm_error, classify_solana_error, write_attempt_bundle, AttemptBundle,
+    EstimateAdapter, EstimateOutcome,
+};
+pub use evm_estimate::{
+    default_across_spoke_pools, default_debridge_dln_addresses, default_rpc_for_chain,
+    resolve_rpc_url, run_evm_estimate, AcrossEstimateAdapter, DeBridgeEstimateAdapter,
+};
+pub use outcome_log::{OutcomeLog, OutcomeRecord};
+pub use skip_rules::{RulePredicate, SkipRule, SkipRules};
+pub use spinner_solver::{SpinnerSolverClient, TestRunResult};
 
 /// Execution result
 #[derive(Debug, Clone)]
@@ -28,6 +49,8 @@ pub struct Executor {
     simulation_mode: bool,
     t3rn_sidecar: Option<T3RNSidecar>,
     min_profit_usd: f64,
+    adapter_factory: AdapterFactory,
+    spinner_api_url: String,
 }
 
 impl Executor {
@@ -59,15 +82,25 @@ impl Executor {
             None
         };
 
+        // Initialize protocol adapter factory
+        let spinner_api_url = std::env::var("SPINNER_API_URL")
+            .unwrap_or_else(|_| "http://46.4.96.124:30081".to_string());
+
+        let adapter_factory = AdapterFactory::new(&spinner_api_url);
+
         info!("🔧 Executor initialized:");
         info!("   SIMULATION_MODE: {}", simulation_mode);
         info!("   MIN_PROFIT_USD: ${}", min_profit_usd);
         info!("   T3RN_LWC: {}", if t3rn_sidecar.is_some() { "enabled" } else { "disabled" });
+        info!("   SPINNER_API: {}", spinner_api_url);
+        info!("   SUPPORTED_PROTOCOLS: {:?}", adapter_factory.supported_protocols());
 
         Ok(Self {
             simulation_mode,
             t3rn_sidecar,
             min_profit_usd,
+            adapter_factory,
+            spinner_api_url,
         })
     }
 
@@ -137,25 +170,36 @@ impl Executor {
         Ok(false)
     }
 
-    /// Execute with own funds (Priority 1)
+    /// Execute with own funds (Priority 1) - USING PROTOCOL ADAPTERS
     async fn execute_with_own_funds(
         &self,
         intent: &Intent,
         profit: &ProfitResult,
     ) -> Result<ExecutionResult> {
+        // Get protocol-specific adapter
+        let adapter = self.adapter_factory.get_adapter(intent)?;
+
+        info!("📦 Using protocol adapter: {}", adapter.protocol_name());
+
+        // Fetch V5 proof bundle from Spinner
+        info!("🔐 Fetching V5 proof bundle from Spinner...");
+        let proof = adapter.estimate_gas(intent, &self.spinner_api_url).await?;
+        info!("✅ Gas estimate: {} units @ {:.2} gwei = ${:.2}",
+            proof.gas_units, proof.gas_price_gwei, proof.total_usd);
+
         if self.simulation_mode {
-            info!("✅ [SIMULATION] Would execute with own funds: {}", intent.id);
+            info!("✅ [SIMULATION] Would execute protocol fill via {}", adapter.protocol_name());
             return Ok(ExecutionResult {
                 intent_id: intent.id.clone(),
-                fill_tx: format!("0xsim_ownfunds_{}", intent.id),
+                fill_tx: format!("0xsim_{}_{}", adapter.protocol_name(), intent.id),
                 claim_tx: None,
-                gas_used: 150_000,
+                gas_used: proof.gas_units,
                 actual_profit_usd: profit.net_profit_usd,
             });
         }
 
-        // TODO: Implement actual own-funds execution
-        Err(anyhow!("Own funds execution not yet implemented"))
+        // TODO: Implement actual protocol-based execution
+        Err(anyhow!("Live protocol execution not yet implemented - use SIMULATION_MODE=true"))
     }
 
     /// Execute with flash loan (Priority 2)

@@ -415,6 +415,7 @@ mod tests {
             recipient: "0xuser".to_string(),
             tx_hash: "0xabc".to_string(),
             detected_at: 0,
+            ..Default::default()
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

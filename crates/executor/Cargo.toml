@@ -8,9 +8,16 @@ authors.workspace = true
 genome-client = { path = "../genome-client" }
 profit-calc = { path = "../profit-calc" }
 t3rn-sidecar = { path = "../t3rn-sidecar" }
+protocol-adapters = { path = "../protocol-adapters" }
 alloy.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+hex.workspace = true
+async-trait = "0.1"
