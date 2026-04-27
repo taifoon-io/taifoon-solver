@@ -83,20 +83,40 @@ impl Intent {
             .context("Missing dst_chain in genome event")?;
 
         // Support both input_amount (new) and amount (old)
-        let amount = event.input_amount.context("Missing input_amount in genome event")?;
+        let amount = event.input_amount.clone().context("Missing input_amount in genome event")?;
 
         let depositor = event
-            .depositor
+            .depositor.clone()
             .context("Missing depositor in genome event")?;
 
         // Recipient may be optional in some protocols
-        let recipient = event.recipient.unwrap_or_else(|| depositor.clone());
+        let recipient = event.recipient.clone().unwrap_or_else(|| depositor.clone());
 
-        // Use ref_hash as tx hash
+        // Use ref_hash as tx hash, with fallback to generated ID for protocols without tx_hash
         let tx_hash = event
-            .reference
+            .reference.clone()
             .or_else(|| event.order_id.clone())
-            .context("Missing reference/order_id in genome event")?;
+            .unwrap_or_else(|| {
+                // Generate synthetic tx_hash for protocols that don't provide one (e.g., Li.Fi)
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+
+                let mut hasher = DefaultHasher::new();
+                if let Some(ref dep) = event.depositor {
+                    dep.hash(&mut hasher);
+                }
+                event.src_chain.hash(&mut hasher);
+                event.dst_chain.hash(&mut hasher);
+                if let Some(ref amt) = event.input_amount {
+                    amt.hash(&mut hasher);
+                }
+                event.ts.hash(&mut hasher);
+
+                let synthetic_hash = format!("synthetic_{:x}", hasher.finish());
+                warn!("⚠️  Generating synthetic tx_hash for protocol {:?} (missing reference): {}",
+                      event.protocol.as_ref().or(event.id.as_ref()), synthetic_hash);
+                synthetic_hash
+            });
 
         // Support both src_token (new) and token (old)
         let src_token = event.src_token.context("Missing src_token in genome event")?;
