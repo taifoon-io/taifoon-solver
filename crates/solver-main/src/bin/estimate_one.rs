@@ -18,8 +18,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use executor::{
-    AcrossEstimateAdapter, DeBridgeEstimateAdapter, EstimateAdapter, EstimateOutcome,
-    LiFiMetaRouter, MayanEvmEstimateAdapter,
+    load_messiah_solana_pubkey_or_fallback, AcrossEstimateAdapter, DeBridgeEstimateAdapter,
+    EstimateAdapter, EstimateOutcome, LiFiMetaRouter, MayanEvmEstimateAdapter,
+    MayanSolanaEstimateAdapter, DEFAULT_SOLANA_RPC,
 };
 use genome_client::{GenomeEvent, Intent};
 
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
         eprintln!("usage: estimate_one <protocol-slug> <fixture.json>");
-        eprintln!("  protocol-slug ∈ {{across, debridge, mayan_evm, lifi}}");
+        eprintln!("  protocol-slug ∈ {{across, debridge, mayan_evm, mayan_solana, lifi}}");
         std::process::exit(2);
     }
     let proto = args[1].to_lowercase();
@@ -75,11 +76,20 @@ async fn main() -> Result<()> {
             let adapter = LiFiMetaRouter::new(messiah, &spinner_base);
             adapter.estimate(&intent).await
         }
+        "mayan_solana" | "mayan-solana" | "mayan_swift_solana" => {
+            // Solana payer pubkey: read from keychain entry
+            // `mamba-messiah-solana-key` (public key only) if present, fall
+            // back to the system program for the calldata-only path.
+            let payer = load_messiah_solana_pubkey_or_fallback();
+            let rpc = std::env::var("SOLANA_RPC_URL")
+                .unwrap_or_else(|_| DEFAULT_SOLANA_RPC.to_string());
+            println!("Solana payer pubkey: {}", payer);
+            println!("Solana RPC: {}", rpc);
+            let adapter = MayanSolanaEstimateAdapter::new(messiah, payer, rpc, &spinner_base);
+            adapter.estimate(&intent).await
+        }
         other => {
-            return Err(anyhow!(
-                "unknown protocol '{}' (Mayan Solana lands in B.3)",
-                other
-            ));
+            return Err(anyhow!("unknown protocol '{}'", other));
         }
     };
 

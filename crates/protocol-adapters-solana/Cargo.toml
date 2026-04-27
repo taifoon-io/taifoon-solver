@@ -1,0 +1,31 @@
+[package]
+name = "protocol-adapters-solana"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+genome-client = { path = "../genome-client" }
+
+# Async + HTTP for raw simulateTransaction JSON-RPC
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+
+# Encoding primitives. We deliberately avoid `solana-sdk`/`solana-client` to
+# keep the workspace build under control (those crates pull ~1000 transitive
+# deps and add ~5 minutes to first build). For the estimate harness we only
+# need: base58 decode for Pubkey strings, sha256 for the Anchor instruction
+# discriminator, and base64 to wire the serialized transaction over JSON-RPC.
+bs58 = "0.5"
+sha2 = "0.10"
+base64 = "0.22"
+hex = { workspace = true }
+
+# Errors / logging
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -101,6 +101,24 @@ pub struct GenomeEvent {
     /// detect mismatches and fall back to RouteNotImplemented gracefully.
     #[serde(default)]
     pub tool: Option<String>,
+
+    // ── Mayan-Solana fields the Solana adapter needs (B.3) ────────────────────
+    /// Mayan Swift Solana program id (base58, e.g. BLZRi6frs4X4DNLw56V4EXai1b6QVESN1BhHBTYM9VcY).
+    #[serde(default)]
+    pub swift_program_id: Option<String>,
+    /// State PDA holding the on-chain order metadata (base58).
+    #[serde(default)]
+    pub state_account: Option<String>,
+    /// Vault PDA that escrows the source-side tokens for this order (base58).
+    #[serde(default)]
+    pub vault_account: Option<String>,
+    /// Mayan-side estimate of compute units needed for `fulfill` (advisory, ~240k).
+    #[serde(default)]
+    pub compute_units_estimate: Option<u64>,
+    /// True when the source chain is Solana (i.e. the order was opened on Solana).
+    /// Lets the executor pick the SVM path without re-checking chain ids.
+    #[serde(default)]
+    pub is_solana_source: Option<bool>,
 }
 
 impl GenomeEvent {
@@ -209,6 +227,23 @@ pub struct Intent {
     /// LiFi tool name.
     #[serde(default)]
     pub tool: Option<String>,
+
+    // ── Mayan-Solana fields plumbed through to executor (B.3) ─────────────────
+    /// Mayan Swift Solana program id (base58).
+    #[serde(default)]
+    pub swift_program_id: Option<String>,
+    /// State PDA (base58).
+    #[serde(default)]
+    pub state_account: Option<String>,
+    /// Vault PDA (base58).
+    #[serde(default)]
+    pub vault_account: Option<String>,
+    /// Compute-unit estimate from the genome event.
+    #[serde(default)]
+    pub compute_units_estimate: Option<u64>,
+    /// True when the source chain is Solana.
+    #[serde(default)]
+    pub is_solana_source: Option<bool>,
 }
 
 impl Intent {
@@ -316,6 +351,11 @@ impl Intent {
             lifi_transaction_id: event.lifi_transaction_id,
             bridge: event.bridge,
             tool: event.tool,
+            swift_program_id: event.swift_program_id,
+            state_account: event.state_account,
+            vault_account: event.vault_account,
+            compute_units_estimate: event.compute_units_estimate,
+            is_solana_source: event.is_solana_source,
         })
     }
 }

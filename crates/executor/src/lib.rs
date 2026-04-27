@@ -11,6 +11,7 @@ pub mod estimate;
 pub mod evm_estimate;
 pub mod lifi_meta_router;
 pub mod mayan_evm_estimate;
+pub mod mayan_solana_estimate;
 pub mod outcome_log;
 pub mod skip_rules;
 pub mod spinner_solver;
@@ -26,6 +27,10 @@ pub use evm_estimate::{
 };
 pub use lifi_meta_router::LiFiMetaRouter;
 pub use mayan_evm_estimate::{default_mayan_swift_addresses, MayanEvmEstimateAdapter};
+pub use mayan_solana_estimate::{
+    load_messiah_solana_pubkey_or_fallback, svm_to_parent, MayanSolanaEstimateAdapter,
+    DEFAULT_SOLANA_RPC, FALLBACK_SOLANA_PAYER_PUBKEY,
+};
 pub use outcome_log::{OutcomeLog, OutcomeRecord};
 pub use skip_rules::{RulePredicate, SkipRule, SkipRules};
 pub use spinner_solver::{SpinnerSolverClient, TestRunResult};
