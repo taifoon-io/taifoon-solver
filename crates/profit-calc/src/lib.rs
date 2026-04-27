@@ -189,9 +189,14 @@ impl ProfitCalculator {
         // 1. Get protocol fee
         let protocol_fee_bps = self.get_protocol_fee(&intent.protocol);
 
-        // 2. Parse amount and detect token decimals
+        // 2. Parse amount and detect token decimals - WITH OVERFLOW DETECTION
         let amount_raw: u128 = intent.amount.parse()
-            .unwrap_or(0);
+            .context(format!("Failed to parse amount '{}' as u128 (possible overflow or invalid format)", intent.amount))?;
+
+        // Validate amount is not zero (catches bugs early)
+        if amount_raw == 0 {
+            anyhow::bail!("Intent has zero amount - invalid or parsing failed (original: '{}')", intent.amount);
+        }
 
         // Detect decimals from token address
         let decimals = self.detect_token_decimals(&intent.src_token, intent.src_chain);
@@ -299,11 +304,14 @@ impl ProfitCalculator {
         match self.fetch_gas_price(chain_id).await {
             Ok(gas_price_gwei) => {
                 // Calculate cost in USD
-                let gas_cost_eth = (estimated_gas_units as f64 * gas_price_gwei) / 1_000_000_000.0;
+                // Formula: gas_units × (gas_price_gwei / 1e9) = ETH cost
+                // Then: ETH cost × ETH_price_USD = USD cost
+                let gas_price_eth = gas_price_gwei / 1_000_000_000.0; // Convert gwei to ETH
+                let gas_cost_eth = (estimated_gas_units as f64) * gas_price_eth;
                 let gas_cost_usd = gas_cost_eth * self.eth_price_usd;
 
-                tracing::info!("💰 Real gas cost for chain {}: {} gwei × {} units = {:.6} ETH = ${:.2}",
-                    chain_id, gas_price_gwei, estimated_gas_units, gas_cost_eth, gas_cost_usd);
+                tracing::info!("💰 Real gas cost for chain {}: {} gwei (={:.9} ETH/gas) × {} units = {:.6} ETH = ${:.2}",
+                    chain_id, gas_price_gwei, gas_price_eth, estimated_gas_units, gas_cost_eth, gas_cost_usd);
 
                 gas_cost_usd
             }
