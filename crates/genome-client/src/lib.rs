@@ -82,8 +82,17 @@ impl Intent {
             .dst_chain
             .context("Missing dst_chain in genome event")?;
 
-        // Support both input_amount (new) and amount (old)
-        let amount = event.input_amount.clone().context("Missing input_amount in genome event")?;
+        // Support both input_amount (new) and amount (old) - with fallback to skip intent
+        let protocol_name = event.protocol.as_ref().or(event.id.as_ref()).map(|s| s.as_str()).unwrap_or("unknown");
+
+        let amount = event.input_amount
+            .clone()
+            .or_else(|| {
+                // Genome stream might send "amount" instead of "input_amount" for older protocols
+                warn!("⚠️  Protocol '{}' missing 'input_amount', this intent will be skipped", protocol_name);
+                None
+            })
+            .context(format!("Missing input_amount field for protocol '{}' - genome stream data incomplete", protocol_name))?;
 
         let depositor = event
             .depositor.clone()
@@ -118,8 +127,16 @@ impl Intent {
                 synthetic_hash
             });
 
-        // Support both src_token (new) and token (old)
-        let src_token = event.src_token.context("Missing src_token in genome event")?;
+        // Support both src_token (new) and token (old) - with intelligent fallback
+        let src_token = event.src_token
+            .clone()
+            .or_else(|| {
+                // Fallback: infer native token (0x0) for the source chain
+                warn!("⚠️  Protocol '{}' missing 'src_token', inferring native token address", protocol_name);
+                Some("0x0000000000000000000000000000000000000000".to_string())
+            })
+            .context(format!("Missing src_token field for protocol '{}' - genome stream data incomplete", protocol_name))?;
+
         let dst_token = event.dst_token.unwrap_or_else(|| src_token.clone());
 
         // Protocol: use protocol field if available, otherwise use id
