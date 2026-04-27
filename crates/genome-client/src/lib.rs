@@ -73,6 +73,34 @@ pub struct GenomeEvent {
     /// deBridge take-amount in destination-token base units.
     #[serde(default)]
     pub take_amount: Option<String>,
+
+    // ── Protocol-specific fields the executor needs (B.2) ─────────────────────
+    /// Mayan Swift order_id (32-byte hex), the on-chain order hash.
+    #[serde(default)]
+    pub mayan_order_id: Option<String>,
+    /// Mayan Swift destination-chain Wormhole id (e.g. 30 = Base).
+    #[serde(default)]
+    pub swift_dest_chain_wormhole_id: Option<u16>,
+    /// Mayan trader address (the depositor on src chain).
+    #[serde(default)]
+    pub trader: Option<String>,
+    /// Mayan unix-seconds deadline after which the order can no longer be filled.
+    #[serde(default)]
+    pub deadline: Option<u64>,
+    /// LiFi quote id (32-byte hex) — distinguishes a single quote within a route.
+    #[serde(default)]
+    pub lifi_quote_id: Option<String>,
+    /// LiFi transactionId (the bytes32 carried by `LiFiTransferStarted`).
+    #[serde(default)]
+    pub lifi_transaction_id: Option<String>,
+    /// Underlying bridge LiFi routed to ("across" | "stargate" | "mayan" | ...).
+    /// The meta-router uses this to dispatch to the matching adapter.
+    #[serde(default)]
+    pub bridge: Option<String>,
+    /// LiFi tool name — usually equal to `bridge` but kept distinct so we can
+    /// detect mismatches and fall back to RouteNotImplemented gracefully.
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 impl GenomeEvent {
@@ -88,6 +116,10 @@ impl GenomeEvent {
                 ("input_amount", "amount"),
                 ("ts", "timestamp"),
                 ("ref_hash", "ref"),
+                // Mayan/LiFi fixtures carry both `output_amount` (canonical) and
+                // `min_amount_out` (legacy alias). Strip the legacy key so serde
+                // doesn't see it as a duplicate field.
+                ("output_amount", "min_amount_out"),
             ];
             for (canonical, legacy) in PAIRS {
                 if obj.contains_key(*canonical) && obj.contains_key(*legacy) {
@@ -151,6 +183,32 @@ pub struct Intent {
     /// Order ID (deBridge orderId, Mayan order_id, etc.) preserved alongside `id`.
     #[serde(default)]
     pub order_id: Option<String>,
+
+    // ── Protocol-specific fields plumbed through to executor (B.2) ────────────
+    /// Mayan Swift order hash (32-byte hex).
+    #[serde(default)]
+    pub mayan_order_id: Option<String>,
+    /// Mayan Swift destination-chain Wormhole id.
+    #[serde(default)]
+    pub swift_dest_chain_wormhole_id: Option<u16>,
+    /// Mayan trader (depositor on src chain).
+    #[serde(default)]
+    pub trader: Option<String>,
+    /// Mayan deadline (unix-seconds).
+    #[serde(default)]
+    pub deadline: Option<u64>,
+    /// LiFi quote id (32-byte hex).
+    #[serde(default)]
+    pub lifi_quote_id: Option<String>,
+    /// LiFi transactionId (32-byte hex carried by `LiFiTransferStarted`).
+    #[serde(default)]
+    pub lifi_transaction_id: Option<String>,
+    /// Underlying bridge for LiFi meta-routing ("across" | "stargate" | "mayan" | ...).
+    #[serde(default)]
+    pub bridge: Option<String>,
+    /// LiFi tool name.
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 impl Intent {
@@ -250,6 +308,14 @@ impl Intent {
             give_amount: event.give_amount,
             take_amount: event.take_amount,
             order_id: event.order_id,
+            mayan_order_id: event.mayan_order_id,
+            swift_dest_chain_wormhole_id: event.swift_dest_chain_wormhole_id,
+            trader: event.trader,
+            deadline: event.deadline,
+            lifi_quote_id: event.lifi_quote_id,
+            lifi_transaction_id: event.lifi_transaction_id,
+            bridge: event.bridge,
+            tool: event.tool,
         })
     }
 }

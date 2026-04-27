@@ -224,10 +224,7 @@ mod tests {
             detected_at: 1745928012,
             output_amount: Some("99850000".into()),
             deposit_id: Some(4321987),
-            maker_order_nonce: None,
-            give_amount: None,
-            take_amount: None,
-            order_id: None,
+            ..Default::default()
         }
     }
 

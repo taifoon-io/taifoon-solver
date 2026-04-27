@@ -31,6 +31,7 @@
   "lifi_quote_id": "0x5f4e3d2c1b0a9988776655443322110ffeeddccbbaa99887766554433221100f",
   "bridge": "across",
   "tool": "across",
+  "deposit_id": 7654321,
   "lifi_transaction_id": "0xa9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8",
   "integrator": "jumper.exchange",
   "fee_amount": "100000",

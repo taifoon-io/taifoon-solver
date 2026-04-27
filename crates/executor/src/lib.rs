@@ -9,6 +9,8 @@ use tracing::{info, warn};
 pub mod across_executor;
 pub mod estimate;
 pub mod evm_estimate;
+pub mod lifi_meta_router;
+pub mod mayan_evm_estimate;
 pub mod outcome_log;
 pub mod skip_rules;
 pub mod spinner_solver;
@@ -22,6 +24,8 @@ pub use evm_estimate::{
     default_across_spoke_pools, default_debridge_dln_addresses, default_rpc_for_chain,
     resolve_rpc_url, run_evm_estimate, AcrossEstimateAdapter, DeBridgeEstimateAdapter,
 };
+pub use lifi_meta_router::LiFiMetaRouter;
+pub use mayan_evm_estimate::{default_mayan_swift_addresses, MayanEvmEstimateAdapter};
 pub use outcome_log::{OutcomeLog, OutcomeRecord};
 pub use skip_rules::{RulePredicate, SkipRule, SkipRules};
 pub use spinner_solver::{SpinnerSolverClient, TestRunResult};

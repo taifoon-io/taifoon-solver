@@ -19,6 +19,7 @@
 use anyhow::{anyhow, Context, Result};
 use executor::{
     AcrossEstimateAdapter, DeBridgeEstimateAdapter, EstimateAdapter, EstimateOutcome,
+    LiFiMetaRouter, MayanEvmEstimateAdapter,
 };
 use genome_client::{GenomeEvent, Intent};
 
@@ -32,7 +33,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
         eprintln!("usage: estimate_one <protocol-slug> <fixture.json>");
-        eprintln!("  protocol-slug ∈ {{across, debridge}}");
+        eprintln!("  protocol-slug ∈ {{across, debridge, mayan_evm, lifi}}");
         std::process::exit(2);
     }
     let proto = args[1].to_lowercase();
@@ -66,9 +67,17 @@ async fn main() -> Result<()> {
             let adapter = DeBridgeEstimateAdapter::new(messiah, &spinner_base);
             adapter.estimate(&intent).await
         }
+        "mayan_evm" | "mayan" | "mayan_swift" => {
+            let adapter = MayanEvmEstimateAdapter::new(messiah, &spinner_base);
+            adapter.estimate(&intent).await
+        }
+        "lifi" => {
+            let adapter = LiFiMetaRouter::new(messiah, &spinner_base);
+            adapter.estimate(&intent).await
+        }
         other => {
             return Err(anyhow!(
-                "unknown protocol '{}' (B.1 supports across, debridge — Mayan + LiFi land in B.2/B.3)",
+                "unknown protocol '{}' (Mayan Solana lands in B.3)",
                 other
             ));
         }

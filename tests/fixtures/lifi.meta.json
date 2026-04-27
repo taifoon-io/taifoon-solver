@@ -27,6 +27,7 @@
     "min_amount_out",
     "input_amount",
     "output_amount",
+    "deposit_id",
     "src_chain",
     "dst_chain",
     "src_token",
