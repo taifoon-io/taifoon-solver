@@ -1,0 +1,35 @@
+{
+  "source": "synthetic",
+  "based_on": "spinner/rust/crates/da-api/src/genome_encoder.rs (GenomeEntry + ProtoPayload), spinner/protocols.xml (debridge), deBridge DLN canonical mainnet deployments",
+  "generated_at": "2026-04-28T00:30:00Z",
+  "intended_use": "taifoon-solver estimateGas pipeline integration tests — NOT a real captured event",
+  "realistic_fields": [
+    "contract (deBridge DLN Source 0xeF4fB24aD0916217251F553c0596F8Edc630EB66 — canonical DlnSource address, same on all DLN-supported chains)",
+    "src_token (USDT BSC 0x55d398326f99059fF775485246999027B3197955)",
+    "dst_token (USDT Optimism 0x94b008aA00579c1307B0EF2c499aD98a8ce58e58)",
+    "src_chain=56 (BSC), dst_chain=10 (Optimism) — confirmed DLN-supported pair",
+    "give_amount/take_amount realistic (100 USDT-BSC giveOrder, ~99.7 USDT-OP takeOrder)",
+    "depositor (random EOA-shaped address)"
+  ],
+  "synthetic_fields": [
+    "tx_hash, ref_hash (deterministic placeholders)",
+    "v5_anchor (shaped, not anchored)",
+    "maker_order_nonce (plausible monotonic integer)",
+    "order_id (32-byte hex, real-shape)",
+    "batch_id, ts, log_index (synthetic)"
+  ],
+  "executor_required_fields_present": [
+    "maker_order_nonce",
+    "give_token_address",
+    "give_amount",
+    "take_token_address",
+    "take_amount",
+    "give_chain_id",
+    "take_chain_id",
+    "order_id",
+    "src_chain",
+    "dst_chain",
+    "depositor",
+    "recipient"
+  ]
+}

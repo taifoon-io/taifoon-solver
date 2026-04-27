@@ -1,0 +1,37 @@
+{
+  "source": "synthetic",
+  "based_on": "spinner/rust/crates/da-api/src/genome_encoder.rs (GenomeEntry + ProtoPayload), spinner/protocols.xml (mayan_swift), Mayan Swift EVM canonical deployment",
+  "generated_at": "2026-04-28T00:30:00Z",
+  "intended_use": "taifoon-solver estimateGas pipeline integration tests — NOT a real captured event",
+  "realistic_fields": [
+    "contract (Mayan Swift EVM canonical 0xC38d8a07D4d9E8BC1D32dF50D4b1eAEEbeAfdC1f — same on all EVM chains supported by Swift)",
+    "src_token (USDC.e Polygon 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359)",
+    "dst_token (USDC native Base 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)",
+    "src_chain=137 (Polygon), dst_chain=8453 (Base) — both Wormhole-connected EVM chains",
+    "swift_dest_chain_wormhole_id=30 (Base on Wormhole)",
+    "auction_mode=2 (English auction, the default Swift mode)"
+  ],
+  "synthetic_fields": [
+    "tx_hash, ref_hash (deterministic placeholders)",
+    "mayan_order_id (32-byte hex, real-shape)",
+    "v5_anchor (shaped, not anchored)",
+    "fee_submit_relayer (1.5 USDC, plausible)",
+    "deadline, batch_id, ts (synthetic)"
+  ],
+  "executor_required_fields_present": [
+    "mayan_order_id",
+    "input_amount",
+    "output_amount",
+    "min_amount_out",
+    "trader",
+    "deadline",
+    "fee_submit_relayer",
+    "swift_dest_chain_wormhole_id",
+    "src_chain",
+    "dst_chain",
+    "src_token",
+    "dst_token",
+    "depositor",
+    "recipient"
+  ]
+}

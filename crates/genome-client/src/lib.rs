@@ -21,7 +21,7 @@ pub struct GenomeEvent {
     /// Chain ID
     pub chain_id: Option<u64>,
     /// Transaction reference
-    #[serde(rename = "ref_hash")]
+    #[serde(rename = "ref_hash", alias = "ref")]
     pub reference: Option<String>,
     /// Source chain (for cross-chain intents)
     pub src_chain: Option<u64>,
@@ -32,12 +32,15 @@ pub struct GenomeEvent {
     /// Recipient address (optional)
     pub recipient: Option<String>,
     /// Source token address
+    #[serde(default, alias = "token")]
     pub src_token: Option<String>,
     /// Destination token address
     pub dst_token: Option<String>,
     /// Amount (as string to preserve precision)
+    #[serde(default, alias = "amount")]
     pub input_amount: Option<String>,
     /// Timestamp
+    #[serde(default, alias = "timestamp")]
     pub ts: Option<u64>,
     /// Protocol name (for order entities)
     pub protocol: Option<String>,

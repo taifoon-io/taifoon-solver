@@ -1,0 +1,37 @@
+{
+  "source": "synthetic",
+  "based_on": "spinner/rust/crates/da-api/src/genome_encoder.rs (GenomeEntry + ProtoPayload), spinner/protocols.xml (lifi), LiFi Diamond canonical mainnet deployment",
+  "generated_at": "2026-04-28T00:30:00Z",
+  "intended_use": "taifoon-solver estimateGas pipeline integration tests for LiFi meta-router — NOT a real captured event",
+  "realistic_fields": [
+    "contract (LiFi Diamond 0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE — canonical, same on all LiFi chains)",
+    "src_token (USDC Ethereum 0xA0b86991c6218B36c1d19D4a2e9Eb0cE3606eB48)",
+    "dst_token (USDC native Arbitrum 0xaf88d065e77c8cC2239327C5EDb3A432268e5831)",
+    "src_chain=1 (Ethereum), dst_chain=42161 (Arbitrum)",
+    "bridge='across' / tool='across' (LiFi route resolves to underlying Across V3)",
+    "integrator='jumper.exchange' (typical LiFi referrer)"
+  ],
+  "synthetic_fields": [
+    "tx_hash, ref_hash, lifi_transaction_id, lifi_quote_id (deterministic placeholders)",
+    "v5_anchor (shaped, not anchored)",
+    "fee_amount (0.1 USDC, plausible LiFi pass-through fee)",
+    "batch_id, ts, log_index (synthetic)"
+  ],
+  "executor_required_fields_present": [
+    "lifi_quote_id",
+    "bridge",
+    "tool",
+    "lifi_transaction_id",
+    "integrator",
+    "fee_amount",
+    "min_amount_out",
+    "input_amount",
+    "output_amount",
+    "src_chain",
+    "dst_chain",
+    "src_token",
+    "dst_token",
+    "depositor",
+    "recipient"
+  ]
+}

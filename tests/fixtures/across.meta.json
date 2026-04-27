@@ -1,0 +1,33 @@
+{
+  "source": "synthetic",
+  "based_on": "spinner/rust/crates/da-api/src/genome_encoder.rs (GenomeEntry + ProtoPayload), spinner/protocols.xml (across_v3), Across V3 SpokePool canonical mainnet deployment",
+  "generated_at": "2026-04-28T00:30:00Z",
+  "intended_use": "taifoon-solver estimateGas pipeline integration tests — NOT a real captured event",
+  "realistic_fields": [
+    "contract (Across V3 SpokePool 0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5 — Ethereum mainnet)",
+    "src_token (USDC 0xA0b86991c6218B36c1d19D4a2e9Eb0cE3606eB48 on Ethereum)",
+    "dst_token (USDC native on Arbitrum 0xaf88d065e77c8cC2239327C5EDb3A432268e5831)",
+    "src_chain=1 (Ethereum), dst_chain=42161 (Arbitrum)",
+    "amounts (100 USDC input, 99.85 USDC output, 15 bps spread)",
+    "depositor (random EOA-shaped address, valid checksum)"
+  ],
+  "synthetic_fields": [
+    "tx_hash (deterministic placeholder, not verifiable on-chain)",
+    "v5_anchor (shaped per V5Anchor schema, no real superroot match)",
+    "deposit_id (4321987, in realistic range for mainnet Across)",
+    "batch_id, ts (synthetic)",
+    "log_index (plausible)"
+  ],
+  "executor_required_fields_present": [
+    "deposit_id",
+    "input_amount",
+    "output_amount",
+    "src_token",
+    "dst_token",
+    "src_chain",
+    "dst_chain",
+    "depositor",
+    "recipient",
+    "tx_hash"
+  ]
+}

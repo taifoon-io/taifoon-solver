@@ -1,0 +1,42 @@
+{
+  "source": "synthetic",
+  "based_on": "spinner/rust/crates/da-api/src/genome_encoder.rs (GenomeEntry + ProtoPayload), spinner/protocols.xml (mayan_swift, includes solana), Mayan Swift Solana program",
+  "generated_at": "2026-04-28T00:30:00Z",
+  "intended_use": "taifoon-solver estimateGas-equivalent (simulateTransaction) pipeline integration tests — NOT a real captured event",
+  "realistic_fields": [
+    "contract / swift_program_id (Mayan Swift Solana program BLZRi6frs4X4DNLw56V4EXai1b6QVESN1BhHBTYM9VcY)",
+    "src_token (USDC SPL EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v)",
+    "dst_token (USDC Ethereum 0xA0b86991c6218B36c1d19D4a2e9Eb0cE3606eB48)",
+    "src_chain=1399811149 (Solana mainnet, per spinner chain_ids::SOLANA_MAINNET convention)",
+    "dst_chain=1 (Ethereum)",
+    "swift_dest_chain_wormhole_id=2 (Ethereum on Wormhole)",
+    "tx_hash is base58 (Solana convention) not 0x-prefixed hex",
+    "depositor is base58 Solana wallet, recipient is 0x EVM address (cross-chain)"
+  ],
+  "synthetic_fields": [
+    "tx_hash, ref_hash (deterministic placeholder Solana signature shape)",
+    "mayan_order_id (32-byte hex, real-shape)",
+    "state_account, vault_account (PDA-shaped placeholders)",
+    "compute_units_estimate (240k, plausible for Mayan Swift fulfill)",
+    "v5_anchor (shaped, not anchored)",
+    "batch_id, ts, deadline (synthetic)"
+  ],
+  "executor_required_fields_present": [
+    "mayan_order_id",
+    "swift_program_id",
+    "state_account",
+    "vault_account",
+    "trader",
+    "input_amount",
+    "output_amount",
+    "min_amount_out",
+    "deadline",
+    "swift_dest_chain_wormhole_id",
+    "compute_units_estimate",
+    "is_solana_source",
+    "src_chain",
+    "dst_chain",
+    "src_token",
+    "dst_token"
+  ]
+}

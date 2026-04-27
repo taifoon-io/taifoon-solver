@@ -15,3 +15,7 @@ thiserror.workspace = true
 tracing.workspace = true
 futures.workspace = true
 async-stream.workspace = true
+
+[[test]]
+name = "fixtures_parse"
+path = "../../tests/fixtures_parse.rs"
