@@ -449,6 +449,7 @@ impl AcrossPoller {
         use std::collections::HashSet;
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(8))
+            .user_agent("Mozilla/5.0 (compatible; taifoon-solver/1.0)")
             .build()
             .unwrap_or_default();
         let mut seen: HashSet<i64> = HashSet::new();
@@ -472,8 +473,14 @@ impl AcrossPoller {
                     .as_secs() as i64;
 
                 for dep in deps {
-                    let dep_id = match dep.get("depositId").and_then(|v| v.as_i64()) {
-                        Some(id) => id,
+                    // depositId may be a JSON string ("5619364") or integer depending on API version
+                    let dep_id = match dep.get("depositId") {
+                        Some(v) => {
+                            if let Some(n) = v.as_i64() { n }
+                            else if let Some(s) = v.as_str() {
+                                match s.parse::<i64>() { Ok(n) => n, Err(_) => continue }
+                            } else { continue }
+                        }
                         None => continue,
                     };
                     if !seen.insert(dep_id) {
@@ -568,11 +575,15 @@ fn across_deposit_to_intent(
         .unwrap_or(&depositor).to_string();
     let input_token = dep.get("inputToken").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
     let output_token = dep.get("outputToken").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
-    let input_amount = dep.get("inputAmount").and_then(|v| v.as_str())
-        .or_else(|| dep.get("inputAmount").and_then(|v| v.as_u64()).map(|_| "0"))
-        .unwrap_or("0").to_string();
-    let output_amount = dep.get("outputAmount").and_then(|v| v.as_str())
-        .unwrap_or("0").to_string();
+    // inputAmount / outputAmount arrive as JSON strings in the Across API
+    let input_amount = dep.get("inputAmount")
+        .and_then(|v| v.as_str().map(|s| s.to_string())
+            .or_else(|| v.as_u64().map(|n| n.to_string())))
+        .unwrap_or_else(|| "0".to_string());
+    let output_amount = dep.get("outputAmount")
+        .and_then(|v| v.as_str().map(|s| s.to_string())
+            .or_else(|| v.as_u64().map(|n| n.to_string())))
+        .unwrap_or_else(|| "0".to_string());
     let tx_hash = dep.get("depositTxHash").and_then(|v| v.as_str())
         .or_else(|| dep.get("txHash").and_then(|v| v.as_str()))
         .unwrap_or("0x").to_string();
