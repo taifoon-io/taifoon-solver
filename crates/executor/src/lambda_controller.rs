@@ -130,15 +130,22 @@ impl LambdaController {
         };
         let direct_fill = wiring.operator == Address::ZERO;
 
+        // Pre-classify protocol so we can bypass spinner for non-Across protocols.
+        let proto_lower_pre = intent.protocol.to_lowercase();
+        let is_debridge_pre = proto_lower_pre.contains("debridge") || proto_lower_pre.contains("dln");
+        let is_mayan_pre = proto_lower_pre.contains("mayan");
+        // deBridge and Mayan submit directly to their own contracts (DlnDestination / Swift).
+        // They are not indexed by the Taifoon spinner, so test-run always 404/501.
+        let bypass_spinner = direct_fill || is_debridge_pre || is_mayan_pre;
+
         // 3. Spinner test-run gates profitability (PROFITABILITY_CHECK).
-        // Direct-fill chains (operator==0x0) bypass the spinner: the spinner
-        // won't have these orders indexed and returning 404 is expected.
-        // In dry-run mode, treat a missing/unavailable spinner endpoint as
-        // "assume profitable" so the calldata-build + broadcast steps can be
-        // exercised end-to-end without a live spinner deployment.
+        // Direct-fill chains (operator==0x0) and deBridge/Mayan bypass the spinner:
+        // the spinner doesn't index these orders. In dry-run mode, treat a
+        // missing/unavailable spinner endpoint as "assume profitable".
         self.transition(&intent.id, IntentState::ProfitabilityCheck, None, None);
-        let test = if direct_fill {
-            info!("⚡ Direct-fill chain {} (operator=0x0) — bypassing spinner test-run", wiring.chain_id);
+        let test = if bypass_spinner {
+            info!("⚡ Bypassing spinner test-run for {} ({})",
+                intent.protocol, if direct_fill { "direct-fill" } else { "non-Taifoon-operator protocol" });
             None
         } else {
             let test_opt = self.spinner.test_run(&intent.protocol, &intent.id).await;
@@ -192,12 +199,10 @@ impl LambdaController {
 
         // 4-pre. (Chain wiring already resolved at step 2 above — no redundant lookup needed.)
 
-        // 4. PROOF_FETCH — skipped entirely for direct-fill chains (operator==0x0).
-        // Direct SpokePool.fillV3Relay needs no Taifoon proof at all.
-        // For operator-path chains, fetch from spinner. In dry-run, a missing proof
-        // uses a zero-byte stub so the calldata-build step can still be exercised.
-        let proof_bytes: Vec<u8> = if direct_fill {
-            // No proof needed for direct SpokePool fill.
+        // 4. PROOF_FETCH — skipped for direct-fill chains (operator==0x0) and for
+        // deBridge/Mayan which submit directly to their own contracts (no Taifoon proof).
+        let proof_bytes: Vec<u8> = if bypass_spinner {
+            // No Taifoon proof needed.
             vec![]
         } else {
             self.transition(&intent.id, IntentState::ProofFetch, None, None);
