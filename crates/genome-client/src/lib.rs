@@ -647,13 +647,16 @@ impl DeBridgePoller {
     pub fn default_mainnet() -> Self {
         Self {
             chains: vec![
-                (42161, "https://arbitrum-mainnet.infura.io/v3/9e09ec06e2fd43778f9fd52eb0265d75".into()),
-                (8453,  "https://base-mainnet.infura.io/v3/6c90d1c7ee4e4ff08ea67114a81c9ae0".into()),
-                (10,    "https://optimism-mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
-                (137,   "https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab".into()),
-                (56,    "https://bsc-mainnet.infura.io/v3/51022b81bc7e4030895fd39e5f80abbe".into()),
-                (59144, "https://rpc.linea.build".into()),
-                (1,     "https://mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
+                (42161,  "https://arbitrum-mainnet.infura.io/v3/9e09ec06e2fd43778f9fd52eb0265d75".into()),
+                (8453,   "https://base-mainnet.infura.io/v3/6c90d1c7ee4e4ff08ea67114a81c9ae0".into()),
+                (10,     "https://optimism-mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
+                (137,    "https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab".into()),
+                (56,     "https://bsc-mainnet.infura.io/v3/51022b81bc7e4030895fd39e5f80abbe".into()),
+                (59144,  "https://rpc.linea.build".into()),
+                (1,      "https://mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
+                (534352, "https://rpc.scroll.io".into()),
+                (57073,  "https://rpc-gel.inkonchain.com".into()),
+                (34443,  "https://mainnet.mode.network".into()),
             ],
             poll_interval_secs: 12,
             blocks_per_batch: 2000,
@@ -757,9 +760,27 @@ fn is_supported_fill_token(addr: &str) -> bool {
         // WETH (all chains)
         "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // ETH
         "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", // Arb
-        "0x4200000000000000000000000000000000000006", // Base / OP / Unichain
+        "0x4200000000000000000000000000000000000006", // Base / OP / Unichain / Ink / Mode
         "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f", // Linea
-        "0x2170ed0880ac9a755fd29b2688956bd959f933f8", // BSC WETH
+        "0x2170ed0880ac9a755fd29b2688956bd959f933f8", // BSC WETH/WBTC
+        "0x5300000000000000000000000000000000000004", // Scroll WETH
+        "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", // Polygon WETH
+        "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", // BNB WBNB
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab", // Avax WETH.e
+        // USDC new chains
+        "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // Scroll USDC
+        "0x2d270e6886d130d724215a266106e6832161eaed", // Ink USDC
+        "0xd988097fb8612cc24eec14542bc03424c656005f", // Mode USDC.e
+        "0x9c3c9283d3e44854697cd22d3faa240cfb032889", // Polygon zkEVM USDC
+        "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a", // Avax USDC.e (old)
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // Avax native USDC
+        "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", // already there (dup ok, filtered)
+        // USDT new chains
+        "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // Scroll USDT
+        "0x0200c29006150606b650577bbe7b6248f58470c1", // Ink USDT
+        "0xf0f161fda2712db8b566946122a5af183995e2ed", // Mode USDT
+        "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // Avax native USDT
+        "0xc7198437980c041c805a1edcba50c1ce5db95118", // Avax USDT.e
     ];
     SUPPORTED.iter().any(|s| *s == lower.as_str())
 }
