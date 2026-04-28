@@ -129,6 +129,7 @@ pub struct RazorGasPreset {
 /// Shared state
 pub struct ApiState {
     event_tx: broadcast::Sender<SolverEvent>,
+    pub log_tx: broadcast::Sender<String>,
     stats: Arc<RwLock<SolverStats>>,
     intents: Arc<RwLock<Vec<IntentRecord>>>,
     protocols: Arc<RwLock<HashMap<String, ProtocolStats>>>,
@@ -146,6 +147,7 @@ pub struct SolverApi {
 impl SolverApi {
     pub fn new() -> Self {
         let (event_tx, _) = broadcast::channel(1000);
+        let (log_tx, _) = broadcast::channel(2000);
 
         let mut stats = SolverStats::default();
         stats.status = "live".to_string();
@@ -158,6 +160,7 @@ impl SolverApi {
         Self {
             state: Arc::new(ApiState {
                 event_tx,
+                log_tx,
                 stats: Arc::new(RwLock::new(stats)),
                 intents: Arc::new(RwLock::new(Vec::new())),
                 protocols: Arc::new(RwLock::new(HashMap::new())),
@@ -176,6 +179,7 @@ impl SolverApi {
     pub fn router(&self) -> Router {
         Router::new()
             .route("/api/solver/stream", get(stream_handler))
+            .route("/api/solver/logs", get(logs_handler))
             .route("/api/solver/stats", get(stats_handler))
             .route("/api/solver/intents", get(intents_handler))
             .route("/api/solver/protocols", get(protocols_handler))
@@ -184,6 +188,11 @@ impl SolverApi {
             .route("/api/solver/portfolio", get(portfolio_handler))
             .layer(tower_http::cors::CorsLayer::permissive())
             .with_state(self.state.clone())
+    }
+
+    /// Get the log broadcast sender so main.rs can push tracing lines
+    pub fn log_sender(&self) -> broadcast::Sender<String> {
+        self.state.log_tx.clone()
     }
 
     /// Emit an event to all subscribers
@@ -297,6 +306,23 @@ async fn stream_handler(
                     let json = serde_json::to_string(&event).ok()?;
                     Some(Ok(Event::default().data(json)))
                 }
+                Err(_) => None,
+            }
+        });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+// Logs SSE stream handler — streams solver tracing output to the browser
+async fn logs_handler(
+    State(state): State<Arc<ApiState>>,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let rx = state.log_tx.subscribe();
+
+    let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
+        .filter_map(|line| async move {
+            match line {
+                Ok(l) => Some(Ok(Event::default().data(l))),
                 Err(_) => None,
             }
         });

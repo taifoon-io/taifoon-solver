@@ -12,9 +12,36 @@ use solver_api::{
 use std::collections::HashSet;
 use std::sync::Arc;
 use taifoon_arb_bridge::{BalanceHighHandler, StubBridge, ThresholdHandler};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
+use tracing_subscriber::Layer;
 use wallet_manager::WalletManager;
+
+/// A tracing layer that forwards formatted log lines to a broadcast channel.
+struct BroadcastLogLayer {
+    tx: broadcast::Sender<String>,
+}
+
+impl<S: tracing::Subscriber> Layer<S> for BroadcastLogLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let mut msg = String::new();
+        let meta = event.metadata();
+        let level = meta.level().to_string();
+        struct Visitor<'a>(&'a mut String);
+        impl<'a> tracing::field::Visit for Visitor<'a> {
+            fn record_debug(&mut self, _field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write;
+                let _ = write!(self.0, "{:?}", value);
+            }
+            fn record_str(&mut self, _field: &tracing::field::Field, value: &str) {
+                self.0.push_str(value);
+            }
+        }
+        event.record(&mut Visitor(&mut msg));
+        let line = format!("[{}] {}", level, msg);
+        let _ = self.tx.send(line);
+    }
+}
 
 const DEFAULT_GENOME_SSE_URL: &str = "https://api.taifoon.dev/api/genome/subscribe/sse";
 const DEFAULT_SPINNER_BASE: &str = "https://api.taifoon.dev";
@@ -24,11 +51,21 @@ const DEFAULT_API_PORT: u16 = 8082;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_target(false)
-        .with_thread_ids(false)
-        .with_file(false)
+    // Build a SolverApi first so we can wire its log channel into tracing
+    let solver_api = SolverApi::new();
+    let log_tx = solver_api.log_sender();
+
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_thread_ids(false)
+                .with_file(false)
+                .with_filter(EnvFilter::new("info")),
+        )
+        .with(BroadcastLogLayer { tx: log_tx }.with_filter(EnvFilter::new("info")))
         .init();
 
     // ── Configuration ─────────────────────────────────────────────────────────
@@ -65,7 +102,6 @@ async fn main() -> Result<()> {
     info!("🌐 API Port: {}", api_port);
 
     // ── Solver event API (SSE for dashboard) ──────────────────────────────────
-    let solver_api = SolverApi::new();
     let api_router = solver_api.router();
     tokio::spawn(async move {
         let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await {

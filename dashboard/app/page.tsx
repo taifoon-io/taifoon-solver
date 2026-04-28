@@ -180,7 +180,7 @@ function StatCard({ label, value, color = 'text-white' }: { label: string; value
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const { intents, stats, protocols, events, connected } = useSolverEvents()
+  const { intents, stats, protocols, events, logs, connected } = useSolverEvents()
 
   const dryRuns = intents.filter(i => i.stage === 'dry_run').length
   const confirmed = intents.filter(i => i.stage === 'confirmed').length
@@ -295,6 +295,30 @@ export default function Dashboard() {
                     <span className="text-gray-600 font-mono truncate">{row.method}()</span>
                     <span className="text-gray-700 font-mono text-[10px] shrink-0">{row.contract}</span>
                   </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Live Solver Logs */}
+          <div className="bg-gray-950 border border-gray-800 rounded-xl p-4">
+            <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Solver Logs</div>
+            <div className="overflow-y-auto space-y-0.5 font-mono text-[10px] leading-relaxed"
+              style={{ maxHeight: 280 }}>
+              {logs.length === 0 && <div className="text-gray-700 text-center py-6">No logs yet…</div>}
+              {logs.map((line, i) => {
+                const isErr = line.includes('ERROR') || line.includes('❌')
+                const isWarn = line.includes('WARN') || line.includes('⚠')
+                const isOk = line.includes('✅') || line.includes('🎉') || line.includes('confirmed')
+                const isDry = line.includes('DRY_RUN') || line.includes('🧪')
+                return (
+                  <div key={i} className={
+                    isErr ? 'text-red-400' :
+                    isWarn ? 'text-yellow-400' :
+                    isOk ? 'text-green-400' :
+                    isDry ? 'text-yellow-300' :
+                    'text-gray-500'
+                  }>{line}</div>
                 )
               })}
             </div>

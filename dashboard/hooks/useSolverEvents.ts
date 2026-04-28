@@ -113,6 +113,7 @@ export function useSolverEvents() {
   const [stats, setStats] = useState<SolverStats | null>(null)
   const [protocols, setProtocols] = useState<Record<string, ProtoStats>>({})
   const [events, setEvents] = useState<LiveEvent[]>([])
+  const [logs, setLogs] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
 
   const bump = useCallback((proto: string, delta: Partial<ProtoStats>) => {
@@ -154,44 +155,59 @@ export function useSolverEvents() {
     es.onopen = () => setConnected(true)
     es.onerror = () => setConnected(false)
 
-    es.addEventListener('intent_detected', (e: MessageEvent) => {
-      const d = JSON.parse(e.data)
-      setIntents(prev => [{
-        id: d.id, protocol: d.protocol, timestamp: d.timestamp,
-        stage: 'detected' as LambdaStage, src_chain: d.src_chain, dst_chain: d.dst_chain,
-        amount: d.amount, token: d.token,
-      }, ...prev].slice(0, 150))
-      bump(d.protocol, { seen: 1 })
-      pushEvent({ ts: Date.now(), type: 'detected', protocol: d.protocol, intent_id: d.id,
-        detail: `${chainName(d.src_chain)} → ${chainName(d.dst_chain)} ${d.amount.slice(0, 10)}` })
-    })
+    // Solver emits generic data: {"event":"intent_detected","data":{...}} lines
+    // (no named SSE event: field), so we parse via onmessage.
+    const handleMsg = (raw: string) => {
+      try {
+        const wrapper = JSON.parse(raw)
+        const evType: string = wrapper.event ?? wrapper.type ?? ''
+        const d = wrapper.data ?? wrapper
 
-    es.addEventListener('intent_attempted', (e: MessageEvent) => {
-      const d = JSON.parse(e.data)
-      const stage: LambdaStage = d.decision === 'execute' ? 'calldata_build' : d.decision === 'dry_run' ? 'dry_run' : 'skipped'
-      setIntents(prev => prev.map(i =>
-        i.id === d.id ? { ...i, stage, profit_usd: d.profit_usd, gas_cost_usd: d.gas_cost_usd, protocol_fee_usd: d.protocol_fee_usd } : i
-      ))
-      if (stage === 'skipped') bump(d.protocol ?? '', { skipped: 1 })
-      if (stage === 'dry_run') bump(d.protocol ?? '', { dry_run: 1 })
-      pushEvent({ ts: Date.now(), type: 'attempted', protocol: d.protocol ?? '', intent_id: d.id,
-        detail: `${stage} profit=$${(d.profit_usd ?? 0).toFixed(2)}`, profit: d.profit_usd, stage })
-    })
+        if (evType === 'intent_detected') {
+          setIntents(prev => [{
+            id: d.id, protocol: d.protocol, timestamp: d.timestamp,
+            stage: 'detected' as LambdaStage, src_chain: d.src_chain, dst_chain: d.dst_chain,
+            amount: d.amount, token: d.token,
+          }, ...prev].slice(0, 150))
+          bump(d.protocol, { seen: 1 })
+          pushEvent({ ts: Date.now(), type: 'detected', protocol: d.protocol, intent_id: d.id,
+            detail: `${chainName(d.src_chain)} → ${chainName(d.dst_chain)} ${String(d.amount).slice(0, 10)}` })
+        } else if (evType === 'intent_attempted') {
+          const stage: LambdaStage = d.decision === 'execute' ? 'calldata_build' : d.decision === 'dry_run' ? 'dry_run' : 'skipped'
+          setIntents(prev => prev.map(i =>
+            i.id === d.id ? { ...i, stage, profit_usd: d.profit_usd, gas_cost_usd: d.gas_cost_usd, protocol_fee_usd: d.protocol_fee_usd } : i
+          ))
+          if (stage === 'skipped') bump(d.protocol ?? '', { skipped: 1 })
+          if (stage === 'dry_run') bump(d.protocol ?? '', { dry_run: 1 })
+          pushEvent({ ts: Date.now(), type: 'attempted', protocol: d.protocol ?? '', intent_id: d.id,
+            detail: `${stage} profit=$${(d.profit_usd ?? 0).toFixed(2)}`, profit: d.profit_usd, stage })
+        } else if (evType === 'intent_solved') {
+          setIntents(prev => prev.map(i => i.id === d.id ? { ...i, stage: 'confirmed', tx_hash: d.tx_hash } : i))
+          pushEvent({ ts: Date.now(), type: 'solved', protocol: d.protocol ?? '', intent_id: d.id,
+            detail: `tx ${d.tx_hash?.slice(0, 12)}… profit=$${(d.actual_profit_usd ?? 0).toFixed(4)}`,
+            profit: d.actual_profit_usd, tx_hash: d.tx_hash, stage: 'confirmed' })
+        }
+      } catch { /* malformed line */ }
+    }
 
-    es.addEventListener('intent_solved', (e: MessageEvent) => {
-      const d = JSON.parse(e.data)
-      setIntents(prev => prev.map(i => i.id === d.id ? { ...i, stage: 'confirmed', tx_hash: d.tx_hash } : i))
-      pushEvent({ ts: Date.now(), type: 'solved', protocol: '', intent_id: d.id,
-        detail: `tx ${d.tx_hash?.slice(0, 12)}… profit=$${(d.actual_profit_usd ?? 0).toFixed(4)}`,
-        profit: d.actual_profit_usd, tx_hash: d.tx_hash, stage: 'confirmed' })
-    })
+    es.onmessage = (e: MessageEvent) => handleMsg(e.data)
+    // Also listen on named events in case the stream format changes
+    es.addEventListener('intent_detected', (e: MessageEvent) => handleMsg(e.data))
+    es.addEventListener('intent_attempted', (e: MessageEvent) => handleMsg(e.data))
+    es.addEventListener('intent_solved', (e: MessageEvent) => handleMsg(e.data))
+
+    // Logs SSE stream
+    const logEs = new EventSource(`${API}/api/solver/logs`)
+    logEs.onmessage = (e: MessageEvent) => {
+      setLogs(prev => [e.data, ...prev].slice(0, 500))
+    }
 
     const si = setInterval(() => {
       fetch(`${API}/api/solver/stats`).then(r => r.ok ? r.json() : null).then(d => d && setStats(d)).catch(() => {})
     }, 3000)
 
-    return () => { es.close(); clearInterval(si) }
+    return () => { es.close(); logEs.close(); clearInterval(si) }
   }, [bump, pushEvent])
 
-  return { intents, stats, protocols, events, connected }
+  return { intents, stats, protocols, events, logs, connected }
 }
