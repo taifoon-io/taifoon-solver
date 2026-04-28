@@ -250,18 +250,6 @@ async fn main() -> Result<()> {
         info!("📥 {} ({}) {}→{} amt={}", intent.id, intent.protocol,
               intent.src_chain, intent.dst_chain, intent.amount);
 
-        solver_api.emit_event(SolverEvent::IntentDetected(IntentData {
-            id: intent.id.clone(),
-            protocol: intent.protocol.clone(),
-            src_chain: intent.src_chain,
-            dst_chain: intent.dst_chain,
-            amount: intent.amount.clone(),
-            token: intent.src_token.clone(),
-            depositor: intent.depositor.clone(),
-            recipient: intent.recipient.clone(),
-            timestamp: Utc::now(),
-        }));
-
         // ── Skip-rule fast-path (X1) ──────────────────────────────────────────
         // intent_amount_usd / current_gas_gwei aren't free at this point in the
         // pipeline (price oracle + RPC call). For now we evaluate with both
@@ -314,6 +302,20 @@ async fn main() -> Result<()> {
             info!("⏭️  dedup skip (already dispatched): {}", dedup_key);
             continue;
         }
+
+        // Emit detected only after dedup passes — lifecycle re-fires (placed/executed)
+        // for the same intent must not create dangling detected records in the API.
+        solver_api.emit_event(SolverEvent::IntentDetected(IntentData {
+            id: intent.id.clone(),
+            protocol: intent.protocol.clone(),
+            src_chain: intent.src_chain,
+            dst_chain: intent.dst_chain,
+            amount: intent.amount.clone(),
+            token: intent.src_token.clone(),
+            depositor: intent.depositor.clone(),
+            recipient: intent.recipient.clone(),
+            timestamp: Utc::now(),
+        }));
 
         let proto_lower = intent.protocol.to_lowercase();
 
