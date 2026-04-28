@@ -20,7 +20,7 @@ const DEFAULT_GENOME_SSE_URL: &str = "https://api.taifoon.dev/api/genome/subscri
 const DEFAULT_SPINNER_BASE: &str = "https://api.taifoon.dev";
 const DEFAULT_MIN_PROFIT_USD: f64 = 0.10;
 const SOLVER_INTEL_PATH: &str = "config/solver_intel.json";
-const API_PORT: u16 = 8082;
+const DEFAULT_API_PORT: u16 = 8082;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -57,21 +57,25 @@ async fn main() -> Result<()> {
     info!("🎯 Protocol filter: {}", protocol_filter);
     info!("💰 Min Profit: ${}", min_profit_usd);
     info!("🧪 DRY_RUN: {}", dry_run);
+    let api_port: u16 = std::env::var("API_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_API_PORT);
     info!("💾 Outcome DB: {}", outcome_db_path);
-    info!("🌐 API Port: {}", API_PORT);
+    info!("🌐 API Port: {}", api_port);
 
     // ── Solver event API (SSE for dashboard) ──────────────────────────────────
     let solver_api = SolverApi::new();
     let api_router = solver_api.router();
     tokio::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", API_PORT)).await {
+        let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", api_port)).await {
             Ok(l) => l,
             Err(e) => {
-                error!("API bind {}: {}", API_PORT, e);
+                error!("API bind {}: {}", api_port, e);
                 return;
             }
         };
-        info!("✅ Solver event API on :{}", API_PORT);
+        info!("✅ Solver event API on :{}", api_port);
         if let Err(e) = axum::serve(listener, api_router).await {
             error!("API server error: {}", e);
         }

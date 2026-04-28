@@ -15,11 +15,12 @@ services:
       - SIMULATION_MODE=true
       - PROTOCOL_FILTER=all
       - CHAIN_WIRING_FILE=/home/solver/config/chain_wiring.json
+      - API_PORT=8099
       # Dummy key initializes the Lambda controller in dry-run mode (no real broadcasts).
       # Replace with a funded key to enable live fills.
       - SOLVER_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8082/api/solver/stats"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8099/api/solver/stats"]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -43,6 +44,7 @@ services:
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_SOLVER_API_URL=/api/solver
+      - SOLVER_API_INTERNAL_URL=http://172.17.0.1:8099
     logging:
       driver: "json-file"
       options:
