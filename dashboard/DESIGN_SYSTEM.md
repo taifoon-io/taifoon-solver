@@ -254,6 +254,42 @@ The home page narrative arc uses the same vertical-line + square-node
 pattern as taifoon.io's hero page, with `PHASE 0X — VERB` labels and
 mint coloring on the final phase to signal Solana flavor.
 
+### Cross-chain volume firehose (`<CrossChainVolume />`)
+
+The hero's right column. Three sub-panels in a single bordered card:
+
+1. **Rolling 24h counter** — total USD volume across 12 tracked
+   protocols. Smooth ease-toward-target so it always feels alive but
+   never frantic.
+2. **60-second stacked area** — per-protocol flow over the last minute.
+   Each protocol gets a colored gradient layer; the right edge has a
+   mint marker showing "now". Window slides every second.
+3. **Top-protocols leaderboard** — eight protocols sorted by 24h running
+   total, with mini-bars sized by share-of-leader. Re-orders smoothly
+   as protocols overtake each other.
+
+**Honesty note:** the seed values in `BASELINES` are approximate
+historical 24h volumes (per-protocol, USD). They are simulated forward —
+each second, a per-protocol flow is generated from `daily / 86400` plus
+gaussian-ish noise, with occasional 5–15× bursts to feel like real fat
+orders.
+
+The footer reads `seeded · approximate · rolling 24h · source: defillama bridges + perturbation` so users see exactly what they're looking at.
+
+**Future work — wire to live data:**
+
+- Daily fetch (server-side, cached) from DefiLlama Bridges API
+  (`bridges.llama.fi`). Map their bridge IDs to our protocol keys, pass
+  the resulting `Record<key, daily_usd>` into the `volumes` prop.
+- Optional per-fill stream via the genome SSE endpoint to drive the
+  60-second chart at true tx-level resolution (instead of simulating
+  flow distribution from baselines).
+- Replace the footer attribution with `live · defillama bridges` once
+  the daily fetch is wired.
+
+The component already accepts `volumes` as a prop, so swapping seed → live
+is a one-line change at the call site.
+
 ### Cinematic hero (the "big bang")
 
 The landing hero is built from four layered decorations behind two

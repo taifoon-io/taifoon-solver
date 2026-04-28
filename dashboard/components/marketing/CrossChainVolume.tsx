@@ -87,11 +87,11 @@ export function CrossChainVolume({ volumes, className = '' }: CrossChainVolumePr
   // the latest tick — refs would violate React 19's purity rules.
   const [samples, setSamples] = useState<FlowSample[]>([])
 
-  // Smoothly-interpolated grand total for the counter, plus its target.
+  // Smoothly-interpolated grand total for the counter. Target is derived
+  // from `running` via useMemo (no extra state, no effect needed).
   const [displayTotal, setDisplayTotal] = useState(() =>
     protos.reduce((a, p) => a + p.daily, 0),
   )
-  const [targetTotal, setTargetTotal] = useState(displayTotal)
 
   // ── Tick loop ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -133,24 +133,25 @@ export function CrossChainVolume({ volumes, className = '' }: CrossChainVolumePr
     return () => clearInterval(id)
   }, [protos])
 
-  // ── Counter interpolation ────────────────────────────────────────────
-  useEffect(() => {
-    targetTotalRef.current = Object.values(running).reduce((a, b) => a + b, 0)
-  }, [running])
+  // ── Counter target — derived from running totals, no extra state ────
+  const targetTotal = useMemo(
+    () => Object.values(running).reduce((a, b) => a + b, 0),
+    [running],
+  )
 
+  // Smoothly ease the displayed counter toward the target. The interval
+  // is intentional (animation frame timer) — it isn't a synchronous
+  // setState inside the effect body.
   useEffect(() => {
     const id = setInterval(() => {
       setDisplayTotal((curr) => {
-        const target = targetTotalRef.current
-        const delta = (target - curr) * 0.18
-        if (Math.abs(delta) < 1) return target
+        const delta = (targetTotal - curr) * 0.18
+        if (Math.abs(delta) < 1) return targetTotal
         return curr + delta
       })
     }, COUNTER_INTERPOLATE_MS)
     return () => clearInterval(id)
-  }, [])
-
-  const samples = samplesRef.current
+  }, [targetTotal])
 
   // ── Build the stacked area paths ─────────────────────────────────────
   const stackedPaths = useMemo(() => {
