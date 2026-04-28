@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Events emitted by the solver
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -130,6 +130,7 @@ pub struct RazorGasPreset {
 pub struct ApiState {
     event_tx: broadcast::Sender<SolverEvent>,
     pub log_tx: broadcast::Sender<String>,
+    log_buffer: Arc<RwLock<VecDeque<String>>>,
     stats: Arc<RwLock<SolverStats>>,
     intents: Arc<RwLock<Vec<IntentRecord>>>,
     protocols: Arc<RwLock<HashMap<String, ProtocolStats>>>,
@@ -157,10 +158,25 @@ impl SolverApi {
         let warmbed_api_url = std::env::var("WARMBED_API_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string());
 
+        let log_buffer = Arc::new(RwLock::new(VecDeque::with_capacity(500)));
+        // Keep log_buffer in sync with log_tx broadcasts
+        {
+            let buf = log_buffer.clone();
+            let mut rx = log_tx.subscribe();
+            tokio::spawn(async move {
+                while let Ok(line) = rx.recv().await {
+                    let mut b = buf.write().await;
+                    if b.len() >= 500 { b.pop_front(); }
+                    b.push_back(line);
+                }
+            });
+        }
+
         Self {
             state: Arc::new(ApiState {
                 event_tx,
                 log_tx,
+                log_buffer,
                 stats: Arc::new(RwLock::new(stats)),
                 intents: Arc::new(RwLock::new(Vec::new())),
                 protocols: Arc::new(RwLock::new(HashMap::new())),
@@ -313,13 +329,18 @@ async fn stream_handler(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-// Logs SSE stream handler — streams solver tracing output to the browser
+// Logs SSE stream handler — replays buffer then streams live tracing output
 async fn logs_handler(
     State(state): State<Arc<ApiState>>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    // Subscribe before reading buffer to avoid race (new events after subscribe are queued)
     let rx = state.log_tx.subscribe();
+    let history: Vec<String> = state.log_buffer.read().await.iter().cloned().collect();
 
-    let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
+    let replay = futures::stream::iter(history)
+        .map(|l| Ok(Event::default().data(l)));
+
+    let live = tokio_stream::wrappers::BroadcastStream::new(rx)
         .filter_map(|line| async move {
             match line {
                 Ok(l) => Some(Ok(Event::default().data(l))),
@@ -327,7 +348,7 @@ async fn logs_handler(
             }
         });
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(replay.chain(live)).keep_alive(KeepAlive::default())
 }
 
 // Stats handler
