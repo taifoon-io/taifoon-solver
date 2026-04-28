@@ -165,11 +165,25 @@ Two layouts:
 
 Tones colorize the number; an optional `unit` shows e.g. "ms" subtly.
 
-### CodeBlock
+### Snippet (canonical) / CodeBlock (legacy)
 
-Terminal block with a `$` prompt indicator, optional language tag, and a
-`[ COPY ]` / `[ COPIED ]` toggle in mono. No traffic lights — kept strict
-to match taifoon.io's prompt aesthetic.
+`Snippet` is the unified code-block primitive. Three modes, all sharing
+the same prompt rhythm and copy affordance so they read as one family:
+
+| Variant   | Use                                                      |
+|-----------|----------------------------------------------------------|
+| `compact` | One-line install command, no header — sits inline        |
+| `default` | Fenced block with mono header (lang + `[ COPY ]`)        |
+| `tabbed`  | Multi-step sequence — tabs `01 · INSTALL`, `02 · ONBOARD`, `03 · RUN` |
+
+Visual contract: 1px hairline border, hairline divider under header,
+azure `$` prompt prefix on each command line, JetBrains Mono 12px body.
+Width is controlled by the parent — `Snippet` always fills its container.
+This is what gives the landing, docs, and onboarding the same code-block
+rhythm everywhere.
+
+`CodeBlock` is kept around for backwards compatibility but new usage
+should always be `Snippet`.
 
 ### Stepper / StepBody
 
@@ -186,6 +200,24 @@ The two new primitives that lock the brand:
 <Tag tone="mint">Solana</Tag>    →   [ SOLANA ] (in mint)
 <PhaseLabel phase={1} step="Detect" />   →   PHASE 01 — DETECT
 ```
+
+### NewsBand
+
+A 36px-tall dismissable banner above the nav. Used for time-bound
+announcements (hackathons, mainnet flips, talks, grants).
+
+Anatomy, left to right:
+- `[ NEWS ]` micro-cap prefix
+- Tone-coded pill (`HACKATHON · MAINNET · TALK · GRANT`)
+- Single-line headline
+- Optional days-left ticker (computed from `endsAt`)
+- `READ ↗` CTA if `href` is set
+- `×` dismiss → persisted in `sessionStorage` by `id`
+
+Adding a new entry is a one-line edit to the `NEWS` array in
+`components/ui/NewsBand.tsx`. Bumping the `id` re-shows the band even
+to users who dismissed the previous entry. The Colosseum hackathon is
+the seed entry; when it ends it'll quietly disappear via `endsAt`.
 
 ### NavBar
 
@@ -221,6 +253,43 @@ Every section opens with a tag and a sentence-case display headline:
 The home page narrative arc uses the same vertical-line + square-node
 pattern as taifoon.io's hero page, with `PHASE 0X — VERB` labels and
 mint coloring on the final phase to signal Solana flavor.
+
+### Cinematic hero (the "big bang")
+
+The landing hero is built from four layered decorations behind two
+content columns:
+
+1. `<ChainOrbits />` — three concentric SVG orbits with chain nodes
+   (Solana, Base, Arbitrum, Ethereum, Optimism, Polygon, BSC, Avalanche,
+   Linea, zkSync, Scroll, Gnosis). Solana glows; the SOL↔BASE link
+   pulses every 3.5s.
+2. `.dot-grid` — taifoon.io's signature 24px dot pattern at 30% opacity.
+3. `.glow-bg` — radial gradients in azure (top-right) and mint (bottom-left).
+4. Radial vignette — fades the orbits at the edges so type stays readable.
+
+Content sits in two columns:
+
+- **Left**: silver-gradient display headline ("One spinner / Every protocol /
+  Every chain"), where "Every protocol" gets the `tf-gradient-solana`
+  blue→mint treatment for emphasis. Below the CTAs sits a four-tile KPI
+  strip — "$ FILLED · 24H" and "FILLS · 24H" use `<Counter />` to tick up
+  in real time. This is the "proof, not pitch" payoff.
+
+- **Right**: `<LiveTicker />` — a streaming intent feed that adds a row
+  every ~1.6s, slides the oldest off the bottom, fades the bottom edge
+  to suggest the stream continues. New rows briefly flash mint as they
+  land. Below the ticker, a footer reads "Proof-of-runtime · not a mockup"
+  with a `SEE LIVE PORTAL →` link. This is the moment we earn the
+  "world-class" framing — most competing landings show a static image.
+
+Why this works: the brand promise is autonomy + speed. A still hero
+undersells that promise. By making the runtime visibly alive in the
+first 2 seconds, the page stops looking like marketing and starts looking
+like the product.
+
+The same `<LiveTicker />` is reused inside the "cockpit" preview section
+further down the page, ensuring the dashboard preview also moves rather
+than sitting still.
 
 ### Stat callouts
 

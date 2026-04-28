@@ -1,6 +1,19 @@
 'use client'
 
-import { NavBar, Footer, Card, Button, CodeBlock, StatTile, Tag, PhaseLabel, Badge } from '@/components/ui'
+import Link from 'next/link'
+import {
+  NavBar,
+  Footer,
+  Card,
+  Button,
+  Snippet,
+  Tag,
+  PhaseLabel,
+  NewsBand,
+} from '@/components/ui'
+import { ChainOrbits } from '@/components/marketing/ChainOrbits'
+import { LiveTicker } from '@/components/marketing/LiveTicker'
+import { Counter } from '@/components/marketing/Counter'
 import { protocolColors } from '@/lib/tokens'
 
 const PROTOCOLS = [
@@ -12,20 +25,10 @@ const PROTOCOLS = [
   '1inch Fusion', 'Uniswap v4', 'Bancor', 'Wormhole NTT',
 ] as const
 
-const CHAINS = [
-  { id: 1, label: 'Ethereum' },
-  { id: 8453, label: 'Base' },
-  { id: 42161, label: 'Arbitrum' },
-  { id: 10, label: 'Optimism' },
-  { id: 137, label: 'Polygon' },
-  { id: 56, label: 'BSC' },
-  { id: 43114, label: 'Avalanche' },
-  { id: 900, label: 'Solana', solana: true },
-] as const
-
 export default function LandingPage() {
   return (
     <>
+      <NewsBand />
       <NavBar />
       <main className="flex-1">
         <Hero />
@@ -33,7 +36,6 @@ export default function LandingPage() {
         <Phases />
         <Flywheel />
         <DashboardPreview />
-        <ColosseumStrip />
         <FinalCTA />
       </main>
       <Footer />
@@ -41,59 +43,117 @@ export default function LandingPage() {
   )
 }
 
-// ── Hero ───────────────────────────────────────────────────────────────────
+// ── Cinematic hero ────────────────────────────────────────────────────────
 function Hero() {
   return (
-    <section className="relative overflow-hidden">
-      <div className="absolute inset-0 dot-grid pointer-events-none opacity-60" />
+    <section className="relative overflow-hidden min-h-[760px] flex items-center">
+      {/* layers, back to front: orbits → grid → glow → content */}
+      <ChainOrbits className="opacity-50" />
+      <div className="absolute inset-0 dot-grid pointer-events-none opacity-30" />
       <div className="absolute inset-0 glow-bg pointer-events-none" />
+      {/* vignette so type stays legible over the orbits */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.85) 75%)',
+        }}
+      />
 
-      <div className="relative max-w-[1280px] mx-auto px-6 pt-28 pb-24">
-        <div className="text-center mb-10">
-          <span className="inline-flex items-center gap-3 font-mono text-[11px] tracking-[0.25em] text-[var(--text-secondary)]">
+      <div className="relative w-full max-w-[1280px] mx-auto px-6 py-24 grid lg:grid-cols-[1.15fr_1fr] gap-12 items-center">
+        {/* Left — copy */}
+        <div>
+          <div className="inline-flex items-center gap-3 font-mono text-[11px] tracking-[0.25em] text-[var(--text-secondary)] mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--solana-mint)] pulse-live" />
-            TAIFOON · SPINNERS · 31 PROTOCOLS · SOLANA + EVM
-          </span>
+            TAIFOON · SPINNERS · SOLANA + EVM
+          </div>
+
+          <h1
+            className="tf-display tf-gradient-silver"
+            style={{ fontSize: 'clamp(3rem, 7.5vw, 6.25rem)' }}
+          >
+            One spinner.
+            <br />
+            <span className="tf-gradient-solana">Every protocol.</span>
+            <br />
+            Every chain.
+          </h1>
+
+          <p className="mt-8 text-[var(--text-secondary)] max-w-[540px] leading-[1.7] text-[16px]">
+            The autonomous bridge-solver runtime, unbundled from
+            taifoon.io and packaged for hackathon teams. 31 protocols,
+            38+ chains, Solana and EVM under one cryptographic root.
+            Spin up, watch fills land, keep the spread.
+          </p>
+
+          <div className="mt-10 flex flex-wrap items-center gap-3">
+            <Button href="/onboard" variant="primary" size="lg">
+              <span className="text-[var(--text-tertiary)]">{'>'}</span>
+              SPIN UP A SPINNER →
+            </Button>
+            <Button href="/portal" variant="secondary" size="lg">
+              OPEN THE PORTAL
+            </Button>
+          </div>
+
+          {/* Live KPI strip — these tick up so the hero feels alive */}
+          <div className="mt-14 grid grid-cols-2 sm:grid-cols-4 gap-x-10 gap-y-6">
+            <KPI label="$ FILLED · 24H" value={
+              <Counter base={28430} step={4.2} format="usd" prefix="$" />
+            } tone="mint" />
+            <KPI label="FILLS · 24H" value={
+              <Counter base={2841} step={1} format="int" />
+            } tone="blue" />
+            <KPI label="PROTOCOLS" value="31" tone="default" />
+            <KPI label="CHAINS" value="38+" tone="default" />
+          </div>
         </div>
 
-        <h1
-          className="tf-display tf-gradient-silver text-center mx-auto max-w-[1100px]"
-          style={{ fontSize: 'clamp(2.75rem, 8vw, 6rem)' }}
-        >
-          One spinner.
-          <br />
-          Every protocol.
-          <br />
-          Every chain.
-        </h1>
+        {/* Right — the runtime, visibly working */}
+        <div className="lg:pl-4">
+          <LiveTicker />
 
-        <p className="mt-10 text-center text-[var(--text-secondary)] max-w-[640px] mx-auto leading-[1.7] text-[16px]">
-          The autonomous spinner runtime — Taifoon&apos;s solver core,
-          unbundled and packaged for hackathon teams. 31 protocols, 38+
-          chains, Solana and EVM under one cryptographic root. Spin up,
-          watch fills land, keep the spread.
-        </p>
-
-        <div className="mt-12 flex flex-wrap items-center justify-center gap-3">
-          <Button href="/onboard" variant="primary" size="lg">
-            <span className="text-[var(--text-tertiary)]">{'>'}</span>
-            SPIN UP A SPINNER
-            <span>→</span>
-          </Button>
-          <Button href="/portal" variant="secondary" size="lg">
-            OPEN THE PORTAL
-          </Button>
-        </div>
-
-        {/* Stat callouts — taifoon.io style: tiny prefix, mono numbers */}
-        <div className="mt-20 grid grid-cols-2 sm:grid-cols-4 gap-x-12 gap-y-6 max-w-[920px] mx-auto">
-          <StatTile label="PROTOCOLS" value="31" tone="default" />
-          <StatTile label="CHAINS" value="38+" tone="default" />
-          <StatTile label="SVM CHAINS" value="2" tone="mint" />
-          <StatTile label="MEDIAN LATENCY" value="127" unit="ms" tone="blue" />
+          <div className="mt-4 flex items-center justify-between font-mono text-[10px] tracking-[0.2em] uppercase text-[var(--text-tertiary)]">
+            <span>Proof-of-runtime · not a mockup</span>
+            <PortalLink />
+          </div>
         </div>
       </div>
     </section>
+  )
+}
+
+function PortalLink() {
+  return (
+    <Link href="/portal" className="hover:text-[var(--brand-blue)] transition-colors">
+      SEE LIVE PORTAL →
+    </Link>
+  )
+}
+
+function KPI({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: React.ReactNode
+  tone: 'mint' | 'blue' | 'default'
+}) {
+  const c = {
+    mint: 'text-[var(--solana-mint)]',
+    blue: 'text-[var(--brand-blue)]',
+    default: 'text-[var(--text-primary)]',
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="font-mono text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)]">
+        {label}
+      </span>
+      <span className={`font-mono text-[26px] tracking-[-0.01em] ${c[tone]}`}>
+        {value}
+      </span>
+    </div>
   )
 }
 
@@ -138,7 +198,7 @@ function ProtocolMarquee() {
   )
 }
 
-// ── Phases (vertical timeline, taifoon.io style) ─────────────────────────
+// ── Phases ────────────────────────────────────────────────────────────────
 const PHASES = [
   {
     n: 1,
@@ -195,7 +255,6 @@ function Phases() {
           </p>
         </div>
 
-        {/* Vertical timeline */}
         <div className="relative">
           <div className="absolute left-[5px] top-2 bottom-2 w-px bg-[var(--border-default)]" />
           <ol className="space-y-16">
@@ -234,7 +293,7 @@ function Phases() {
   )
 }
 
-// ── Flywheel — Solana + EVM dual section (taifoon.io flywheel echo) ──────
+// ── Flywheel ──────────────────────────────────────────────────────────────
 function Flywheel() {
   return (
     <section className="border-y border-[var(--border-subtle)]">
@@ -306,7 +365,7 @@ function Flywheel() {
   )
 }
 
-// ── Dashboard preview ──────────────────────────────────────────────────────
+// ── Dashboard preview ─────────────────────────────────────────────────────
 function DashboardPreview() {
   return (
     <section className="max-w-[1280px] mx-auto px-6 py-32">
@@ -340,28 +399,9 @@ function DashboardPreview() {
           </div>
         </div>
 
-        {/* Decorative preview */}
         <div className="relative">
           <Card padding="none" className="overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
-              <div className="flex items-center gap-3">
-                <span className="w-1.5 h-1.5 rounded-full bg-[var(--solana-mint)] pulse-live" />
-                <span className="font-mono text-[11px] tracking-[0.16em] text-[var(--text-secondary)]">
-                  spinner_b3e9a2
-                </span>
-                <Badge tone="info">5 PROTOCOLS</Badge>
-              </div>
-              <span className="font-mono text-[11px] text-[var(--solana-mint)] tracking-[0.12em]">
-                + $12.43
-              </span>
-            </div>
-            <div className="p-4 space-y-2 bg-black">
-              <FakeRow proto="Across V3" src="ETH" dst="ARB" amt="10,000 USDC" profit={43.9} stage="confirmed" />
-              <FakeRow proto="deBridge DLN" src="BASE" dst="SOL" amt="2,500 USDC" profit={18.2} stage="broadcast" />
-              <FakeRow proto="Mayan Swift" src="SOL" dst="BASE" amt="800 SOL" profit={6.7} stage="calldata_build" />
-              <FakeRow proto="LiFi" src="ARB" dst="OP" amt="50K USDC" profit={0.83} stage="dry_run" />
-              <FakeRow proto="Stargate V2" src="OP" dst="BSC" amt="20K USDT" profit={-0.12} stage="skipped" />
-            </div>
+            <LiveTicker />
           </Card>
         </div>
       </div>
@@ -378,125 +418,7 @@ function Bullet({ children }: { children: React.ReactNode }) {
   )
 }
 
-function FakeRow({
-  proto,
-  src,
-  dst,
-  amt,
-  profit,
-  stage,
-}: {
-  proto: string
-  src: string
-  dst: string
-  amt: string
-  profit: number
-  stage: 'confirmed' | 'broadcast' | 'calldata_build' | 'dry_run' | 'skipped'
-}) {
-  const key = proto.toLowerCase().split(' ')[0]
-  const color = protocolColors[key] ?? '#94B0C4'
-  const stageMap = {
-    confirmed: { label: 'CONFIRMED', tone: '#14F195' },
-    broadcast: { label: 'BROADCAST', tone: '#3DA5FF' },
-    calldata_build: { label: 'CALLDATA', tone: '#9945FF' },
-    dry_run: { label: 'DRY-RUN', tone: '#FFB454' },
-    skipped: { label: 'SKIPPED', tone: '#94B0C4' },
-  }
-  const s = stageMap[stage]
-  return (
-    <div className="flex items-center justify-between gap-2 px-3 py-2.5 border-l-2"
-         style={{ borderLeftColor: color, background: `${color}05` }}>
-      <div className="flex items-center gap-3 min-w-0">
-        <span
-          className="text-[10px] font-mono tracking-[0.12em] uppercase"
-          style={{ color }}
-        >
-          {proto}
-        </span>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          {src} → {dst}
-        </span>
-        <span className="font-mono text-[10px] text-[var(--text-secondary)] truncate">
-          {amt}
-        </span>
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <span
-          className={`font-mono text-[11px] ${
-            profit >= 0 ? 'text-[var(--solana-mint)]' : 'text-[var(--text-tertiary)]'
-          }`}
-        >
-          {profit >= 0 ? '+' : ''}${profit.toFixed(2)}
-        </span>
-        <span
-          className="text-[9px] font-mono tracking-[0.18em] px-1.5 py-0.5 rounded-[2px]"
-          style={{ color: s.tone, border: `1px solid ${s.tone}40` }}
-        >
-          {s.label}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-// ── Colosseum strip ──────────────────────────────────────────────────────
-function ColosseumStrip() {
-  return (
-    <section className="border-y border-[var(--border-subtle)]">
-      <div className="max-w-[1280px] mx-auto px-6 py-24">
-        <div className="grid md:grid-cols-[1.3fr_1fr] gap-16 items-center">
-          <div>
-            <Tag tone="mint">Solana colosseum</Tag>
-            <h2 className="tf-display tf-gradient-solana mt-6 text-[clamp(2rem,4vw,3rem)]">
-              Built so you can ship
-              <br />
-              a winning bridge spinner
-              <br />
-              this weekend.
-            </h2>
-            <p className="mt-6 text-[var(--text-secondary)] leading-relaxed max-w-[560px]">
-              We&apos;ve already done the parts that take weeks: the
-              indexer, the genome stream, the protocol adapters, the
-              lifecycle state machine. You bring the edge — a routing
-              trick, a gas heuristic, a custom intent type — the runtime
-              takes care of the rest.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <Button href="/onboard" variant="mint">
-                START THE WIZARD →
-              </Button>
-              <Button
-                href="https://github.com/yawningmonsoon/taifoon-solver"
-                external
-                variant="secondary"
-              >
-                READ THE SOURCE
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-px bg-[var(--border-subtle)]">
-            {[
-              { label: 'HOSTED INDEXER', value: 'Genome SSE — 31 protocols, $0 for hackathon teams' },
-              { label: 'ON-CHAIN REGISTRATION', value: 'Auto-deploy to Base Sepolia + Solana Devnet on signup' },
-              { label: 'ONE POD PER SPINNER', value: 'K8s manifests included — fork or self-host' },
-              { label: 'CHAINS SUPPORTED', value: CHAINS.map(c => c.label).join(' · ') },
-            ].map((row) => (
-              <div key={row.label} className="bg-[var(--bg-base)] px-5 py-4">
-                <div className="tf-stat-prefix uppercase tracking-[0.24em] mb-1.5">
-                  {row.label}
-                </div>
-                <div className="text-sm text-[var(--text-primary)]">{row.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-// ── Final CTA ──────────────────────────────────────────────────────────────
+// ── Final CTA — folded Colosseum framing into copy + tabbed snippet ──────
 function FinalCTA() {
   return (
     <section className="max-w-[1100px] mx-auto px-6 py-32 text-center">
@@ -506,14 +428,32 @@ function FinalCTA() {
         <br />
         one command away.
       </h2>
-      <div className="mt-12 max-w-[560px] mx-auto">
-        <CodeBlock
-          lang="bash"
-          code={`curl -fsSL solver.taifoon.dev/install.sh | sh
-taifoon-cli onboard --chains base,solana --protocols across,debridge,mayan
-taifoon-cli run`}
+      <p className="mt-6 text-[var(--text-secondary)] max-w-[560px] mx-auto leading-relaxed">
+        Open-source, MIT, free for hackathon teams — Solana Colosseum
+        included. Fork the runtime, fork the indexer, run your spinner
+        on testnet by lunch.
+      </p>
+
+      <div className="mt-12 max-w-[640px] mx-auto text-left">
+        <Snippet
+          variant="tabbed"
+          tabs={[
+            {
+              label: 'INSTALL',
+              code: 'curl -fsSL solver.taifoon.dev/install.sh | sh',
+            },
+            {
+              label: 'ONBOARD',
+              code: 'taifoon-cli onboard --chains base,solana --protocols across,debridge,mayan',
+            },
+            {
+              label: 'RUN',
+              code: 'taifoon-cli run --stream prod',
+            },
+          ]}
         />
       </div>
+
       <div className="mt-10 flex justify-center gap-3 flex-wrap">
         <Button href="/onboard" variant="primary" size="lg">
           SPIN UP A SPINNER →

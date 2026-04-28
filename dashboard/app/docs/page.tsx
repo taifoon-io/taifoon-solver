@@ -1,6 +1,6 @@
 'use client'
 
-import { NavBar, Footer, Card, CardHeader, Button, CodeBlock, Tag } from '@/components/ui'
+import { NavBar, Footer, Card, CardHeader, Button, Snippet, Tag } from '@/components/ui'
 
 export default function DocsPage() {
   return (
@@ -31,11 +31,16 @@ export default function DocsPage() {
           <div className="mt-12 space-y-5">
             <Card padding="md">
               <CardHeader title="Quick start" />
-              <CodeBlock
-                lang="bash"
-                code={`cargo install taifoon-cli
-taifoon-cli onboard --chains base,solana --protocols across,debridge,mayan
-taifoon-cli run --stream prod`}
+              <Snippet
+                variant="tabbed"
+                tabs={[
+                  { label: 'INSTALL', code: 'cargo install taifoon-cli' },
+                  {
+                    label: 'ONBOARD',
+                    code: 'taifoon-cli onboard --chains base,solana --protocols across,debridge,mayan',
+                  },
+                  { label: 'RUN', code: 'taifoon-cli run --stream prod' },
+                ]}
               />
             </Card>
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { NavBar, Footer, Card, CardHeader, Stepper, StepBody, Button, CodeBlock, Tag } from '@/components/ui'
+import { NavBar, Footer, Card, CardHeader, Stepper, StepBody, Button, Snippet, Tag } from '@/components/ui'
 import { protocolColors } from '@/lib/tokens'
 
 const STEPS = [
@@ -290,7 +290,7 @@ taifoon-cli run \\
                     <Summary label="Chains" value={Array.from(chains).join(', ')} />
                     <Summary label="Protocols" value={`${protocols.size} selected`} />
                   </div>
-                  <CodeBlock code={launchCmd} lang="bash" />
+                  <Snippet code={launchCmd} lang="bash" />
                   <Card padding="md" className="bg-[var(--bg-raised)]">
                     <CardHeader title="What happens when you run this" />
                     <ol className="space-y-2 text-sm text-[var(--text-secondary)] list-none pl-0">
