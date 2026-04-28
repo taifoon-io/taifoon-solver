@@ -119,9 +119,37 @@ portal demo data.
 | `tf-stat-prefix`   | Mono 11px, faded — `real-time` `median`            |
 | `tf-stat-value`    | Mono 26px, primary color — large numbers           |
 
-### Motion
+### Motion language
 
-`--ease-out: cubic-bezier(0.16, 1, 0.3, 1)`. Durations 120ms / 200ms / 400ms.
+Lifted directly from taifoon.io's compiled CSS — same keyframes, same
+durations, same opacities, same color discipline. The principle: **slow
+infinite loops over flashy short ones**. Most animations cycle over 60s
+to 180s so the page feels alive without ever being frantic.
+
+| Class                      | Source            | Duration | Loop     | Effect                                                                |
+|----------------------------|-------------------|---------:|----------|-----------------------------------------------------------------------|
+| `.tf-grid`                 | taifoon.io hero   |    180s  | infinite | 80px square grid at 2.4% white, 3D-tilted via `matrix3d`, slides one cell  |
+| `.tf-coordinate-grid`      | taifoon.io sections |   60s | infinite | 60px square grid at 3% white, slides one cell on both axes            |
+| `tf-grid-curve-breathe`    | taifoon.io        |     30s  | infinite | Curved-grid scale + opacity oscillation                               |
+| `.tf-orbital-trace`        | taifoon.io        |     90s  | infinite | Slow CCW rotation                                                     |
+| `.tf-orbital-trace-2`      | taifoon.io        |     70s  | infinite | Slow CW rotation                                                      |
+| `tf-singularity-breathe` (`.tf-breathe`) | taifoon.io |  6s | infinite | 0.55→1 opacity oscillation on central nodes                          |
+| `tf-silver-shimmer`        | taifoon.io        |      8s  | infinite | Auto-applied to `.tf-gradient-silver` and `.tf-gradient-solana`       |
+| `tf-rim-rotate` (`.tf-rim`)| taifoon.io buttons|     20s  | infinite | Conic azure→mint gradient stroke rotates around primary CTAs          |
+
+Standard motion tokens still apply for state changes:
+- `--dur-fast` 120ms — hover
+- `--dur-base` 200ms — state change
+- `--dur-slow` 400ms — page-level transition
+- `--ease-out: cubic-bezier(0.16, 1, 0.3, 1)`
+
+**Color discipline for ambient motion** — total palette in motion layers:
+- `rgba(230, 240, 247, 0.024)` — `tf-grid` line
+- `rgba(230, 240, 247, 0.03)` — `tf-coordinate-grid` line
+- `rgba(61, 165, 255, 0.10)` — outer orbital ring
+- `rgba(20, 241, 149, 0.12)` — inner (Solana) orbital ring
+- `#3DA5FF` `#14F195` — square nodes
+- That's it. No protocol color leaks into ambient geometry — the multicolor riot is reserved for the LiveTicker / CrossChainVolume / IntentRow surfaces where it carries meaning.
 
 ---
 

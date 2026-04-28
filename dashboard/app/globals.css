@@ -148,19 +148,93 @@ html, body {
   color: var(--text-primary);
 }
 
-/* ── Dot-grid backdrop — taifoon.io's signature texture ───────────── */
+/* ── Dot-grid backdrop — kept for legacy callers ──────────────────── */
 .dot-grid {
   background-image: radial-gradient(rgba(230, 240, 247, 0.06) 1px, transparent 1px);
   background-size: 24px 24px;
   background-position: 0 0;
 }
 
-/* Subtle radial vignette used on landing — not a heavy mesh */
+/*
+ * tf-grid — taifoon.io's signature hero grid.
+ *
+ * 80px square grid in white at 2.4% opacity. Uses matrix3d() to tilt
+ * the whole layer ~1.7° around X, so it appears to recede in 3D toward
+ * the horizon. Drifts horizontally over 180s, infinite, ease-linear.
+ *
+ * The transform is the literal matrix3d() value pulled from
+ * taifoon.io's hero, then we layer our own animation on top.
+ */
+.tf-grid {
+  background-image:
+    linear-gradient(rgba(230, 240, 247, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(230, 240, 247, 0.028) 1px, transparent 1px);
+  background-size: 80px 80px, 80px 80px;
+  transform: matrix3d(1, 0, 0, 0, 0, 0.9996, 0.0294, 0, 0, -0.0294, 0.9996, 0, 0, 0, 0, 1);
+  transform-origin: 50% 50%;
+  animation: tf-grid-drift 180s linear infinite;
+  will-change: background-position;
+}
+
+@keyframes tf-grid-drift {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 80px 80px, 80px 80px; }
+}
+
+/*
+ * tf-coordinate-grid — section-level grid (60px, 3% white).
+ * Slower, breathing-style drift over 60s — used on sections like the
+ * cockpit preview where we want texture without competing with content.
+ */
+.tf-coordinate-grid {
+  background-image:
+    linear-gradient(rgba(230, 240, 247, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(230, 240, 247, 0.03) 1px, transparent 1px);
+  background-size: 60px 60px, 60px 60px;
+  animation: tf-grid-subtle-drift 60s linear infinite;
+}
+
+@keyframes tf-grid-subtle-drift {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 60px 0, 0 60px; }
+}
+
+/*
+ * tf-grid-curve-breathe — the curved grid breathes (30s, ease-in-out).
+ * Applied to a transformed grid for the central singularity feeling.
+ */
+@keyframes tf-grid-curve-breathe {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50%      { opacity: 0.8; transform: scale(1.06); }
+}
+
+/* Subtle radial vignette used on landing — kept very light */
 .glow-bg {
   background-image:
-    radial-gradient(ellipse at 90% 10%, rgba(61, 165, 255, 0.12) 0%, transparent 50%),
-    radial-gradient(ellipse at 10% 90%, rgba(20, 241, 149, 0.06) 0%, transparent 55%);
+    radial-gradient(ellipse at 90% 10%, rgba(61, 165, 255, 0.10) 0%, transparent 55%),
+    radial-gradient(ellipse at 10% 90%, rgba(20, 241, 149, 0.05) 0%, transparent 55%);
 }
+
+/*
+ * tf-orbital-spin — the slow concentric rotation taifoon.io applies to
+ * its orbital traces. 70s and 90s in their build; we use the same.
+ */
+@keyframes tf-orbital-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.tf-orbital-trace { animation: tf-orbital-spin 90s linear infinite; }
+.tf-orbital-trace-2 { animation: tf-orbital-spin 70s linear infinite reverse; }
+
+/*
+ * singularity-breathe — soft 6s pulse for central nodes.
+ * One opacity oscillation, no scale, so it never competes with content.
+ */
+@keyframes tf-singularity-breathe {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+.tf-breathe { animation: tf-singularity-breathe 6s ease-in-out infinite; }
 
 /* ── Scrollbars ────────────────────────────────────────────────────── */
 *::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -189,20 +263,96 @@ html, body {
 }
 .pulse-live { animation: pulse-ring 2.4s infinite; }
 
-/* ── Silver gradient text — taifoon.io display headline ──────────── */
+/*
+ * tf-gradient-silver — the headline gradient, with the slow silver
+ * shimmer that taifoon.io applies to every display headline.
+ *
+ * The 5-stop gradient mimics light catching brushed metal; the 8s
+ * background-position drift moves the highlight across the type.
+ */
 .tf-gradient-silver {
-  background: linear-gradient(180deg, #FFFFFF 0%, #94B0C4 100%);
+  background: linear-gradient(
+    135deg,
+    #E6F0F7 0%,
+    #FFFFFF 25%,
+    #E6F0F7 50%,
+    #C9D9E8 75%,
+    #E6F0F7 100%
+  );
+  background-size: 200% 200%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+  animation: tf-silver-shimmer 8s ease-in-out infinite;
 }
 
-/* ── Solana-mint gradient — used for solver-specific moments ─────── */
+@keyframes tf-silver-shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+
+/*
+ * tf-gradient-solana — the blue→mint gradient for solver-specific
+ * moments. Same shimmer behavior but using our Solana flair palette.
+ */
 .tf-gradient-solana {
-  background: linear-gradient(135deg, #3DA5FF 0%, #14F195 100%);
+  background: linear-gradient(
+    135deg,
+    #3DA5FF 0%,
+    #66B8FF 25%,
+    #14F195 50%,
+    #3DE2A6 75%,
+    #3DA5FF 100%
+  );
+  background-size: 200% 200%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+  animation: tf-silver-shimmer 8s ease-in-out infinite;
+}
+
+/*
+ * tf-button-rim — rotating gradient stroke for primary CTAs.
+ *
+ * Applied to a span:before. The conic gradient cycles through azure →
+ * mint → transparent so the visible "highlight" sweeps around the rim
+ * over 20s. Color set is locked: only the brand blue and mint.
+ */
+.tf-rim {
+  position: relative;
+  isolation: isolate;
+}
+.tf-rim::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(61, 165, 255, 0)    0%,
+    rgba(61, 165, 255, 0.9) 12%,
+    rgba(20, 241, 149, 0.9) 24%,
+    rgba(61, 165, 255, 0)   40%,
+    rgba(61, 165, 255, 0)   100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  animation: tf-rim-rotate 20s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+.tf-rim > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes tf-rim-rotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 /* ── Display headline conventions (taifoon.io-aligned) ──────────── */

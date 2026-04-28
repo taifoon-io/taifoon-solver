@@ -48,16 +48,16 @@ export default function LandingPage() {
 function Hero() {
   return (
     <section className="relative overflow-hidden min-h-[760px] flex items-center">
-      {/* layers, back to front: orbits → grid → glow → content */}
-      <ChainOrbits className="opacity-50" />
-      <div className="absolute inset-0 dot-grid pointer-events-none opacity-30" />
+      {/* layers, back to front: chain-orbits → glow → vignette → content
+          ChainOrbits already includes the tf-grid 3D infinite plane.    */}
+      <ChainOrbits />
       <div className="absolute inset-0 glow-bg pointer-events-none" />
-      {/* vignette so type stays legible over the orbits */}
+      {/* vignette so the headline stays legible over the geometry */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.85) 75%)',
+            'radial-gradient(ellipse at center, transparent 25%, rgba(0,0,0,0.88) 80%)',
         }}
       />
 
@@ -88,7 +88,7 @@ function Hero() {
           </p>
 
           <div className="mt-10 flex flex-wrap items-center gap-3">
-            <Button href="/onboard" variant="primary" size="lg">
+            <Button href="/onboard" variant="primary" size="lg" rim>
               <span className="text-[var(--text-tertiary)]">{'>'}</span>
               SPIN UP A SPINNER →
             </Button>
@@ -369,7 +369,8 @@ function Flywheel() {
 // ── Dashboard preview ─────────────────────────────────────────────────────
 function DashboardPreview() {
   return (
-    <section className="max-w-[1280px] mx-auto px-6 py-32">
+    <section className="relative max-w-[1280px] mx-auto px-6 py-32">
+      <div className="absolute inset-0 tf-coordinate-grid opacity-50 pointer-events-none" />
       <div className="grid lg:grid-cols-[1fr_1.1fr] gap-16 items-center">
         <div>
           <Tag>The cockpit</Tag>
@@ -456,7 +457,7 @@ function FinalCTA() {
       </div>
 
       <div className="mt-10 flex justify-center gap-3 flex-wrap">
-        <Button href="/onboard" variant="primary" size="lg">
+        <Button href="/onboard" variant="primary" size="lg" rim>
           SPIN UP A SPINNER →
         </Button>
         <Button href="/portal" variant="secondary" size="lg">

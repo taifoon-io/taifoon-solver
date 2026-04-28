@@ -48,6 +48,12 @@ interface CommonProps {
   children: ReactNode
   leadingIcon?: ReactNode
   trailingIcon?: ReactNode
+  /**
+   * Adds a slow rotating azure→mint gradient stroke around the button
+   * (taifoon.io's `tf-button-rim`, ~20s loop). Use sparingly — primary
+   * page-level CTAs only. Reads as "live" / "alive" without screaming.
+   */
+  rim?: boolean
 }
 
 type ButtonProps = CommonProps &
@@ -66,9 +72,10 @@ export function Button(props: ButtonProps | LinkButtonProps) {
     children,
     leadingIcon,
     trailingIcon,
+    rim,
   } = props
 
-  const classes = cn(base, variants[variant], sizes[size], className)
+  const classes = cn(base, variants[variant], sizes[size], rim && 'tf-rim', className)
   const inner = (
     <>
       {leadingIcon}
@@ -100,6 +107,7 @@ export function Button(props: ButtonProps | LinkButtonProps) {
     leadingIcon: _leadingIcon,
     trailingIcon: _trailingIcon,
     children: _children,
+    rim: _rim,
     ...rest
   } = buttonProps
   void _variant
@@ -108,6 +116,7 @@ export function Button(props: ButtonProps | LinkButtonProps) {
   void _leadingIcon
   void _trailingIcon
   void _children
+  void _rim
 
   return (
     <button className={classes} {...rest}>
