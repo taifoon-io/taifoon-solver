@@ -409,13 +409,16 @@ async fn main() -> Result<()> {
                 }
                 Ok(LambdaExecuteOutcome::Skipped { reason }) => {
                     info!("⏭️  Skipped {}: {}", intent_ref.id, reason);
+                    // dry_run means calldata was built and broadcast was reached — treat as
+                    // profitable attempt for dashboard visibility (no tx actually sent).
+                    let is_dry_run_skip = reason == "dry_run";
                     solver_api.emit_event(SolverEvent::IntentAttempted(AttemptData {
                         id: intent.id.clone(),
-                        profitable: false,
+                        profitable: is_dry_run_skip,
                         profit_usd: 0.0,
                         protocol_fee_usd: 0.0,
                         gas_cost_usd: 0.0,
-                        decision: "skip".into(),
+                        decision: if is_dry_run_skip { "dry_run".into() } else { "skip".into() },
                     }));
                 }
                 Ok(LambdaExecuteOutcome::Reverted { tx_hash, error: e }) => {
