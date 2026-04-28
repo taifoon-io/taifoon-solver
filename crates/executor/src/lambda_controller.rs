@@ -134,6 +134,14 @@ impl LambdaController {
         let proto_lower_pre = intent.protocol.to_lowercase();
         let is_debridge_pre = proto_lower_pre.contains("debridge") || proto_lower_pre.contains("dln");
         let is_mayan_pre = proto_lower_pre.contains("mayan");
+        let is_across_pre = proto_lower_pre.contains("across");
+
+        // Guard: skip Across fills where the SpokePool adapter is zero (chain not supported).
+        if is_across_pre && wiring.across_adapter == Address::ZERO {
+            let reason = format!("no Across SpokePool on chain {}", intent.dst_chain);
+            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+            return Ok(LambdaExecuteOutcome::Skipped { reason });
+        }
         // deBridge and Mayan submit directly to their own contracts (DlnDestination / Swift).
         // They are not indexed by the Taifoon spinner, so test-run always 404/501.
         let bypass_spinner = direct_fill || is_debridge_pre || is_mayan_pre;
