@@ -3,37 +3,37 @@
   "_updated": "2026-04-28",
   "1": {
     "_chain": "Ethereum",
-    "rpc_url": "https://ethereum-rpc.publicnode.com",
+    "rpc_url": "https://eth.llamarpc.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"
   },
   "10": {
     "_chain": "Optimism",
-    "rpc_url": "https://optimism-rpc.publicnode.com",
+    "rpc_url": "https://optimism.blockpi.network/v1/rpc/206b05d563d8d7c2849f37a9962e022f3db8a13a",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x6f26Bf09B1C792e3228e5467807a900A503c0281"
   },
   "137": {
     "_chain": "Polygon",
-    "rpc_url": "https://polygon-rpc.com",
+    "rpc_url": "https://polygon.drpc.org",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096"
   },
   "8453": {
     "_chain": "Base",
-    "rpc_url": "https://base-rpc.publicnode.com",
+    "rpc_url": "https://base.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64"
   },
   "42161": {
     "_chain": "Arbitrum",
-    "rpc_url": "https://arbitrum-one-rpc.publicnode.com",
+    "rpc_url": "https://arbitrum.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A"
   },
   "59144": {
     "_chain": "Linea",
-    "rpc_url": "https://linea-rpc.publicnode.com",
+    "rpc_url": "https://rpc.linea.build",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75"
   },
@@ -43,6 +43,19 @@
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0xe0B015E54d54fc84a6cB9B666099c46adE9335FF"
   },
+  "56": {
+    "_chain": "BNB Chain",
+    "rpc_url": "https://binance.llamarpc.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000"
+  },
+  "1399811149": {
+    "_chain": "Solana",
+    "rpc_url": "https://solana.blockpi.network/v1/rpc/674489d6ad42c8c71ede1749e2719ec810d48a74",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "Solana uses this chain_id as a sentinel; rpc_url is the Solana JSON-RPC endpoint"
+  },
   "36927": {
     "_chain": "Taifoon Devnet — operator path test only",
     "rpc_url": "https://rpc.taifoon.dev",
@@ -51,13 +64,13 @@
   },
   "84532": {
     "_chain": "Base Sepolia",
-    "rpc_url": "https://sepolia.base.org",
+    "rpc_url": "https://evocative-compatible-knowledge.base-sepolia.quiknode.pro/2c4d3039fa97b8b5ee1a56746fe2ef8952baf685/",
     "operator": "0x4000F8820522AC96C4221b299876e3e53bCc8525",
     "across_adapter": "0x82B564983aE7274c86695917BBf8C99ECb6F0F8F"
   },
   "421614": {
     "_chain": "Arbitrum Sepolia",
-    "rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
+    "rpc_url": "https://arbitrum-sepolia.blockpi.network/v1/rpc/981eadc4f81833f5486f93ffedcb05ff4a442bb7",
     "operator": "0x1C17563fCdEb1aB38b1e15A0F9114Ac650585906",
     "across_adapter": "0x7E6e6d0bB24968B24db12E8CAb37e028Af2CA8A9"
   }

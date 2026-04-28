@@ -93,6 +93,8 @@ fn load_chain_specs() -> Vec<ChainSpec> {
             for (key, val) in obj {
                 if key.starts_with('_') { continue; }
                 let chain_id: u64 = match key.parse() { Ok(n) => n, Err(_) => continue };
+                // Solana handled separately below
+                if chain_id == 1_399_811_149 { continue; }
                 let rpc = val.get("rpc_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 if rpc.is_empty() { continue; }
                 let chain_name = val.get("_chain").and_then(|v| v.as_str()).unwrap_or(key.as_str()).to_string();
@@ -108,11 +110,20 @@ fn load_chain_specs() -> Vec<ChainSpec> {
         specs = default_chain_specs();
     }
 
-    // Always include Solana (it's not in chain_wiring.json as an EVM chain)
+    // Add Solana — use premium blockpi RPC if available in chain_wiring, else public fallback
+    let sol_rpc = if let Some(ref w) = wiring {
+        w.get("1399811149")
+            .and_then(|v| v.get("rpc_url"))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| "https://api.mainnet-beta.solana.com".to_string())
+    } else {
+        "https://api.mainnet-beta.solana.com".to_string()
+    };
     specs.push(ChainSpec {
         chain_id: 1_399_811_149,
         name: "Solana",
-        rpc: "https://api.mainnet-beta.solana.com".to_string(),
+        rpc: sol_rpc,
         usdc: None,
         usdt: None,
         weth: None,

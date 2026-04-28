@@ -57,14 +57,15 @@ pub fn default_debridge_dln_addresses() -> HashMap<u64, Address> {
 
 /// Pick a default mainnet RPC URL when the environment doesn't provide one.
 /// Production deployments should always set the per-chain `RPC_URL_<chain>`.
+/// Premium RPCs sourced from rpc-hunter / t3rn-guardian endpoints.
 pub fn default_rpc_for_chain(chain_id: u64) -> Option<&'static str> {
     match chain_id {
         1 => Some("https://eth.llamarpc.com"),
-        10 => Some("https://mainnet.optimism.io"),
-        42161 => Some("https://arb1.arbitrum.io/rpc"),
-        8453 => Some("https://mainnet.base.org"),
-        137 => Some("https://polygon-rpc.com"),
-        56 => Some("https://bsc-dataseed.bnbchain.org"),
+        10 => Some("https://optimism.blockpi.network/v1/rpc/206b05d563d8d7c2849f37a9962e022f3db8a13a"),
+        42161 => Some("https://arbitrum.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b"),
+        8453 => Some("https://base.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b"),
+        137 => Some("https://polygon.drpc.org"),
+        56 => Some("https://binance.llamarpc.com"),
         43114 => Some("https://api.avax.network/ext/bc/C/rpc"),
         59144 => Some("https://rpc.linea.build"),
         _ => None,

@@ -701,9 +701,16 @@ async fn portfolio_handler(
         });
     }
 
-    // Solana balance
+    // Solana balance — pick up premium RPC from chain_wiring if Solana entry exists
+    let sol_rpc = {
+        let w = load_chain_wiring_for_portfolio();
+        w.iter()
+            .find(|(cid, _, _)| *cid == 1_399_811_149)
+            .map(|(_, _, rpc)| rpc.clone())
+            .unwrap_or_else(|| "https://api.mainnet-beta.solana.com".to_string())
+    };
     if let Some(ref pubkey) = solana_addr {
-        let (sol, usdc) = sol_balances_f64(client, "https://api.mainnet-beta.solana.com", pubkey).await;
+        let (sol, usdc) = sol_balances_f64(client, &sol_rpc, pubkey).await;
         chains.push(ChainInventory {
             chain_id: 1_399_811_149,
             chain_name: "Solana".into(),
