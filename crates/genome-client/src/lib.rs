@@ -438,7 +438,7 @@ impl AcrossPoller {
         Self {
             // All chains with an Across V3 SpokePool (no BSC — no SpokePool there).
             dst_chains: vec![8453, 10, 42161, 1, 137, 59144],
-            poll_interval_secs: 8,
+            poll_interval_secs: 30,
             limit: 20,
         }
     }
@@ -460,11 +460,17 @@ impl AcrossPoller {
                     "https://app.across.to/api/deposits?status=unfilled&destinationChainId={}&limit={}",
                     dst_chain, self.limit
                 );
-                let Ok(resp) = client.get(&url).send().await else {
-                    continue;
+                let resp = match client.get(&url).send().await {
+                    Ok(r) => r,
+                    Err(e) => { tracing::debug!("AcrossPoller chain={} request error: {}", dst_chain, e); continue; }
                 };
-                let Ok(deps) = resp.json::<Vec<serde_json::Value>>().await else {
+                if !resp.status().is_success() {
+                    tracing::warn!("AcrossPoller chain={} HTTP {}: likely rate-limited", dst_chain, resp.status());
                     continue;
+                }
+                let deps: Vec<serde_json::Value> = match resp.json().await {
+                    Ok(d) => d,
+                    Err(e) => { tracing::debug!("AcrossPoller chain={} parse error: {}", dst_chain, e); continue; }
                 };
 
                 let now_secs = std::time::SystemTime::now()
