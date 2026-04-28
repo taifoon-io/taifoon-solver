@@ -4,7 +4,7 @@ use executor::{
     build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
     LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
-use genome_client::{AcrossPoller, GenomeClient};
+use genome_client::{AcrossPoller, DeBridgePoller, GenomeClient};
 use profit_calc::ProfitCalculator;
 use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
@@ -175,23 +175,23 @@ async fn main() -> Result<()> {
         }
     }
 
-    // ── Genome SSE consumer + Across REST poller ─────────────────────────────
+    // ── Genome SSE consumer + Across REST + deBridge on-chain pollers ────────
     // The genome SSE stream currently only emits block/gas events — it does NOT
     // publish protocol deposit events. AcrossPoller polls the Across V3 REST API
-    // directly so the solver sees real live deposits without waiting for the
-    // genome protocol-event publisher to go live.
+    // directly; DeBridgePoller scans eth_getLogs for DlnSource.OrderCreated events.
     let genome_client = GenomeClient::new(&genome_sse_url);
     let (intent_tx, mut intent_rx) = mpsc::channel(100);
     let across_poller = AcrossPoller::default_mainnet();
+    let debridge_poller = DeBridgePoller::default_mainnet();
     let _genome_handle = tokio::spawn(async move {
         if let Err(e) = genome_client
-            .subscribe_with_pollers(intent_tx, vec![across_poller])
+            .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
             .await
         {
             error!("Genome stream error: {}", e);
         }
     });
-    info!("✅ Genome SSE + Across REST poller started");
+    info!("✅ Genome SSE + Across REST + deBridge on-chain pollers started");
     info!("⏳ Waiting for intents...");
 
     // Dedup: track intent IDs we've already dispatched in this session.

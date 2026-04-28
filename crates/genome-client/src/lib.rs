@@ -621,6 +621,250 @@ fn across_deposit_to_intent(
     }
 }
 
+/// deBridge DLN on-chain `OrderCreated` log poller.
+///
+/// The deBridge public API has no open-order feed — it requires a known orderId
+/// to query. This poller uses `eth_getLogs` to scan the DlnSource contract for
+/// `OrderCreated` events across supported chains, then synthesizes `Intent`s
+/// from the decoded log data. Uses block-range sliding windows to avoid RPC
+/// `eth_getLogs` limits (some RPCs cap at 2000 blocks per call).
+pub struct DeBridgePoller {
+    /// (chain_id, rpc_url) pairs to monitor for new deBridge orders.
+    pub chains: Vec<(u64, String)>,
+    /// Poll interval in seconds.
+    pub poll_interval_secs: u64,
+    /// Blocks per `eth_getLogs` batch (2000 is safe for most RPCs).
+    pub blocks_per_batch: u64,
+}
+
+/// DlnSource contract address (same on all EVM chains)
+const DLN_SOURCE_ADDRESS: &str = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66";
+/// keccak256 of the DlnSource CreatedOrder event — verified against live Arbitrum logs.
+const ORDER_CREATED_TOPIC: &str = "0xfc8703fd57380f9dd234a89dce51333782d49c5902f307b02f03e014d18fe471";
+
+impl DeBridgePoller {
+    /// Build a default poller for mainnet EVM chains that have a DlnSource.
+    pub fn default_mainnet() -> Self {
+        Self {
+            chains: vec![
+                (1,     "https://eth.llamarpc.com".into()),
+                (10,    "https://optimism.blockpi.network/v1/rpc/206b05d563d8d7c2849f37a9962e022f3db8a13a".into()),
+                (42161, "https://arbitrum.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b".into()),
+                (8453,  "https://base.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b".into()),
+                (56,    "https://binance.llamarpc.com".into()),
+                (59144, "https://rpc.linea.build".into()),
+            ],
+            poll_interval_secs: 12,
+            blocks_per_batch: 100,
+        }
+    }
+
+    pub async fn run(self, intent_tx: tokio::sync::mpsc::Sender<Intent>) {
+        use std::collections::HashMap;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .user_agent("Mozilla/5.0 (compatible; taifoon-solver/1.0)")
+            .build()
+            .unwrap_or_default();
+
+        // Track the last-seen block per chain
+        let mut last_block: HashMap<u64, u64> = HashMap::new();
+        // Track emitted order_ids to avoid duplicates
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        loop {
+            for (chain_id, rpc) in &self.chains {
+                // 1. Get current block number
+                let current_block = match eth_block_number(&client, rpc).await {
+                    Some(n) => n,
+                    None => { continue; }
+                };
+
+                let from_block = last_block.get(chain_id)
+                    .copied()
+                    .unwrap_or(current_block.saturating_sub(self.blocks_per_batch))
+                    .max(current_block.saturating_sub(self.blocks_per_batch * 5));
+                let to_block = current_block;
+
+                if from_block >= to_block {
+                    last_block.insert(*chain_id, to_block);
+                    continue;
+                }
+
+                // 2. eth_getLogs for OrderCreated on DlnSource
+                let logs = match eth_get_logs(
+                    &client, rpc, DLN_SOURCE_ADDRESS, ORDER_CREATED_TOPIC,
+                    from_block, to_block,
+                ).await {
+                    Some(l) => l,
+                    None => { continue; }
+                };
+
+                last_block.insert(*chain_id, to_block + 1);
+
+                for log in logs {
+                    if let Some(intent) = decode_dln_order_created_log(&log, *chain_id) {
+                        if !seen.insert(intent.id.clone()) { continue; }
+                        info!("📡 DeBridgePoller chain={} orderId={} {}→{} give={}",
+                            chain_id, intent.order_id.as_deref().unwrap_or("?"),
+                            intent.src_chain, intent.dst_chain, intent.amount);
+                        if intent_tx.send(intent).await.is_err() { return; }
+                    }
+                }
+
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
+        }
+    }
+}
+
+async fn eth_block_number(client: &reqwest::Client, rpc: &str) -> Option<u64> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "eth_blockNumber",
+        "params": []
+    });
+    let hex = client.post(rpc).json(&body).send().await.ok()?
+        .json::<serde_json::Value>().await.ok()?
+        ["result"].as_str()?.to_string();
+    u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
+}
+
+async fn eth_get_logs(
+    client: &reqwest::Client,
+    rpc: &str,
+    address: &str,
+    topic0: &str,
+    from_block: u64,
+    to_block: u64,
+) -> Option<Vec<serde_json::Value>> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "eth_getLogs",
+        "params": [{
+            "address": address,
+            "topics": [topic0],
+            "fromBlock": format!("0x{:x}", from_block),
+            "toBlock": format!("0x{:x}", to_block)
+        }]
+    });
+    let resp = client.post(rpc).json(&body).send().await.ok()?
+        .json::<serde_json::Value>().await.ok()?;
+    resp["result"].as_array().cloned()
+}
+
+/// Decode a DlnSource `CreatedOrder` log into an `Intent`.
+///
+/// Verified against live Arbitrum logs. ABI layout (all slots are 32 bytes):
+///
+/// top-level args: (Order order, bytes32 orderId, bytes affiliateFeeOrderId, ...)
+///   slot[0] = offset to Order tuple (= 224 bytes = 7 slots)
+///   slot[1] = orderId (bytes32) — NOT indexed, in data
+///   slot[2] = offset to affiliateFeeOrderId
+///
+/// Order struct at slot 7 (offsets inside Order are relative to Order start):
+///   [+0] makerOrderNonce  uint64
+///   [+1] offset to makerSrc bytes (relative)
+///   [+2] giveChainId uint256
+///   [+3] offset to giveTokenAddress bytes (relative)
+///   [+4] giveAmount uint256
+///   [+5] takeChainId uint256
+///   [+6] offset to takeTokenAddress bytes (relative)
+///   [+7] takeAmount uint256
+///   [+8] offset to receiverDst bytes (relative)
+///   ...
+fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> Option<Intent> {
+    let data_hex = log["data"].as_str()?.trim_start_matches("0x");
+    if data_hex.len() < 128 { return None; }
+
+    let slots: Vec<[u8; 32]> = data_hex
+        .as_bytes()
+        .chunks(64)
+        .filter_map(|c| {
+            let s = std::str::from_utf8(c).ok()?;
+            let b = hex::decode(s).ok()?;
+            if b.len() == 32 { let mut arr = [0u8; 32]; arr.copy_from_slice(&b); Some(arr) } else { None }
+        })
+        .collect();
+
+    if slots.len() < 22 { return None; }
+
+    // slot[0] = offset to Order in bytes — verified = 224 = slot 7
+    let order_offset_bytes = u64::from_be_bytes(slots[0][24..32].try_into().ok()?) as usize;
+    let os = order_offset_bytes / 32; // start of Order struct in slot array
+    if os + 9 >= slots.len() { return None; }
+
+    // slot[1] = orderId bytes32
+    let order_id_hex = format!("0x{}", hex::encode(&slots[1]));
+
+    // Helpers
+    let u64_at = |s: &[u8; 32]| u64::from_be_bytes(s[24..32].try_into().unwrap_or([0u8; 8]));
+    let u128_str = |s: &[u8; 32]| {
+        u128::from_be_bytes(s[16..32].try_into().unwrap_or([0u8; 16])).to_string()
+    };
+
+    // Read bytes field: offset is RELATIVE to order struct start, then length+data
+    let read_bytes_relative = |offset_slot: &[u8; 32]| -> Option<Vec<u8>> {
+        let rel = u64_at(offset_slot) as usize / 32;
+        let abs = os + rel;
+        let len = u64_at(slots.get(abs)?) as usize;
+        if len == 0 { return Some(vec![]); }
+        let data_slot = slots.get(abs + 1)?;
+        Some(data_slot[..len.min(32)].to_vec())
+    };
+
+    let maker_nonce = u64_at(&slots[os]);
+    // offsets: [os+1]=makerSrc, [os+2]=giveChainId, [os+3]=giveToken, [os+4]=giveAmount
+    //          [os+5]=takeChainId, [os+6]=takeToken, [os+7]=takeAmount, [os+8]=receiverDst
+    let give_chain_id = u64_at(&slots[os + 2]);
+    let give_amount   = u128_str(&slots[os + 4]);
+    let take_chain_id = u64_at(&slots[os + 5]);
+    let take_amount   = u128_str(&slots[os + 7]);
+
+    let maker_src   = read_bytes_relative(&slots[os + 1])
+        .map(|b| format!("0x{}", hex::encode(&b)))
+        .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
+    let give_token  = read_bytes_relative(&slots[os + 3])
+        .map(|b| format!("0x{}", hex::encode(&b)))
+        .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
+    let take_token  = read_bytes_relative(&slots[os + 6])
+        .map(|b| format!("0x{}", hex::encode(&b)))
+        .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
+    let receiver    = read_bytes_relative(&slots[os + 8])
+        .map(|b| format!("0x{}", hex::encode(&b)))
+        .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
+
+    let tx_hash = log["transactionHash"].as_str().unwrap_or("0x").to_string();
+
+    // use_src_chain_id as give_chain_id verification: if giveChainId from log != src_chain_id
+    // the order was created on a different chain than we polled — skip or trust the log value.
+    let actual_src_chain = if give_chain_id > 0 { give_chain_id } else { src_chain_id };
+
+    Some(Intent {
+        id: format!("debridge_dln:{}", order_id_hex),
+        protocol: "debridge_dln".to_string(),
+        src_chain: actual_src_chain,
+        dst_chain: take_chain_id,
+        src_token: give_token.clone(),
+        dst_token: take_token.clone(),
+        amount: give_amount.clone(),
+        depositor: maker_src,
+        recipient: receiver,
+        tx_hash,
+        give_amount: Some(give_amount),
+        take_amount: Some(take_amount),
+        order_id: Some(order_id_hex),
+        maker_order_nonce: if maker_nonce > 0 { Some(maker_nonce) } else { None },
+        detected_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        ..Default::default()
+    })
+}
+
 impl GenomeClient {
     /// Create new genome client
     pub fn new(sse_url: impl Into<String>) -> Self {
@@ -643,6 +887,24 @@ impl GenomeClient {
         for poller in pollers {
             let tx = intent_tx.clone();
             tokio::spawn(async move { poller.run(tx).await });
+        }
+        self.subscribe(intent_tx).await
+    }
+
+    /// Like `subscribe_with_pollers` but also spawns deBridge on-chain log pollers.
+    pub async fn subscribe_with_all_pollers(
+        &self,
+        intent_tx: mpsc::Sender<Intent>,
+        across_pollers: Vec<AcrossPoller>,
+        debridge_poller: Option<DeBridgePoller>,
+    ) -> Result<()> {
+        for poller in across_pollers {
+            let tx = intent_tx.clone();
+            tokio::spawn(async move { poller.run(tx).await });
+        }
+        if let Some(dp) = debridge_poller {
+            let tx = intent_tx.clone();
+            tokio::spawn(async move { dp.run(tx).await });
         }
         self.subscribe(intent_tx).await
     }

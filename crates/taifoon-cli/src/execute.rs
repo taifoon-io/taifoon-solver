@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use executor::{
     build_lambda_controller_from_env, LambdaClaimOutcome, LambdaExecuteOutcome, LiFiMetaRouter,
 };
-use genome_client::{AcrossPoller, GenomeClient, Intent};
+use genome_client::{AcrossPoller, DeBridgePoller, GenomeClient, Intent};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -86,9 +86,10 @@ pub async fn participate(
     let genome_client = GenomeClient::new(genome_url);
     let (intent_tx, mut intent_rx) = mpsc::channel::<Intent>(100);
     let across_poller = AcrossPoller::default_mainnet();
+    let debridge_poller = DeBridgePoller::default_mainnet();
     let _genome_handle = tokio::spawn(async move {
         if let Err(e) = genome_client
-            .subscribe_with_pollers(intent_tx, vec![across_poller])
+            .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
             .await
         {
             error!("genome stream error: {}", e);
