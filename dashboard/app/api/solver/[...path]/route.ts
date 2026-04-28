@@ -1,0 +1,29 @@
+import { type NextRequest, NextResponse } from 'next/server'
+
+const UPSTREAM = process.env.SOLVER_API_INTERNAL_URL ?? 'http://127.0.0.1:8099'
+
+async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params
+  const url = `${UPSTREAM}/api/solver/${path.join('/')}${req.nextUrl.search}`
+  try {
+    const upstream = await fetch(url, {
+      method: req.method,
+      headers: { 'accept': req.headers.get('accept') ?? '*/*' },
+      // SSE: do not buffer
+      ...(req.headers.get('accept')?.includes('text/event-stream') ? { cache: 'no-store' } : {}),
+    })
+    return new NextResponse(upstream.body, {
+      status: upstream.status,
+      headers: {
+        'content-type': upstream.headers.get('content-type') ?? 'application/json',
+        'cache-control': 'no-store',
+        'access-control-allow-origin': '*',
+      },
+    })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message }, { status: 502 })
+  }
+}
+
+export const GET = proxy
+export const POST = proxy

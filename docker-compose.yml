@@ -43,8 +43,7 @@ services:
       - solver
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_SOLVER_API_URL=/api/solver
-      - SOLVER_API_INTERNAL_URL=http://172.23.0.1:8099
+      - NEXT_PUBLIC_SOLVER_API_URL=
     logging:
       driver: "json-file"
       options:

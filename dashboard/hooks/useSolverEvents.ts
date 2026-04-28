@@ -103,9 +103,10 @@ export function stageColor(s: LambdaStage): string {
   return '#94A3B8'
 }
 
+// Base URL for solver API. Empty string = relative paths (works when nginx proxies /api/solver/).
 const API = typeof window !== 'undefined'
-  ? (process.env.NEXT_PUBLIC_SOLVER_API_URL ?? 'http://localhost:8082')
-  : 'http://localhost:8082'
+  ? (process.env.NEXT_PUBLIC_SOLVER_API_URL ?? '')
+  : 'http://localhost:8099'
 
 export function useSolverEvents() {
   const [intents, setIntents] = useState<Intent[]>([])
