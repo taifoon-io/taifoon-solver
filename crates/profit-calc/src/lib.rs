@@ -282,10 +282,10 @@ impl ProfitCalculator {
     }
 
     async fn estimate_gas_costs(&self, intent: &Intent) -> (f64, f64) {
-        let src_gas_usd = self.estimate_chain_gas_cost(intent.src_chain).await;
+        // The solver submits one fill tx on the destination chain only.
+        // Source-chain gas is paid by the depositor — not our cost.
         let dst_gas_usd = self.estimate_chain_gas_cost(intent.dst_chain).await;
-
-        (src_gas_usd, dst_gas_usd)
+        (0.0, dst_gas_usd)
     }
 
     async fn estimate_chain_gas_cost(&self, chain_id: u64) -> f64 {
@@ -318,11 +318,13 @@ impl ProfitCalculator {
             Err(_) => {
                 // Fallback to hardcoded estimates if API fails
                 let fallback = match chain_id {
-                    1 => 5.0,      // Ethereum mainnet (expensive)
-                    10 => 0.05,    // Optimism (cheap)
-                    8453 => 0.05,  // Base (cheap)
-                    42161 => 0.10, // Arbitrum (cheap)
-                    _ => 1.0,      // Default
+                    1 => 1.20,     // Ethereum mainnet (~3 gwei, 200k gas, $3k ETH)
+                    10 => 0.02,    // Optimism
+                    8453 => 0.02,  // Base
+                    42161 => 0.05, // Arbitrum
+                    137 => 0.05,   // Polygon
+                    56 => 0.05,    // BSC
+                    _ => 0.30,     // Default
                 };
 
                 tracing::warn!("⚠️  Using fallback gas estimate for chain {}: ${:.2} (Warmbed API unavailable)",
