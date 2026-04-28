@@ -436,7 +436,8 @@ pub struct AcrossPoller {
 impl AcrossPoller {
     pub fn default_mainnet() -> Self {
         Self {
-            dst_chains: vec![8453, 10, 42161, 1, 56],
+            // All chains with an Across V3 SpokePool (no BSC — no SpokePool there).
+            dst_chains: vec![8453, 10, 42161, 1, 137, 59144],
             poll_interval_secs: 8,
             limit: 20,
         }

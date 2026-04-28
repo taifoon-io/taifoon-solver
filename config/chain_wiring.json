@@ -1,21 +1,26 @@
 {
-  "_comment": "Chain wiring for Taifoon solver — operator = TaifoonUniversalOperator, across_adapter = Across V3 SpokePool (until AcrossAdapter.sol is deployed on mainnet). See deployed-addresses.json in taifoon-eco for canonical operator addresses. Chains with operator=0x0 use direct SpokePool fillV3Relay (kickback/no-operator path). kickback_rpc (optional) routes proof submission to the Taifoon devnet light client at rpc.taifoon.dev instead of a per-chain operator.",
+  "_comment": "Chain wiring for Taifoon solver — operator=0x0 means direct SpokePool.fillV3Relay (no Taifoon proof). All mainnet Across chains set to direct-fill while spinner proof-bundle endpoint is unavailable. across_adapter = Across V3 SpokePool canonical address.",
   "_updated": "2026-04-28",
-  "36927": {
-    "_chain": "Taifoon Devnet — kickback light client / proof oracle",
-    "rpc_url": "https://rpc.taifoon.dev",
-    "operator": "0x4000F8820522AC96C4221b299876e3e53bCc8525",
-    "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "Devnet operator for cross-chain proof submission via kickback path"
+  "1": {
+    "_chain": "Ethereum",
+    "rpc_url": "https://ethereum-rpc.publicnode.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"
   },
-  "59144": {
-    "_chain": "Linea",
-    "rpc_url": "https://linea-rpc.publicnode.com",
-    "operator": "0x14863fA143dB5989ba38052e6178F49c9cEEc0A4",
-    "across_adapter": "0x7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75"
+  "10": {
+    "_chain": "Optimism",
+    "rpc_url": "https://optimism-rpc.publicnode.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x6f26Bf09B1C792e3228e5467807a900A503c0281"
+  },
+  "137": {
+    "_chain": "Polygon",
+    "rpc_url": "https://polygon-rpc.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096"
   },
   "8453": {
-    "_chain": "Base — no Taifoon operator deployed; operator=0x0 enables direct SpokePool fill mode",
+    "_chain": "Base",
     "rpc_url": "https://base-rpc.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64"
@@ -23,26 +28,26 @@
   "42161": {
     "_chain": "Arbitrum",
     "rpc_url": "https://arbitrum-one-rpc.publicnode.com",
-    "operator": "0x9194bB61af838432239Cd559E94B6a02eF3AAA73",
+    "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A"
   },
-  "10": {
-    "_chain": "Optimism",
-    "rpc_url": "https://optimism-rpc.publicnode.com",
-    "operator": "0xb08a1C6fd49DE26387fdf68081f5062A6EeB1842",
-    "across_adapter": "0x6f26Bf09B1C792e3228e5467807a900A503C0281"
-  },
-  "1": {
-    "_chain": "Ethereum",
-    "rpc_url": "https://ethereum-rpc.publicnode.com",
-    "operator": "0xfA202aCCef2c8165d5DE2acdB836f3dF0A94C594",
-    "across_adapter": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"
+  "59144": {
+    "_chain": "Linea",
+    "rpc_url": "https://linea-rpc.publicnode.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75"
   },
   "324": {
     "_chain": "zkSync Era",
     "rpc_url": "https://mainnet.era.zksync.io",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0xe0B015E54d54fc84a6cB9B666099c46adE9335FF"
+  },
+  "36927": {
+    "_chain": "Taifoon Devnet — operator path test only",
+    "rpc_url": "https://rpc.taifoon.dev",
+    "operator": "0x4000F8820522AC96C4221b299876e3e53bCc8525",
+    "across_adapter": "0x0000000000000000000000000000000000000000"
   },
   "84532": {
     "_chain": "Base Sepolia",
