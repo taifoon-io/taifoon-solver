@@ -1,15 +1,16 @@
 import { ReactNode } from 'react'
 import { cn } from './cn'
 
-type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'violet'
+type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'mint' | 'violet'
 
 const toneMap: Record<Tone, string> = {
-  neutral: 'bg-[var(--bg-raised)] text-[var(--text-secondary)] border-[var(--border-default)]',
-  success: 'bg-[#00FF8810] text-[var(--success)] border-[#00FF8833]',
-  warning: 'bg-[#FFB80014] text-[var(--warning)] border-[#FFB80038]',
-  danger:  'bg-[#FF336614] text-[var(--danger)] border-[#FF336638]',
-  info:    'bg-[#00D9FF14] text-[var(--brand-cyan)] border-[#00D9FF38]',
-  violet:  'bg-[#9945FF14] text-[var(--brand-violet)] border-[#9945FF38]',
+  neutral: 'border-[var(--border-default)] text-[var(--text-secondary)]',
+  success: 'border-[var(--success)]/40 text-[var(--success)]',
+  warning: 'border-[var(--warning)]/40 text-[var(--warning)]',
+  danger:  'border-[var(--danger)]/40 text-[var(--danger)]',
+  info:    'border-[var(--brand-blue)]/40 text-[var(--brand-blue)]',
+  mint:    'border-[var(--solana-mint)]/40 text-[var(--solana-mint)]',
+  violet:  'border-[var(--solana-violet)]/40 text-[var(--solana-violet)]',
 }
 
 interface BadgeProps {
@@ -20,19 +21,26 @@ interface BadgeProps {
   pulse?: boolean
 }
 
+/**
+ * Badge — outlined, mono, ALL-CAPS, wide tracking. No fill background to
+ * stay aligned with taifoon.io's flat aesthetic.
+ */
 export function Badge({ children, tone = 'neutral', dot, pulse, className }: BadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[var(--r-pill)] border',
-        'text-[10px] font-mono uppercase tracking-wider',
+        'inline-flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-sm)] border',
+        'text-[10px] font-mono uppercase tracking-[0.2em]',
         toneMap[tone],
         className,
       )}
     >
       {dot && (
         <span
-          className={cn('w-1.5 h-1.5 rounded-full bg-current', pulse && 'animate-pulse')}
+          className={cn(
+            'w-1.5 h-1.5 rounded-full bg-current',
+            pulse && 'animate-pulse',
+          )}
         />
       )}
       {children}

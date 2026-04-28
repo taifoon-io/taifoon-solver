@@ -2,14 +2,15 @@ import { ReactNode } from 'react'
 import { cn } from './cn'
 
 interface StatTileProps {
+  /** Small mono prefix label, e.g. "real-time". */
   label: string
   value: string | number | ReactNode
-  /** Small value-tone to color the number. */
-  tone?: 'default' | 'success' | 'warning' | 'danger' | 'cyan' | 'violet'
-  /** Trend indicator: positive number, negative number, or undefined to hide. */
+  tone?: 'default' | 'success' | 'warning' | 'danger' | 'blue' | 'mint' | 'violet'
   delta?: number
   unit?: string
   className?: string
+  /** Layout: 'inline' = label and value on one line (taifoon.io style), 'stack' = label above value. */
+  layout?: 'inline' | 'stack'
 }
 
 const toneColor = {
@@ -17,27 +18,44 @@ const toneColor = {
   success: 'text-[var(--success)]',
   warning: 'text-[var(--warning)]',
   danger: 'text-[var(--danger)]',
-  cyan: 'text-[var(--brand-cyan)]',
-  violet: 'text-[var(--brand-violet)]',
+  blue: 'text-[var(--brand-blue)]',
+  mint: 'text-[var(--solana-mint)]',
+  violet: 'text-[var(--solana-violet)]',
 }
 
-export function StatTile({ label, value, tone = 'default', delta, unit, className }: StatTileProps) {
-  return (
-    <div
-      className={cn(
-        'rounded-[var(--r-md)] border border-[var(--border-default)] bg-[var(--bg-elevated)]',
-        'px-4 py-3 flex flex-col gap-1 transition-colors hover:border-[var(--border-strong)]',
-        className,
-      )}
-    >
-      <span className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
-        {label}
-      </span>
-      <div className="flex items-baseline gap-1">
-        <span className={cn('font-mono font-bold text-xl tabular-nums', toneColor[tone])}>
+/**
+ * Stat callout — taifoon.io style. No card chrome by default; a tiny
+ * mono prefix sits inline before a larger mono number.
+ *
+ *   real-time  41 chains
+ *   median     127 ms
+ */
+export function StatTile({
+  label,
+  value,
+  tone = 'default',
+  delta,
+  unit,
+  className,
+  layout = 'stack',
+}: StatTileProps) {
+  if (layout === 'inline') {
+    return (
+      <div className={cn('flex items-baseline gap-2', className)}>
+        <span className="tf-stat-prefix">{label}</span>
+        <span className={cn('tf-stat-value', toneColor[tone])}>
           {value}
+          {unit && <span className="text-[14px] text-[var(--text-tertiary)] ml-1">{unit}</span>}
         </span>
-        {unit && <span className="text-[11px] text-[var(--text-tertiary)] font-mono">{unit}</span>}
+      </div>
+    )
+  }
+  return (
+    <div className={cn('flex flex-col gap-1.5', className)}>
+      <span className="tf-stat-prefix uppercase tracking-[0.2em]">{label}</span>
+      <div className="flex items-baseline gap-1.5">
+        <span className={cn('tf-stat-value', toneColor[tone])}>{value}</span>
+        {unit && <span className="text-[12px] text-[var(--text-tertiary)] font-mono">{unit}</span>}
       </div>
       {delta !== undefined && (
         <span

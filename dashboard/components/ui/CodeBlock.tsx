@@ -6,10 +6,15 @@ interface CodeBlockProps {
   code: string
   lang?: string
   className?: string
-  /** Removes the copy affordance for purely-illustrative blocks. */
   noCopy?: boolean
 }
 
+/**
+ * Terminal-style code block. Aligned with taifoon.io's prompt aesthetic —
+ * a JetBrains Mono header strip with a `$` prompt and language tag, plus
+ * a copy affordance. No traffic lights (those felt out of place against
+ * the parent brand's stricter terminal vibe).
+ */
 export function CodeBlock({ code, lang, className, noCopy }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
 
@@ -26,18 +31,16 @@ export function CodeBlock({ code, lang, className, noCopy }: CodeBlockProps) {
   return (
     <div
       className={cn(
-        'relative group rounded-[var(--r-md)] border border-[var(--border-default)]',
-        'bg-[var(--bg-raised)] overflow-hidden',
+        'relative rounded-[var(--r-sm)] border border-[var(--border-default)]',
+        'bg-[var(--bg-elevated)] overflow-hidden',
         className,
       )}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
-        <div className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]/70" />
-          <span className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]/70" />
-          <span className="w-2.5 h-2.5 rounded-full bg-[#27C93F]/70" />
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)]">
+        <div className="flex items-center gap-3">
+          <span className="text-[var(--brand-blue)] font-mono text-[11px]">$</span>
           {lang && (
-            <span className="ml-2 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
+            <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--text-tertiary)]">
               {lang}
             </span>
           )}
@@ -45,9 +48,9 @@ export function CodeBlock({ code, lang, className, noCopy }: CodeBlockProps) {
         {!noCopy && (
           <button
             onClick={onCopy}
-            className="text-[10px] font-mono uppercase tracking-wider text-[var(--text-tertiary)] hover:text-[var(--brand-cyan)] transition-colors"
+            className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--text-tertiary)] hover:text-[var(--brand-blue)] transition-colors"
           >
-            {copied ? '✓ copied' : 'copy'}
+            {copied ? '[ COPIED ]' : '[ COPY ]'}
           </button>
         )}
       </div>

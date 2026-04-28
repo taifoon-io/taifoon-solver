@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { NavBar, Footer, Card, CardHeader, Stepper, StepBody, Button, Badge, CodeBlock } from '@/components/ui'
+import { NavBar, Footer, Card, CardHeader, Stepper, StepBody, Button, CodeBlock, Tag } from '@/components/ui'
 import { protocolColors } from '@/lib/tokens'
 
 const STEPS = [
@@ -98,12 +98,15 @@ taifoon-cli run \\
       <NavBar />
       <main className="flex-1">
         <div className="max-w-[920px] mx-auto px-6 py-12">
-          <div className="mb-8">
-            <Badge tone="violet">Onboarding</Badge>
-            <h1 className="mt-3 text-3xl font-bold tracking-tight">Spin up your solver</h1>
-            <p className="mt-2 text-[var(--text-secondary)] max-w-[560px]">
-              Four steps. About five minutes. End state: a registered solver pod
-              that you can monitor live in the portal.
+          <div className="mb-10">
+            <Tag>Onboarding</Tag>
+            <h1 className="tf-display tf-gradient-silver mt-4 text-[clamp(2rem,4vw,3rem)]">
+              Spin up your spinner.
+            </h1>
+            <p className="mt-3 text-[var(--text-secondary)] max-w-[560px] leading-relaxed">
+              Four phases. About five minutes. End state: a registered
+              spinner pod, on-chain on Base + Solana, that you can monitor
+              live in the portal.
             </p>
           </div>
 
@@ -316,7 +319,7 @@ taifoon-cli run \\
                 disabled={step === 0}
                 onClick={() => setStep((s) => Math.max(0, s - 1))}
               >
-                ← Back
+                ← BACK
               </Button>
               {step < STEPS.length - 1 ? (
                 <Button
@@ -324,15 +327,15 @@ taifoon-cli run \\
                   disabled={!canAdvance}
                   onClick={() => setStep((s) => s + 1)}
                 >
-                  Continue →
+                  CONTINUE →
                 </Button>
               ) : (
                 <Button
-                  variant="glow"
+                  variant="mint"
                   size="md"
                   onClick={() => router.push(`/portal/${solverId.replace('spinr_', '')}`)}
                 >
-                  Open my solver
+                  OPEN MY SPINNER →
                 </Button>
               )}
             </div>

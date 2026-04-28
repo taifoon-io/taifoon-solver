@@ -2,11 +2,9 @@
  * solver.taifoon.dev — Design tokens (TypeScript export)
  * Mirrors the CSS custom properties in app/globals.css.
  *
- * Use these when:
- *  - You need a color in inline styles for dynamic values (e.g. protocol pills).
- *  - You're computing animation durations programmatically.
- *
- * Prefer `var(--token-name)` in CSS / className wherever possible.
+ * Aligned with taifoon.io: pure-black canvas, single azure accent #3DA5FF,
+ * soft #E6F0F7 ink. Solana-flavored secondary accents (#14F195 mint,
+ * #9945FF violet) used sparingly for solver-specific moments.
  */
 
 export const tokens = {
@@ -28,28 +26,30 @@ export const tokens = {
     disabled: 'var(--text-disabled)',
   },
   brand: {
-    cyan: '#00D9FF',
-    cyanDim: '#00A6C4',
+    blue: '#3DA5FF',
+    blueDim: '#2787DB',
+    blueSoft: 'rgba(61, 165, 255, 0.12)',
+  },
+  solana: {
+    mint: '#14F195',
     violet: '#9945FF',
-    violetDim: '#7A33D6',
-    glow: '#14F195',
   },
   semantic: {
-    success: '#00FF88',
-    warning: '#FFB800',
-    danger: '#FF3366',
-    info: '#00D9FF',
+    success: '#14F195',
+    warning: '#FFB454',
+    danger: '#FF6B6B',
+    info: '#3DA5FF',
   },
 } as const
 
 export const protocolColors: Record<string, string> = {
-  across: '#00D9FF',
-  debridge: '#FF6B2B',
-  dln: '#FF6B2B',
+  across: '#3DA5FF',
+  debridge: '#FF8A4C',
+  dln: '#FF8A4C',
   mayan: '#9945FF',
   lifi: '#F1C40F',
   orbiter: '#95A5A6',
-  stargate: '#1AC8ED',
+  stargate: '#6BC8FF',
   t3rn: '#14F195',
   wormhole: '#FE5E68',
   cctp: '#2775CA',
@@ -57,7 +57,7 @@ export const protocolColors: Record<string, string> = {
   connext: '#7B61FF',
   synapse: '#FF00BD',
   celer: '#00BFA6',
-  axelar: '#1F2330',
+  axelar: '#A0A0B0',
   hyperlane: '#FF7DBC',
   layerzero: '#A0A0B0',
   socket: '#5A6FF0',
@@ -83,7 +83,6 @@ export const chainNames: Record<number, string> = {
   534352: 'Scroll',
   100: 'Gnosis',
   250: 'Fantom',
-  // Solana-flavored synthetic IDs the indexer uses
   900: 'Solana',
   901: 'Solana Devnet',
 }

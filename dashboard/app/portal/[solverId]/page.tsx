@@ -14,7 +14,7 @@ import {
   ProtoStats,
   LiveEvent,
 } from '@/hooks/useSolverEvents'
-import { NavBar, Footer, Card, CardHeader, Badge, StatTile, Button } from '@/components/ui'
+import { NavBar, Footer, Card, CardHeader, Badge, StatTile, Button, Tag } from '@/components/ui'
 
 // ── Chain badge ──────────────────────────────────────────────────────────────
 function Chain({ id }: { id: number }) {
@@ -265,62 +265,64 @@ export default function SolverMonitorPage({ params }: PageProps) {
       <main className="flex-1">
         {/* Solver header */}
         <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
-          <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-3">
+          <div className="max-w-[1400px] mx-auto px-6 py-5 flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-4">
               <Link
                 href="/portal"
-                className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] text-xs"
+                className="font-mono text-[11px] tracking-[0.2em] uppercase text-[var(--text-tertiary)] hover:text-[var(--brand-blue)] transition-colors"
               >
-                ← Portal
+                ← PORTAL
               </Link>
               <span className="text-[var(--border-default)]">/</span>
-              <span className="font-mono text-sm text-[var(--text-primary)]">
-                solver_<span className="text-[var(--brand-violet)]">{solverId}</span>
+              <span className="font-mono text-[13px] tracking-[0.08em] text-[var(--text-primary)]">
+                spinner_<span className="text-[var(--brand-blue)]">{solverId}</span>
               </span>
-              <Badge tone={connected ? 'success' : 'neutral'} dot pulse={connected}>
-                {connected ? 'LIVE' : 'connecting'}
+              <Badge tone={connected ? 'mint' : 'neutral'} dot pulse={connected}>
+                {connected ? 'LIVE' : 'CONNECTING'}
               </Badge>
-              <Badge tone="violet">5 protocols</Badge>
+              <Badge tone="info">5 PROTOCOLS</Badge>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                P&amp;L today
-              </span>
-              <span className="font-mono text-sm font-bold text-[var(--success)]">
-                ${(stats?.net_profit_today_usd ?? 0).toFixed(4)}
-              </span>
+            <div className="flex items-center gap-4">
+              <div className="flex items-baseline gap-2">
+                <span className="font-mono text-[10px] tracking-[0.2em] uppercase text-[var(--text-tertiary)]">
+                  P&amp;L today
+                </span>
+                <span className="font-mono text-[14px] text-[var(--solana-mint)]">
+                  ${(stats?.net_profit_today_usd ?? 0).toFixed(4)}
+                </span>
+              </div>
               <Button variant="secondary" size="sm">
-                Pause
+                PAUSE
               </Button>
               <Button variant="ghost" size="sm">
-                Logs
+                LOGS
               </Button>
             </div>
           </div>
         </div>
 
         {/* Stats row */}
-        <div className="max-w-[1400px] mx-auto grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 px-6 py-4">
-          <StatTile label="Intents" value={stats?.total_intents ?? intents.length} />
-          <StatTile label="Dry runs" value={dryRuns} tone="warning" />
-          <StatTile label="Confirmed" value={confirmed} tone="success" />
-          <StatTile label="Skipped" value={skipped} />
-          <StatTile label="Fills" value={stats?.executed_fills ?? 0} tone="success" />
-          <StatTile label="Failed" value={stats?.failed_fills ?? 0} tone="danger" />
+        <div className="max-w-[1400px] mx-auto grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-x-8 gap-y-4 px-6 py-6 border-b border-[var(--border-subtle)]">
+          <StatTile label="INTENTS" value={stats?.total_intents ?? intents.length} />
+          <StatTile label="DRY RUNS" value={dryRuns} tone="warning" />
+          <StatTile label="CONFIRMED" value={confirmed} tone="mint" />
+          <StatTile label="SKIPPED" value={skipped} />
+          <StatTile label="FILLS" value={stats?.executed_fills ?? 0} tone="mint" />
+          <StatTile label="FAILED" value={stats?.failed_fills ?? 0} tone="danger" />
           <StatTile
-            label="Success"
+            label="SUCCESS"
             value={`${((stats?.success_rate ?? 0) * 100).toFixed(0)}%`}
-            tone="cyan"
+            tone="blue"
           />
-          <StatTile label="Latency" value={`${stats?.latency_ms ?? 0}`} unit="ms" tone="violet" />
+          <StatTile label="LATENCY" value={`${stats?.latency_ms ?? 0}`} unit="ms" tone="blue" />
         </div>
 
         {/* Main content */}
         <div className="max-w-[1400px] mx-auto grid grid-cols-1 lg:grid-cols-3 gap-3 px-6 pb-12">
           <div className="lg:col-span-2 space-y-3">
             <Card padding="sm">
-              <div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-[0.18em] mb-2 px-1">
-                Lambda Lifecycle
+              <div className="px-1 mb-2">
+                <Tag>Lambda lifecycle</Tag>
               </div>
               <div className="flex flex-wrap gap-2">
                 {(
@@ -343,10 +345,8 @@ export default function SolverMonitorPage({ params }: PageProps) {
 
             <Card padding="none">
               <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
-                <span className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-[0.18em]">
-                  Intent Stream
-                </span>
-                <span className="text-xs text-[var(--text-tertiary)] font-mono">
+                <Tag>Intent stream</Tag>
+                <span className="font-mono text-[10px] tracking-[0.16em] text-[var(--text-tertiary)]">
                   {intents.length} tracked
                 </span>
               </div>
