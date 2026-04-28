@@ -418,6 +418,197 @@ pub struct GenomeClient {
     client: reqwest::Client,
 }
 
+/// Across REST poller — fills the gap when the genome SSE stream does not emit
+/// `entity: "proto"` deposit events. Polls the Across V3 deposits API every
+/// `poll_interval_secs` seconds for each destination chain and synthesizes
+/// `Intent` objects directly from the API response.
+///
+/// Spawned as a background task by `GenomeClient::subscribe_with_pollers`.
+pub struct AcrossPoller {
+    /// Destination chain IDs to poll (e.g. [8453, 10, 42161]).
+    pub dst_chains: Vec<u64>,
+    /// Poll interval in seconds.
+    pub poll_interval_secs: u64,
+    /// Max deposits per chain per poll.
+    pub limit: usize,
+}
+
+impl AcrossPoller {
+    pub fn default_mainnet() -> Self {
+        Self {
+            dst_chains: vec![8453, 10, 42161, 1, 56],
+            poll_interval_secs: 8,
+            limit: 20,
+        }
+    }
+
+    /// Run forever, sending fillable Across intents to `intent_tx`.
+    /// Tracks seen depositIds in a local set to avoid re-emitting.
+    pub async fn run(self, intent_tx: tokio::sync::mpsc::Sender<Intent>) {
+        use std::collections::HashSet;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+            .unwrap_or_default();
+        let mut seen: HashSet<i64> = HashSet::new();
+
+        loop {
+            for &dst_chain in &self.dst_chains {
+                let url = format!(
+                    "https://app.across.to/api/deposits?status=unfilled&destinationChainId={}&limit={}",
+                    dst_chain, self.limit
+                );
+                let Ok(resp) = client.get(&url).send().await else {
+                    continue;
+                };
+                let Ok(deps) = resp.json::<Vec<serde_json::Value>>().await else {
+                    continue;
+                };
+
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+
+                for dep in deps {
+                    let dep_id = match dep.get("depositId").and_then(|v| v.as_i64()) {
+                        Some(id) => id,
+                        None => continue,
+                    };
+                    if !seen.insert(dep_id) {
+                        continue;
+                    }
+
+                    // Exclusivity check: skip if exclusiveRelayer is set and deadline hasn't passed
+                    let excl = dep.get("exclusiveRelayer")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0x0000000000000000000000000000000000000000");
+                    let is_exclusive = !excl.is_empty()
+                        && excl != "0x0000000000000000000000000000000000000000";
+                    if is_exclusive {
+                        let excl_deadline = dep.get("exclusivityDeadline")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| chrono_unix_from_iso(s))
+                            .unwrap_or(0);
+                        if excl_deadline > now_secs {
+                            continue; // still exclusive
+                        }
+                    }
+
+                    // Fill deadline: skip if < 60s remaining
+                    let fill_deadline_unix = dep.get("fillDeadline")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| chrono_unix_from_iso(s))
+                        .unwrap_or(0);
+                    if fill_deadline_unix > 0 && fill_deadline_unix - now_secs < 60 {
+                        continue;
+                    }
+
+                    let intent = across_deposit_to_intent(&dep, dst_chain, dep_id, fill_deadline_unix);
+                    info!("📡 AcrossPoller: depositId={} {}→{} outAmt={}",
+                        dep_id, intent.src_chain, intent.dst_chain, intent.amount);
+
+                    if intent_tx.send(intent).await.is_err() {
+                        return; // receiver dropped
+                    }
+                }
+
+                // Stagger chain polls slightly to avoid hitting rate limits
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
+        }
+    }
+}
+
+fn chrono_unix_from_iso(s: &str) -> Option<i64> {
+    // Handles both ISO 8601 ("2026-04-28T12:00:00Z") and raw unix int strings ("1745678400")
+    if let Ok(n) = s.parse::<i64>() {
+        return Some(n);
+    }
+    // Try ISO 8601
+    let clean = s.replace('Z', "+00:00");
+    // Manual parse: "2026-04-28T12:00:00+00:00"
+    if clean.len() >= 19 {
+        let date_part = &clean[..10]; // "2026-04-28"
+        let time_part = &clean[11..19]; // "12:00:00"
+        let ymd: Vec<u32> = date_part.split('-').filter_map(|x| x.parse().ok()).collect();
+        let hms: Vec<u32> = time_part.split(':').filter_map(|x| x.parse().ok()).collect();
+        if ymd.len() == 3 && hms.len() == 3 {
+            // Compute unix timestamp manually (accurate for dates ~2020-2040)
+            let year = ymd[0] as i64;
+            let month = ymd[1] as i64;
+            let day = ymd[2] as i64;
+            // Days since epoch
+            let y = if month <= 2 { year - 1 } else { year };
+            let m = if month <= 2 { month + 9 } else { month - 3 };
+            let jdn = 365 * y + y / 4 - y / 100 + y / 400
+                + (153 * m + 2) / 5 + day - 719469;
+            let secs = jdn * 86400
+                + hms[0] as i64 * 3600
+                + hms[1] as i64 * 60
+                + hms[2] as i64;
+            return Some(secs);
+        }
+    }
+    None
+}
+
+fn across_deposit_to_intent(
+    dep: &serde_json::Value,
+    dst_chain: u64,
+    dep_id: i64,
+    fill_deadline_unix: i64,
+) -> Intent {
+    let src_chain = dep.get("originChainId").and_then(|v| v.as_u64()).unwrap_or(1);
+    let depositor = dep.get("depositor").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+    let recipient = dep.get("recipient").and_then(|v| v.as_str())
+        .unwrap_or(&depositor).to_string();
+    let input_token = dep.get("inputToken").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+    let output_token = dep.get("outputToken").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+    let input_amount = dep.get("inputAmount").and_then(|v| v.as_str())
+        .or_else(|| dep.get("inputAmount").and_then(|v| v.as_u64()).map(|_| "0"))
+        .unwrap_or("0").to_string();
+    let output_amount = dep.get("outputAmount").and_then(|v| v.as_str())
+        .unwrap_or("0").to_string();
+    let tx_hash = dep.get("depositTxHash").and_then(|v| v.as_str())
+        .or_else(|| dep.get("txHash").and_then(|v| v.as_str()))
+        .unwrap_or("0x").to_string();
+    let excl_relayer = dep.get("exclusiveRelayer").and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let excl_deadline = dep.get("exclusivityDeadline")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono_unix_from_iso(s))
+        .map(|v| v as u32);
+    let message = dep.get("message").and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Intent {
+        id: format!("across_v3:dep:{}", dep_id),
+        protocol: "across_v3".to_string(),
+        src_chain,
+        dst_chain,
+        src_token: input_token.clone(),
+        dst_token: output_token.clone(),
+        amount: input_amount.clone(),
+        depositor: depositor.clone(),
+        recipient: recipient.clone(),
+        tx_hash,
+        output_amount: Some(output_amount),
+        deposit_id: Some(dep_id),
+        fill_deadline: if fill_deadline_unix > 0 { Some(fill_deadline_unix as u32) } else { None },
+        exclusivity_deadline: excl_deadline,
+        exclusive_relayer: excl_relayer,
+        message,
+        detected_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        ..Default::default()
+    }
+}
+
 impl GenomeClient {
     /// Create new genome client
     pub fn new(sse_url: impl Into<String>) -> Self {
@@ -425,6 +616,23 @@ impl GenomeClient {
             sse_url: sse_url.into(),
             client: reqwest::Client::new(),
         }
+    }
+
+    /// Subscribe to genome stream AND spawn protocol pollers in parallel.
+    ///
+    /// Use this instead of `subscribe` when the genome SSE stream does not emit
+    /// `entity: "proto"` deposit events. The Across poller runs alongside the SSE
+    /// consumer and feeds intents from the Across REST API into the same channel.
+    pub async fn subscribe_with_pollers(
+        &self,
+        intent_tx: mpsc::Sender<Intent>,
+        pollers: Vec<AcrossPoller>,
+    ) -> Result<()> {
+        for poller in pollers {
+            let tx = intent_tx.clone();
+            tokio::spawn(async move { poller.run(tx).await });
+        }
+        self.subscribe(intent_tx).await
     }
 
     /// Subscribe to genome stream and send intents to channel
