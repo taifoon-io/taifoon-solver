@@ -181,6 +181,7 @@ impl SolverApi {
             .route("/api/solver/protocols", get(protocols_handler))
             .route("/api/solver/money-flow", get(money_flow_handler))
             .route("/api/solver/razor", get(razor_handler))
+            .route("/api/solver/portfolio", get(portfolio_handler))
             .layer(tower_http::cors::CorsLayer::permissive())
             .with_state(self.state.clone())
     }
@@ -471,4 +472,264 @@ async fn fetch_razor_for_chain(state: &ApiState, chain_id: u64) -> RazorGasPrese
             }
         }
     }
+}
+
+// ── Portfolio endpoint ───────────────────────────────────────────────────────
+
+const BALANCE_OF_SELECTOR: &str = "70a08231";
+const SOLANA_USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChainInventory {
+    pub chain_id: u64,
+    pub chain_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_eth: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_sol: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usdc: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usdt: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weth: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PortfolioFillStats {
+    pub confirmed: u64,
+    pub reverted: u64,
+    pub active: u64,
+    pub total_volume_usd: f64,
+    pub realized_profit_usd: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PortfolioResponse {
+    pub solver_address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solana_address: Option<String>,
+    pub chains: Vec<ChainInventory>,
+    pub fills: PortfolioFillStats,
+    pub as_of: DateTime<Utc>,
+}
+
+async fn eth_balance_f64(client: &reqwest::Client, rpc: &str, addr: &str) -> Option<f64> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "eth_getBalance",
+        "params": [addr, "latest"]
+    });
+    let hex = client.post(rpc).json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await.ok()?
+        .json::<serde_json::Value>().await.ok()?
+        ["result"].as_str()?.to_string();
+    let wei = u128::from_str_radix(hex.trim_start_matches("0x"), 16).ok()?;
+    Some(wei as f64 / 1e18)
+}
+
+async fn erc20_balance_f64(
+    client: &reqwest::Client,
+    rpc: &str,
+    token: &str,
+    addr: &str,
+    decimals: u32,
+) -> Option<f64> {
+    let padded = format!("000000000000000000000000{}", addr.trim_start_matches("0x"));
+    let data = format!("0x{}{}", BALANCE_OF_SELECTOR, padded);
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "eth_call",
+        "params": [{"to": token, "data": data}, "latest"]
+    });
+    let hex = client.post(rpc).json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await.ok()?
+        .json::<serde_json::Value>().await.ok()?
+        ["result"].as_str()?.to_string();
+    if hex == "0x" || hex.len() < 3 { return Some(0.0); }
+    let raw = u128::from_str_radix(hex.trim_start_matches("0x"), 16).ok()?;
+    Some(raw as f64 / 10f64.powi(decimals as i32))
+}
+
+async fn sol_balances_f64(client: &reqwest::Client, rpc: &str, pubkey: &str) -> (Option<f64>, Option<f64>) {
+    // SOL native balance
+    let sol: Option<f64> = async {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "method": "getBalance",
+            "params": [pubkey]
+        });
+        let lamports = client.post(rpc).json(&body)
+            .timeout(std::time::Duration::from_secs(5))
+            .send().await.ok()?
+            .json::<serde_json::Value>().await.ok()?
+            ["result"]["value"].as_u64()?;
+        Some(lamports as f64 / 1e9)
+    }.await;
+
+    // USDC SPL token balance
+    let usdc: Option<f64> = async {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2,
+            "method": "getTokenAccountsByOwner",
+            "params": [pubkey, {"mint": SOLANA_USDC_MINT}, {"encoding": "jsonParsed"}]
+        });
+        let data = client.post(rpc).json(&body)
+            .timeout(std::time::Duration::from_secs(5))
+            .send().await.ok()?
+            .json::<serde_json::Value>().await.ok()?;
+        let accounts = data["result"]["value"].as_array()?;
+        let total: f64 = accounts.iter().filter_map(|a| {
+            a["account"]["data"]["parsed"]["info"]["tokenAmount"]["uiAmount"].as_f64()
+        }).sum();
+        Some(total)
+    }.await;
+
+    (sol, usdc)
+}
+
+/// Load chain wiring from CHAIN_WIRING_PATH env or the default relative path.
+fn load_chain_wiring_for_portfolio() -> Vec<(u64, String, String)> {
+    // Returns (chain_id, chain_name, rpc_url) tuples for mainnet chains
+    let path = std::env::var("CHAIN_WIRING_PATH")
+        .unwrap_or_else(|_| "config/chain_wiring.json".to_string());
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let v: serde_json::Value = match serde_json::from_str(&contents) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let obj = match v.as_object() { Some(o) => o, None => return Vec::new() };
+    let mut out = Vec::new();
+    for (key, val) in obj {
+        if key.starts_with('_') { continue; }
+        let chain_id: u64 = match key.parse() { Ok(n) => n, Err(_) => continue };
+        let name = val["_chain"].as_str().unwrap_or(key.as_str()).to_string();
+        if name.contains("Sepolia") || name.contains("Devnet") || name.contains("Testnet") { continue; }
+        let rpc = match val["rpc_url"].as_str() { Some(r) => r.to_string(), None => continue };
+        out.push((chain_id, name, rpc));
+    }
+    out
+}
+
+fn token_addrs_for_chain(chain_id: u64) -> (Option<&'static str>, Option<&'static str>, Option<&'static str>) {
+    match chain_id {
+        1 => (
+            Some("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+            Some("0xdAC17F958D2ee523a2206206994597C13D831ec7"),
+            Some("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
+        ),
+        10 => (
+            Some("0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"),
+            None,
+            Some("0x4200000000000000000000000000000000000006"),
+        ),
+        137 => (
+            Some("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
+            None,
+            Some("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),
+        ),
+        8453 => (
+            Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+            None,
+            Some("0x4200000000000000000000000000000000000006"),
+        ),
+        42161 => (
+            Some("0xaf88d065e77c8cC2239327C5EDb3A432268e5831"),
+            Some("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
+            Some("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"),
+        ),
+        59144 => (
+            Some("0x176211869cA2b568f2A7D4EE941E073a821EE1ff"),
+            None,
+            None,
+        ),
+        _ => (None, None, None),
+    }
+}
+
+async fn portfolio_handler(
+    State(state): State<Arc<ApiState>>,
+) -> impl IntoResponse {
+    let solver_addr = std::env::var("SOLVER_ADDRESS")
+        .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string());
+    let solana_addr = std::env::var("SOLANA_ADDRESS").ok();
+
+    let client = &state.http_client;
+
+    // Load chains from chain_wiring.json; fall back to hardcoded defaults if unavailable
+    let wired = load_chain_wiring_for_portfolio();
+    let chain_list: Vec<(u64, String, String)> = if wired.is_empty() {
+        vec![
+            (1, "Ethereum".into(), "https://ethereum-rpc.publicnode.com".into()),
+            (10, "Optimism".into(), "https://optimism-rpc.publicnode.com".into()),
+            (137, "Polygon".into(), "https://polygon-rpc.com".into()),
+            (8453, "Base".into(), "https://base-rpc.publicnode.com".into()),
+            (42161, "Arbitrum".into(), "https://arbitrum-one-rpc.publicnode.com".into()),
+            (59144, "Linea".into(), "https://linea-rpc.publicnode.com".into()),
+        ]
+    } else {
+        wired
+    };
+
+    let mut chains = Vec::with_capacity(chain_list.len() + 1);
+
+    for (chain_id, chain_name, rpc) in &chain_list {
+        let native = eth_balance_f64(client, rpc, &solver_addr).await;
+        let (usdc_addr, usdt_addr, weth_addr) = token_addrs_for_chain(*chain_id);
+        let usdc = if let Some(t) = usdc_addr {
+            erc20_balance_f64(client, rpc, t, &solver_addr, 6).await
+        } else { None };
+        let usdt = if let Some(t) = usdt_addr {
+            erc20_balance_f64(client, rpc, t, &solver_addr, 6).await
+        } else { None };
+        let weth = if let Some(t) = weth_addr {
+            erc20_balance_f64(client, rpc, t, &solver_addr, 18).await
+        } else { None };
+        chains.push(ChainInventory {
+            chain_id: *chain_id,
+            chain_name: chain_name.clone(),
+            native_eth: native,
+            native_sol: None,
+            usdc,
+            usdt,
+            weth,
+        });
+    }
+
+    // Solana balance
+    if let Some(ref pubkey) = solana_addr {
+        let (sol, usdc) = sol_balances_f64(client, "https://api.mainnet-beta.solana.com", pubkey).await;
+        chains.push(ChainInventory {
+            chain_id: 1_399_811_149,
+            chain_name: "Solana".into(),
+            native_eth: None,
+            native_sol: sol,
+            usdc,
+            usdt: None,
+            weth: None,
+        });
+    }
+
+    let stats = state.stats.read().await;
+    let fills = PortfolioFillStats {
+        confirmed: stats.executed_fills,
+        reverted: stats.failed_fills,
+        active: 0,
+        total_volume_usd: 0.0,
+        realized_profit_usd: stats.net_profit_today_usd,
+    };
+    drop(stats);
+
+    Json(PortfolioResponse {
+        solver_address: solver_addr,
+        solana_address: solana_addr,
+        chains,
+        fills,
+        as_of: Utc::now(),
+    })
 }

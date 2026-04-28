@@ -191,6 +191,20 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Show multi-chain inventory: USDC/USDT/WETH balances + fill P&L
+    ///
+    /// Queries live RPC for Base, Optimism, and Arbitrum balances,
+    /// and reports fill stats from the wallet-manager SQLite ledger.
+    ///
+    /// Example:
+    /// $ taifoon portfolio --private-key 0x...
+    /// $ taifoon portfolio --private-key 0x... --json
+    Portfolio {
+        /// Private key to derive solver address
+        #[arg(long, env = "SOLVER_PRIVATE_KEY")]
+        private_key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -398,6 +412,15 @@ async fn main() -> Result<()> {
                 solver_id,
                 force,
                 json_mode: cli.json,
+            })
+            .await
+        }
+
+        Commands::Portfolio { private_key } => {
+            commands::portfolio::run(commands::portfolio::PortfolioArgs {
+                private_key,
+                json_mode: cli.json,
+                spinner_url: cli.spinner_url,
             })
             .await
         }

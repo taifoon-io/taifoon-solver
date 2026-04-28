@@ -23,6 +23,9 @@ colored = "2"
 toml = "0.8"
 dirs = "5"
 
+rusqlite = { workspace = true }
+futures = "0.3"
+
 # Local crates
 genome-client = { path = "../genome-client" }
 protocol-adapters = { path = "../protocol-adapters" }
