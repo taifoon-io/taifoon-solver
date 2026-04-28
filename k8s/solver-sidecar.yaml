@@ -1,0 +1,69 @@
+# Per-solver sidecar Deployment template.
+#
+# One pod per solver_id, lives in namespace `solvers`. The registration
+# webhook (k8s/register-webhook.sh) substitutes ${SOLVER_ID} and applies.
+#
+# Required Secret (created by webhook before apply):
+#   kubectl -n solvers create secret generic solver-${SOLVER_ID} \
+#     --from-literal=SOLVER_PRIVATE_KEY=0x... \
+#     --from-literal=CHAIN_WIRING_JSON='{...}'
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: solvers
+  labels:
+    app.kubernetes.io/part-of: taifoon
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: solver-${SOLVER_ID}
+  namespace: solvers
+  labels:
+    app: taifoon-solver
+    solver_id: "${SOLVER_ID}"
+    app.kubernetes.io/part-of: taifoon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taifoon-solver
+      solver_id: "${SOLVER_ID}"
+  template:
+    metadata:
+      labels:
+        app: taifoon-solver
+        solver_id: "${SOLVER_ID}"
+    spec:
+      containers:
+        - name: solver-main
+          image: taifoon-solver:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SOLVER_ID
+              value: "${SOLVER_ID}"
+            - name: RUST_LOG
+              value: "info"
+            - name: GENOME_SSE_URL
+              value: "https://api.taifoon.dev/api/genome/subscribe/sse"
+            - name: MIN_PROFIT_USD
+              value: "1.0"
+            - name: SOLVER_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: solver-${SOLVER_ID}
+                  key: SOLVER_PRIVATE_KEY
+            - name: CHAIN_WIRING_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: solver-${SOLVER_ID}
+                  key: CHAIN_WIRING_JSON
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      restartPolicy: Always

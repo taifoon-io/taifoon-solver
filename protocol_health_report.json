@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-26T23:31:32.575585",
+  "timestamp": "2026-04-27T00:23:07.615192",
   "stats": {
-    "total_validated": 51,
+    "total_validated": 42,
     "total_passed": 0,
-    "total_failed": 12,
-    "total_warnings": 39,
-    "start_time": "2026-04-26T23:31:20.589096"
+    "total_failed": 10,
+    "total_warnings": 32,
+    "start_time": "2026-04-27T00:22:56.011359"
   },
   "protocols": {
     "across_v3_intents": {
@@ -14,7 +14,7 @@
       "passed": 0,
       "failed": 1,
       "warnings": 4,
-      "last_check": "2026-04-26T23:31:26.576246",
+      "last_check": "2026-04-27T00:23:01.616150",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
@@ -25,18 +25,18 @@
       "passed": 0,
       "failed": 0,
       "warnings": 0,
-      "last_check": "2026-04-26T23:31:20.589947",
+      "last_check": "2026-04-27T00:22:56.012441",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
     },
     "hyperlane_intents": {
       "protocol": "hyperlane_intents",
-      "total": 6,
+      "total": 0,
       "passed": 0,
       "failed": 0,
-      "warnings": 6,
-      "last_check": "2026-04-26T23:31:26.576237",
+      "warnings": 0,
+      "last_check": "2026-04-27T00:22:56.012492",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
@@ -47,7 +47,7 @@
       "passed": 0,
       "failed": 0,
       "warnings": 0,
-      "last_check": "2026-04-26T23:31:20.590047",
+      "last_check": "2026-04-27T00:22:56.012531",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
@@ -58,18 +58,18 @@
       "passed": 0,
       "failed": 3,
       "warnings": 14,
-      "last_check": "2026-04-26T23:31:32.575347",
+      "last_check": "2026-04-27T00:23:07.614965",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
     },
     "orbiter_finance_intents": {
       "protocol": "orbiter_finance_intents",
-      "total": 19,
+      "total": 16,
       "passed": 0,
-      "failed": 7,
-      "warnings": 12,
-      "last_check": "2026-04-26T23:31:32.575381",
+      "failed": 5,
+      "warnings": 11,
+      "last_check": "2026-04-27T00:23:07.614997",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
@@ -80,7 +80,7 @@
       "passed": 0,
       "failed": 0,
       "warnings": 0,
-      "last_check": "2026-04-26T23:31:20.590246",
+      "last_check": "2026-04-27T00:22:56.012922",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
@@ -91,7 +91,7 @@
       "passed": 0,
       "failed": 1,
       "warnings": 3,
-      "last_check": "2026-04-26T23:31:26.576168",
+      "last_check": "2026-04-27T00:23:01.616075",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []
@@ -102,7 +102,7 @@
       "passed": 0,
       "failed": 0,
       "warnings": 0,
-      "last_check": "2026-04-26T23:31:20.590333",
+      "last_check": "2026-04-27T00:22:56.013020",
       "pass_rate": 0.0,
       "critical_issues": [],
       "unsupported_chains": []

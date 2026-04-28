@@ -9,6 +9,7 @@ use tracing::{info, warn};
 pub mod across_executor;
 pub mod estimate;
 pub mod evm_estimate;
+pub mod lambda_controller;
 pub mod lifi_meta_router;
 pub mod mayan_evm_estimate;
 pub mod mayan_solana_estimate;
@@ -24,6 +25,10 @@ pub use estimate::{
 pub use evm_estimate::{
     default_across_spoke_pools, default_debridge_dln_addresses, default_rpc_for_chain,
     resolve_rpc_url, run_evm_estimate, AcrossEstimateAdapter, DeBridgeEstimateAdapter,
+};
+pub use lambda_controller::{
+    build_execute_with_proof_calldata, claim_selector, intent_amount_usd, LambdaClaimOutcome,
+    LambdaController, LambdaExecuteOutcome,
 };
 pub use lifi_meta_router::LiFiMetaRouter;
 pub use mayan_evm_estimate::{default_mayan_swift_addresses, MayanEvmEstimateAdapter};
@@ -66,6 +71,7 @@ impl Executor {
     pub fn new() -> Result<Self> {
         // Load configuration from environment
         let simulation_mode = std::env::var("SIMULATION_MODE")
+            .or_else(|_| std::env::var("DRY_RUN"))
             .unwrap_or_else(|_| "true".to_string())
             .parse()
             .unwrap_or(true);
@@ -92,8 +98,9 @@ impl Executor {
         };
 
         // Initialize protocol adapter factory
-        let spinner_api_url = std::env::var("SPINNER_API_URL")
-            .unwrap_or_else(|_| "http://46.4.96.124:30081".to_string());
+        let spinner_api_url = std::env::var("WARMBED_API_URL")
+            .or_else(|_| std::env::var("SPINNER_API_URL"))
+            .unwrap_or_else(|_| "https://api.taifoon.dev".to_string());
 
         let adapter_factory = AdapterFactory::new(&spinner_api_url);
 

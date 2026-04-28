@@ -21,6 +21,8 @@ genome-client = { path = "../genome-client" }
 profit-calc = { path = "../profit-calc" }
 executor = { path = "../executor" }
 solver-api = { path = "../solver-api" }
+taifoon-arb-bridge = { path = "../taifoon-arb-bridge" }
+wallet-manager = { path = "../wallet-manager" }
 tokio.workspace = true
 axum.workspace = true
 anyhow.workspace = true

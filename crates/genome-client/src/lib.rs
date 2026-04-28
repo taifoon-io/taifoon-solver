@@ -51,6 +51,9 @@ pub struct GenomeEvent {
     /// Timestamp
     #[serde(default, alias = "timestamp")]
     pub ts: Option<u64>,
+    /// Genome snapshot batch id (unix timestamp, top-level field on every event).
+    #[serde(default)]
+    pub batch_id: Option<u64>,
     /// Protocol name (for order entities)
     pub protocol: Option<String>,
     /// Order ID (for order entities)
@@ -119,6 +122,20 @@ pub struct GenomeEvent {
     /// Lets the executor pick the SVM path without re-checking chain ids.
     #[serde(default)]
     pub is_solana_source: Option<bool>,
+
+    // ── Across V3 relay parameters needed for fillV3Relay ─────────────────────
+    /// Across V3 fillDeadline (unix seconds). Must match the on-chain deposit.
+    #[serde(default)]
+    pub fill_deadline: Option<u32>,
+    /// Across V3 exclusivityDeadline (unix seconds, 0 = no exclusive relayer).
+    #[serde(default)]
+    pub exclusivity_deadline: Option<u32>,
+    /// Across V3 exclusiveRelayer address (0x0 = no exclusive relayer).
+    #[serde(default)]
+    pub exclusive_relayer: Option<String>,
+    /// Across V3 message (hex bytes, "0x" = empty).
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 impl GenomeEvent {
@@ -244,6 +261,23 @@ pub struct Intent {
     /// True when the source chain is Solana.
     #[serde(default)]
     pub is_solana_source: Option<bool>,
+
+    // ── Across V3 relay parameters ─────────────────────────────────────────────
+    /// fillDeadline from the Across V3 deposit event (unix seconds).
+    #[serde(default)]
+    pub fill_deadline: Option<u32>,
+    /// exclusivityDeadline from the Across V3 deposit event (0 = none).
+    #[serde(default)]
+    pub exclusivity_deadline: Option<u32>,
+    /// exclusiveRelayer from the Across V3 deposit event ("0x0..." = none).
+    #[serde(default)]
+    pub exclusive_relayer: Option<String>,
+    /// message from the Across V3 deposit event (hex, "0x" = empty).
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Genome snapshot batch_id — used as batchId in executeVerifiedCall V1.
+    #[serde(default)]
+    pub batch_id: Option<u64>,
 }
 
 impl Intent {
@@ -259,17 +293,28 @@ impl Intent {
         // Support both input_amount (new) and amount (old) - with fallback to skip intent
         let protocol_name = event.protocol.as_ref().or(event.id.as_ref()).map(|s| s.as_str()).unwrap_or("unknown");
 
-        let amount = event.input_amount
+        let amount_raw = event.input_amount
             .clone()
             .or_else(|| {
-                // Genome stream might send "amount" instead of "input_amount" for older protocols
                 warn!("⚠️  Protocol '{}' missing 'input_amount', this intent will be skipped", protocol_name);
                 None
             })
             .context(format!("Missing input_amount field for protocol '{}' - genome stream data incomplete", protocol_name))?;
 
-        let depositor = event
-            .depositor.clone()
+        // Guard against sentinel values that exceed u128::MAX.
+        // LiFi proto/deposit events occasionally set input_amount to a bytes32/address field,
+        // producing numbers > 2^128 that crash profit_calc with parse-overflow errors.
+        if amount_raw.parse::<u128>().is_err() {
+            anyhow::bail!(
+                "Protocol '{}' input_amount '{}...' overflows u128 — skipping (likely address/bytes32 misread as amount)",
+                protocol_name, &amount_raw[..amount_raw.len().min(40)]
+            );
+        }
+        let amount = amount_raw;
+
+        let depositor = event.depositor.clone()
+            // deBridge order events use 'maker' instead of 'depositor' — fall back.
+            .or_else(|| event.trader.clone())
             .context("Missing depositor in genome event")?;
 
         // Recipient may be optional in some protocols
@@ -356,6 +401,11 @@ impl Intent {
             vault_account: event.vault_account,
             compute_units_estimate: event.compute_units_estimate,
             is_solana_source: event.is_solana_source,
+            fill_deadline: event.fill_deadline,
+            exclusivity_deadline: event.exclusivity_deadline,
+            exclusive_relayer: event.exclusive_relayer,
+            message: event.message,
+            batch_id: event.batch_id,
         })
     }
 }
@@ -465,6 +515,13 @@ impl GenomeClient {
         // Accept both "proto" (old format) and "order" (new multi-protocol format)
         // Filter for deposit/placed/executed actions (cross-chain intent initiated)
         if genome_event.entity != "proto" && genome_event.entity != "order" {
+            // Log every non-infra entity so we can discover deBridge/Mayan event shapes.
+            let e = &genome_event.entity;
+            if e != "block" && e != "gas" && e != "superroot" && e != "finality" {
+                info!("🔎 UNKNOWN entity='{}' action='{}' protocol={:?} id={:?} addr={}",
+                    genome_event.entity, genome_event.action,
+                    genome_event.protocol, genome_event.id, genome_event.addr);
+            }
             return None;
         }
 
@@ -472,8 +529,20 @@ impl GenomeClient {
         if genome_event.action != "deposit"
             && genome_event.action != "placed"
             && genome_event.action != "executed" {
+            // Log unknown actions on proto/order entities — may reveal deBridge shapes.
+            info!("🔎 UNKNOWN action='{}' entity='{}' protocol={:?} id={:?} addr={}",
+                genome_event.action, genome_event.entity,
+                genome_event.protocol, genome_event.id, genome_event.addr);
             return None;
         }
+
+        // Log all matching protocol events at info level so we can see bridge/tool fields.
+        info!("🔍 genome proto event: entity={} action={} protocol={:?} id={:?} bridge={:?} tool={:?} src={}→dst={} addr={}",
+            genome_event.entity, genome_event.action,
+            genome_event.protocol, genome_event.id,
+            genome_event.bridge, genome_event.tool,
+            genome_event.src_chain.unwrap_or(0), genome_event.dst_chain.unwrap_or(0),
+            genome_event.addr);
 
         // Convert to Intent
         match Intent::from_genome_event(genome_event) {
@@ -498,14 +567,14 @@ mod tests {
             "id": "lifi_v2",
             "action": "deposit",
             "chain_id": 1,
-            "ref": "0xabc123",
+            "ref_hash": "0xabc123",
             "src_chain": 1,
             "dst_chain": 42161,
             "depositor": "0xuser123",
             "recipient": "0xuser123",
-            "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            "amount": "1000000000",
-            "timestamp": 1745678400
+            "src_token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "input_amount": "1000000000",
+            "ts": 1745678400
         }"#;
 
         let genome_event: GenomeEvent = serde_json::from_str(event_json).unwrap();

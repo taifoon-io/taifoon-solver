@@ -339,21 +339,31 @@ impl ProfitCalculator {
 
         tracing::debug!("🔍 Detecting decimals for token: {} on chain {}", addr_lower, chain_id);
 
-        // Common stablecoins (6 decimals)
-        let is_usdc = addr_lower == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" || // USDC mainnet
-                      addr_lower == "0xaf88d065e77c8cc2239327c5edb3a432268e5831" || // USDC Arbitrum
-                      addr_lower == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" || // USDC Base
-                      addr_lower == "0x0b2c639c533813f4aa9d7837caf62653d097ff85" || // USDC Optimism
-                      addr_lower == "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" || // USDC Polygon
-                      addr_lower == "usdc" || addr_lower == "native";
-
-        let is_usdt = addr_lower == "0xdac17f958d2ee523a2206206994597c13d831ec7" || // USDT mainnet
-                      addr_lower == "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" || // USDT Arbitrum
-                      addr_lower == "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58" || // USDT Optimism
-                      addr_lower == "0x55d398326f99059ff775485246999027b3197955" || // USDT BSC
-                      addr_lower == "0x049d68029688eabf473097a2fc38ef61633a3c7a";   // USDT Fantom
-
-        if is_usdc || is_usdt {
+        // 6-decimal stablecoins (USDC / USDT across all chains)
+        const SIX_DEC: &[&str] = &[
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC mainnet
+            "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // USDC Arbitrum native
+            "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", // USDC.e Arbitrum bridged
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // USDC Base
+            "0x0b2c639c533813f4aa9d7837caf62653d097ff85", // USDC Optimism native
+            "0x7f5c764cbc14f9669b88837ca1490cca17c31607", // USDC.e Optimism bridged
+            "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", // USDC Polygon native
+            "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", // USDC.e Polygon bridged
+            "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", // USDC Linea
+            "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // USDC Scroll
+            "0x2a22f9c3b484c3629090feed35f17ff8f88f76f0", // USDC.e Gnosis
+            "0xddafbb505ad214d7b80b1f830fccc89b60fb7a83", // USDC native Gnosis
+            "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238", // USDC Sepolia
+            "0x036cbd53842c5426634e7929541ec2318f3dcf7e", // USDC Base Sepolia
+            "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT mainnet
+            "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USDT Arbitrum
+            "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT Optimism
+            "0x55d398326f99059ff775485246999027b3197955", // USDT BSC
+            "0x049d68029688eabf473097a2fc38ef61633a3c7a", // USDT Fantom
+            "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon
+            "usdc", "usdt",
+        ];
+        if SIX_DEC.contains(&addr_lower.as_str()) {
             tracing::info!("✅ Detected 6-decimal stablecoin: {}", addr_lower);
             return 6;
         }
@@ -367,19 +377,35 @@ impl ProfitCalculator {
     fn get_token_price(&self, token_addr: &str, chain_id: u64) -> f64 {
         let addr_lower = token_addr.to_lowercase();
 
-        // Stablecoins (USDC, USDT, DAI, etc.)
-        let is_stablecoin = addr_lower == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" || // USDC mainnet
-                            addr_lower == "0xaf88d065e77c8cc2239327c5edb3a432268e5831" || // USDC Arbitrum
-                            addr_lower == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" || // USDC Base
-                            addr_lower == "0x0b2c639c533813f4aa9d7837caf62653d097ff85" || // USDC Optimism
-                            addr_lower == "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" || // USDC Polygon
-                            addr_lower == "0xdac17f958d2ee523a2206206994597c13d831ec7" || // USDT mainnet
-                            addr_lower == "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" || // USDT Arbitrum
-                            addr_lower == "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58" || // USDT Optimism
-                            addr_lower == "0x55d398326f99059ff775485246999027b3197955" || // USDT BSC
-                            addr_lower == "0x049d68029688eabf473097a2fc38ef61633a3c7a" || // USDT Fantom
-                            addr_lower == "usdc" || addr_lower == "usdt" ||
-                            (addr_lower == "native" && token_addr.len() < 10);
+        // Stablecoins (USDC, USDT, DAI, etc.) — reuse the same 6-dec list
+        const STABLECOINS: &[&str] = &[
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+            "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+            "0x7f5c764cbc14f9669b88837ca1490cca17c31607",
+            "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+            "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+            "0x176211869ca2b568f2a7d4ee941e073a821ee1ff",
+            "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4",
+            "0x2a22f9c3b484c3629090feed35f17ff8f88f76f0",
+            "0xddafbb505ad214d7b80b1f830fccc89b60fb7a83",
+            "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
+            "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+            "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58",
+            "0x55d398326f99059ff775485246999027b3197955",
+            "0x049d68029688eabf473097a2fc38ef61633a3c7a",
+            "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+            // DAI
+            "0x6b175474e89094c44da98b954eedeac495271d0f",
+            "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", // DAI Arbitrum
+            "0xe91d153e0b41518a2ce8dd3d7944fa863463a97d", // WXDAI Gnosis
+            "usdc", "usdt", "dai",
+        ];
+        let is_stablecoin = STABLECOINS.contains(&addr_lower.as_str());
 
         if is_stablecoin {
             tracing::info!("💵 Token price: $1.00 (stablecoin)");

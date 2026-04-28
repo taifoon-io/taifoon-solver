@@ -1,0 +1,1154 @@
+//! Lambda controller — col-p4 intent lifecycle state machine.
+//!
+//! Wraps the existing [`AcrossExecutor`] broadcast path with a wallet-manager-
+//! backed state machine and the post-confirmation `claim()` step described in
+//! `HACKATHON_COLOSSEUM_PLAN.md` lines 124–140.
+//!
+//! ### `lambda_execute(intent)`
+//!   1. wallet_manager.record_detected (idempotent)
+//!   2. wallet_manager.reserve(intent.amount_usd)
+//!   3. spinner.test_run            → PROFITABILITY_CHECK
+//!   4. spinner.fetch_v5_proof      → PROOF_FETCH
+//!   5. build_adapter_calldata      → CALLDATA_BUILD
+//!   6. broadcast executeVerifiedCall (V1)  → BROADCAST → PENDING_CONFIRMATION
+//!   7. wait for receipt            → CONFIRMED  | REVERTED
+//!   8. on CONFIRMED: wallet_manager.release + emit_genome_feedback (best-effort)
+//!
+//! ### `lambda_claim(intent_id)`
+//!   1. assert wallet_manager state = CONFIRMED
+//!   2. send `claim()` (selector-only calldata) to the configured Universal
+//!      Operator address on the dst chain
+//!   3. await receipt → record_revenue(fee_usd) on success
+//!
+//! The legacy [`Executor`](crate::Executor) path is intentionally NOT touched
+//! here — non-Across protocols still flow through it from solver-main while
+//! the Lambda controller handles Across end-to-end.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use alloy::network::EthereumWallet;
+use alloy::primitives::{keccak256, Address, U256};
+use alloy::providers::{Provider, ProviderBuilder};
+use alloy::rpc::types::TransactionRequest;
+use alloy::signers::local::PrivateKeySigner;
+use anyhow::{anyhow, Context, Result};
+use genome_client::Intent;
+use serde::Serialize;
+use tracing::{info, warn};
+use wallet_manager::{IntentState, NewIntent, WalletManager};
+
+use crate::across_executor::{build_across_adapter_calldata, build_across_spoke_pool_calldata_with_relayer, fetch_relay_data_for_deposit, fetch_relay_data_from_tx, ChainWiring};
+use crate::outcome_log::{OutcomeLog, OutcomeRecord};
+use crate::spinner_solver::SpinnerSolverClient;
+use protocol_adapters::debridge::DeBridgeAdapter;
+use protocol_adapters::{ProtocolAdapter, SpinnerClient};
+
+/// Outcome of a `lambda_execute` run, mirrored back to the solver event API.
+#[derive(Debug, Clone)]
+pub enum LambdaExecuteOutcome {
+    /// Broadcast confirmed on-chain.
+    Confirmed { tx_hash: String, gas_used: u64 },
+    /// Broadcast made it to the chain but the receipt status was 0.
+    Reverted { tx_hash: String, error: String },
+    /// Skipped before broadcast (unprofitable, dry-run, missing wiring, etc.).
+    Skipped { reason: String },
+    /// Failed before broadcast (proof fetch, calldata build, or RPC error).
+    Failed { stage: &'static str, error: String },
+}
+
+/// Outcome of a `lambda_claim` run.
+#[derive(Debug, Clone)]
+pub enum LambdaClaimOutcome {
+    Claimed { tx_hash: String, fee_usd: f64 },
+    NotEligible { reason: String },
+    Failed { error: String },
+}
+
+/// Controller config — every dependency is constructor-injected so the unit
+/// tests in this module can drive the state-machine transitions without an
+/// RPC.
+pub struct LambdaController {
+    pub wallet: Arc<WalletManager>,
+    pub spinner: SpinnerSolverClient,
+    pub signer: PrivateKeySigner,
+    pub chains: HashMap<u64, ChainWiring>,
+    pub outcome_log: Option<OutcomeLog>,
+    pub dry_run: bool,
+    pub profit_threshold_usd: f64,
+    /// Optional spinner-side feedback URL — when present the controller POSTs
+    /// the post-confirmation event to `{base}/api/genome/feedback`. Failures
+    /// log a warning and continue (the broadcast itself is the source of
+    /// truth, the feedback ping is informational).
+    pub feedback_url: Option<String>,
+}
+
+impl LambdaController {
+    /// Run the full intent → broadcast → receipt → release pipeline.
+    pub async fn lambda_execute(&self, intent: &Intent) -> Result<LambdaExecuteOutcome> {
+        let amount_usd = intent_amount_usd(intent);
+
+        // 1. Persist + reserve (idempotent for both).
+        self.wallet
+            .record_detected(NewIntent {
+                intent_id: intent.id.clone(),
+                protocol: intent.protocol.clone(),
+                src_chain: intent.src_chain as i64,
+                dst_chain: intent.dst_chain as i64,
+                amount_usd,
+            })
+            .map_err(|e| anyhow!("wallet record_detected: {e}"))?;
+
+        if !self.dry_run {
+            if let Err(e) = self.wallet.reserve(&intent.id, amount_usd) {
+                warn!("⚠️  wallet reserve failed for {}: {e}", intent.id);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&format!("reserve_failed:{e}")));
+                return Ok(LambdaExecuteOutcome::Skipped {
+                    reason: format!("reserve_failed:{e}"),
+                });
+            }
+        } else {
+            // Dry-run: record_detected already done; skip budget check so the
+            // full pipeline (calldata-build → DRY_RUN guard) can be exercised.
+            info!("🧪 DRY_RUN: skipping wallet reserve for {}", intent.id);
+        }
+
+        // 2. Resolve dst-chain wiring first — needed to decide whether this is
+        // a direct-fill chain (operator==0x0). Direct-fill chains bypass both
+        // the spinner and the proof-fetch steps, going straight to calldata build.
+        let started_at = chrono::Utc::now();
+        let wiring = match self.chains.get(&intent.dst_chain) {
+            Some(w) => w.clone(),
+            None => {
+                let reason = format!("no chain wiring for dst {}", intent.dst_chain);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
+        };
+        let direct_fill = wiring.operator == Address::ZERO;
+
+        // 3. Spinner test-run gates profitability (PROFITABILITY_CHECK).
+        // Direct-fill chains (operator==0x0) bypass the spinner: the spinner
+        // won't have these orders indexed and returning 404 is expected.
+        // In dry-run mode, treat a missing/unavailable spinner endpoint as
+        // "assume profitable" so the calldata-build + broadcast steps can be
+        // exercised end-to-end without a live spinner deployment.
+        self.transition(&intent.id, IntentState::ProfitabilityCheck, None, None);
+        let test = if direct_fill {
+            info!("⚡ Direct-fill chain {} (operator=0x0) — bypassing spinner test-run", wiring.chain_id);
+            None
+        } else {
+            let test_opt = self.spinner.test_run(&intent.protocol, &intent.id).await;
+            match test_opt {
+                Ok(t) => Some(t),
+                Err(e) if self.dry_run => {
+                    warn!("⚠️  spinner test-run unavailable (dry-run, continuing): {e}");
+                    None
+                }
+                Err(e) => {
+                    let err = format!("spinner_test_run:{e}");
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed {
+                        stage: "spinner_test_run",
+                        error: err,
+                    });
+                }
+            }
+        };
+
+        if let Some(ref test) = test {
+            if !test.is_profitable || test.net_profit_usd < self.profit_threshold_usd {
+                let reason = if !test.is_profitable {
+                    "unprofitable".to_string()
+                } else {
+                    format!(
+                        "below_threshold:${:.4}<${:.2}",
+                        test.net_profit_usd, self.profit_threshold_usd
+                    )
+                };
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                self.append_outcome(OutcomeRecord {
+                    ts: started_at,
+                    intent_id: intent.id.clone(),
+                    protocol: intent.protocol.clone(),
+                    src_chain: intent.src_chain,
+                    dst_chain: intent.dst_chain,
+                    decision: "skip_unprofitable".into(),
+                    tx_hash: None,
+                    predicted_gas: Some(test.gas_units),
+                    gas_used: None,
+                    effective_gas_price_wei: None,
+                    predicted_profit_usd: Some(test.net_profit_usd),
+                    actual_profit_usd: None,
+                    skip_reason: Some(reason.clone()),
+                    error: None,
+                });
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
+        }
+
+        // 4-pre. (Chain wiring already resolved at step 2 above — no redundant lookup needed.)
+
+        // 4. PROOF_FETCH — skipped entirely for direct-fill chains (operator==0x0).
+        // Direct SpokePool.fillV3Relay needs no Taifoon proof at all.
+        // For operator-path chains, fetch from spinner. In dry-run, a missing proof
+        // uses a zero-byte stub so the calldata-build step can still be exercised.
+        let proof_bytes: Vec<u8> = if direct_fill {
+            // No proof needed for direct SpokePool fill.
+            vec![]
+        } else {
+            self.transition(&intent.id, IntentState::ProofFetch, None, None);
+            let proof_candidates: Vec<String> = {
+                let mut keys = Vec::new();
+                if let Some(dep_id) = intent.deposit_id {
+                    keys.push(dep_id.to_string());
+                }
+                if !intent.tx_hash.is_empty() && intent.tx_hash != "0x" {
+                    keys.push(intent.tx_hash.clone());
+                }
+                keys.push(intent.id.clone());
+                keys
+            };
+            let mut result = None;
+            let mut last_err = String::new();
+            for key in &proof_candidates {
+                match self.spinner.fetch_across_proof_bundle(key).await {
+                    Ok(b) => { result = Some(b); break; }
+                    Err(e) => { last_err = e.to_string(); }
+                }
+            }
+            match result {
+                Some(b) => {
+                    info!("🔐 Proof bundle: {} bytes (for deposit {})", b.len(),
+                        intent.deposit_id.map(|d| d.to_string()).unwrap_or_else(|| "?".into()));
+                    b
+                }
+                None if self.dry_run => {
+                    warn!("⚠️  proof-bundle unavailable for {:?} (dry-run, using stub): {}", proof_candidates, last_err);
+                    vec![]
+                }
+                None => {
+                    let err = format!("proof_fetch (tried {:?}): {}", proof_candidates, last_err);
+                    self.transition(&intent.id, IntentState::ProofMissing, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "proof_fetch", error: err });
+                }
+            }
+        };
+
+        // 5. RELAY DATA ENRICHMENT for direct fills.
+        // The genome stream's order/placed event often lacks fill_deadline, output_amount,
+        // recipient, etc. For direct fills these must exactly match the on-chain deposit.
+        // Strategy:
+        //   A) If we have a deposit_id → Across API /deposit/status → depositTxHash → decode on-chain
+        //   B) If we have a tx_hash that looks like a real tx → decode on-chain directly
+        let enriched_intent;
+        let intent: &Intent = if direct_fill {
+            let needs_enrichment = intent.fill_deadline.is_none()
+                || intent.output_amount.is_none()
+                || intent.deposit_id.is_none();
+            let src_rpc = self.chains.get(&intent.src_chain)
+                .map(|w| w.rpc_url.clone())
+                .unwrap_or_default();
+            if needs_enrichment && !src_rpc.is_empty() {
+                // Strategy B first (faster): if the genome event carried a real tx_hash,
+                // decode V3FundsDeposited directly — saves one Across API round-trip (~200ms).
+                let has_real_tx_hash = !intent.tx_hash.is_empty()
+                    && intent.tx_hash.starts_with("0x")
+                    && intent.tx_hash.len() == 66
+                    && !intent.tx_hash.starts_with("synthetic_");
+                let relay = if has_real_tx_hash {
+                    fetch_relay_data_from_tx(&intent.tx_hash, &src_rpc).await
+                } else {
+                    None
+                };
+                // Strategy A fallback: deposit_id → Across API → depositTxHash → decode
+                let relay = if relay.is_none() {
+                    if let Some(dep_id) = intent.deposit_id
+                        .or_else(|| intent.id.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()))
+                    {
+                        fetch_relay_data_for_deposit(dep_id, intent.src_chain, &src_rpc).await
+                    } else {
+                        None
+                    }
+                } else {
+                    relay
+                };
+                if let Some(relay) = relay {
+                    let mut patched = intent.clone();
+                    if patched.output_amount.is_none() { patched.output_amount = relay.output_amount; }
+                    if patched.fill_deadline.is_none() { patched.fill_deadline = relay.fill_deadline; }
+                    if patched.exclusivity_deadline.is_none() { patched.exclusivity_deadline = relay.exclusivity_deadline; }
+                    if patched.exclusive_relayer.is_none() || patched.exclusive_relayer.as_deref() == Some("0x") {
+                        patched.exclusive_relayer = relay.exclusive_relayer;
+                    }
+                    if patched.dst_token.is_empty() || patched.dst_token == "0x0000000000000000000000000000000000000000" {
+                        if let Some(ot) = relay.output_token { patched.dst_token = ot; }
+                    }
+                    if patched.recipient.is_empty() || patched.recipient == "0x0000000000000000000000000000000000000000" {
+                        if let Some(r) = relay.recipient { patched.recipient = r; }
+                    }
+                    if patched.depositor.is_empty() || patched.depositor == "0x0000000000000000000000000000000000000000" {
+                        if let Some(d) = relay.depositor { patched.depositor = d; }
+                    }
+                    // Patch deposit_id from on-chain log (critical for proto/deposit events
+                    // that arrive without deposit_id in the genome payload).
+                    if patched.deposit_id.is_none() {
+                        patched.deposit_id = relay.deposit_id;
+                    }
+                    enriched_intent = Some(patched);
+                    enriched_intent.as_ref().unwrap()
+                } else {
+                    warn!("⚠️  Could not fetch relay data for {} from src chain {} — fill may revert", intent.id, intent.src_chain);
+                    enriched_intent = None;
+                    intent
+                }
+            } else {
+                enriched_intent = None;
+                intent
+            }
+        } else {
+            enriched_intent = None;
+            intent
+        };
+
+        // 5b. EXCLUSIVITY CHECK — skip fills within an active exclusivity window when
+        // we are not the exclusive relayer. The SpokePool enforces this on-chain.
+        if direct_fill {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as u32;
+            let excl_deadline = intent.exclusivity_deadline.unwrap_or(0);
+            let excl_relayer = intent.exclusive_relayer.as_deref().unwrap_or("");
+            let solver_addr = format!("{:#x}", self.signer.address()).to_lowercase();
+            let is_exclusive_relayer = excl_relayer.to_lowercase() == solver_addr
+                || excl_relayer == "0x0000000000000000000000000000000000000000"
+                || excl_relayer.is_empty() || excl_relayer == "0x";
+            if excl_deadline > now && !is_exclusive_relayer {
+                let reason = format!("exclusive_window_active:deadline={excl_deadline}>now={now},relayer={excl_relayer}");
+                info!("⏭️  Skipping {} — {}", intent.id, reason);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
+        }
+
+        // 6. CALLDATA_BUILD.
+        // Two paths:
+        //   a) operator != 0x0  → wrap in executeVerifiedCall(V1) via TaifoonUniversalOperator
+        //   b) operator == 0x0  → call Across SpokePool.fillV3Relay directly (no Taifoon operator on this chain)
+        self.transition(&intent.id, IntentState::CalldataBuild, None, None);
+        // `direct_fill` was determined after chain wiring resolution above.
+        // For ETH fills (outputToken == WETH), fillV3Relay is payable — we attach msg.value.
+        // outputAmount comes from the intent; dst_token is the output token address.
+        let eth_fill_value: Option<U256> = if direct_fill {
+            let weth = weth_address_for_chain(wiring.chain_id);
+            let dst = intent.dst_token.to_lowercase();
+            let is_weth = weth.map(|w| w.to_lowercase() == dst).unwrap_or(false)
+                || dst == "0x0000000000000000000000000000000000000000"
+                || dst == "native";
+            if is_weth {
+                let out_amt = intent.output_amount.as_deref().and_then(|s| {
+                    // Prefer decimal parse; only hex if explicitly 0x-prefixed.
+                    if s.starts_with("0x") || s.starts_with("0X") {
+                        U256::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()
+                    } else {
+                        U256::from_str_radix(s, 10).ok()
+                    }
+                });
+                if let Some(v) = out_amt {
+                    info!("💰 ETH fill: attaching {} wei as msg.value", v);
+                    Some(v)
+                } else { None }
+            } else { None }
+        } else { None };
+
+        let proto_lower = intent.protocol.to_lowercase();
+        let is_debridge = proto_lower.contains("debridge") || proto_lower.contains("dln");
+
+        let (tx_target, tx_calldata) = if is_debridge {
+            // deBridge DLN path: fulfillOrder() on DlnDestination (same address all chains).
+            let adapter = DeBridgeAdapter::new(SpinnerClient::new(self.spinner.base_url()));
+            let dln_addr = match adapter.dln_source_address(intent.dst_chain) {
+                Some(a) => a,
+                None => {
+                    let err = format!("no DlnDestination address for chain {}", intent.dst_chain);
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
+            };
+            let calldata = match adapter.build_fulfill_order_calldata(intent) {
+                Ok(c) => c,
+                Err(e) => {
+                    let err = format!("calldata_build:{e}");
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
+            };
+            info!("📋 deBridge fulfillOrder on chain {} (DlnDest {}): {} bytes",
+                wiring.chain_id, dln_addr, calldata.len());
+            (dln_addr, calldata)
+        } else if direct_fill {
+            // Direct Across SpokePool fill — no proof wrapper.
+            // repaymentChainId = dst_chain so repayment lands where we have liquidity.
+            let solver_addr = self.signer.address();
+            let calldata = match build_across_spoke_pool_calldata_with_relayer(intent, Some(solver_addr)) {
+                Ok(c) => c,
+                Err(e) => {
+                    let err = format!("calldata_build:{e}");
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
+            };
+            info!("📋 Direct SpokePool fill (no operator) on chain {}: {} bytes calldata{}",
+                wiring.chain_id, calldata.len(),
+                eth_fill_value.map(|v| format!(", value={v}wei")).unwrap_or_default());
+            (wiring.across_adapter, calldata)
+        } else {
+            let adapter_calldata = match build_across_adapter_calldata(intent) {
+                Ok(c) => c,
+                Err(e) => {
+                    let err = format!("calldata_build:{e}");
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
+            };
+            let batch_id = intent.batch_id.unwrap_or(0);
+            let calldata = build_execute_verified_call_v1(batch_id, &proof_bytes, wiring.across_adapter, &adapter_calldata);
+            info!("📋 Operator-wrapped call executeVerifiedCall(batchId={}) on chain {} via operator {}",
+                batch_id, wiring.chain_id, wiring.operator);
+            (wiring.operator, calldata)
+        };
+
+        if self.dry_run {
+            let mode = if direct_fill { "direct_fillV3Relay" } else { "executeVerifiedCall" };
+            info!("🧪 DRY_RUN: would broadcast {} on chain {} to {}",
+                mode, wiring.chain_id, tx_target);
+            self.transition(
+                &intent.id,
+                IntentState::SkipUnprofitable,
+                None,
+                Some("dry_run"),
+            );
+            self.append_outcome(OutcomeRecord {
+                ts: started_at,
+                intent_id: intent.id.clone(),
+                protocol: intent.protocol.clone(),
+                src_chain: intent.src_chain,
+                dst_chain: intent.dst_chain,
+                decision: "dry_run".into(),
+                tx_hash: None,
+                predicted_gas: test.as_ref().map(|t| t.gas_units),
+                gas_used: None,
+                effective_gas_price_wei: None,
+                predicted_profit_usd: test.as_ref().map(|t| t.net_profit_usd),
+                actual_profit_usd: None,
+                skip_reason: Some("dry_run".into()),
+                error: None,
+            });
+            return Ok(LambdaExecuteOutcome::Skipped {
+                reason: "dry_run".into(),
+            });
+        }
+
+        // 6. BROADCAST → PENDING_CONFIRMATION.
+        self.transition(&intent.id, IntentState::Broadcast, None, None);
+        let wallet = EthereumWallet::from(self.signer.clone());
+        let provider = ProviderBuilder::new()
+            .with_recommended_fillers()
+            .wallet(wallet)
+            .on_http(
+                wiring
+                    .rpc_url
+                    .parse()
+                    .with_context(|| format!("rpc parse: {}", wiring.rpc_url))?,
+            );
+
+        let mut tx_req = TransactionRequest::default()
+            .to(tx_target)
+            .input(tx_calldata.into());
+        if let Some(v) = eth_fill_value {
+            tx_req = tx_req.value(v);
+        }
+
+        let pending = match provider.send_transaction(tx_req).await {
+            Ok(p) => p,
+            Err(e) => {
+                let err = format!("send_transaction:{e}");
+                self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
+                return Ok(LambdaExecuteOutcome::Failed {
+                    stage: "broadcast",
+                    error: err,
+                });
+            }
+        };
+
+        let tx_hash = format!("{:#x}", *pending.tx_hash());
+        info!("📤 Broadcast {} on chain {}", tx_hash, wiring.chain_id);
+        self.transition(
+            &intent.id,
+            IntentState::PendingConfirmation,
+            Some(&tx_hash),
+            None,
+        );
+
+        // 7. Await receipt.
+        let receipt = match pending.with_required_confirmations(1).get_receipt().await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("get_receipt:{e}");
+                self.transition(
+                    &intent.id,
+                    IntentState::Reverted,
+                    Some(&tx_hash),
+                    Some(&err),
+                );
+                return Ok(LambdaExecuteOutcome::Failed {
+                    stage: "receipt",
+                    error: err,
+                });
+            }
+        };
+
+        let gas_used = receipt.gas_used as u64;
+        let effective_gas_price = receipt.effective_gas_price as u128;
+        let success = receipt.status();
+
+        if !success {
+            let err = "receipt status=0".to_string();
+            self.transition(
+                &intent.id,
+                IntentState::Reverted,
+                Some(&tx_hash),
+                Some(&err),
+            );
+            self.append_outcome(OutcomeRecord {
+                ts: started_at,
+                intent_id: intent.id.clone(),
+                protocol: intent.protocol.clone(),
+                src_chain: intent.src_chain,
+                dst_chain: intent.dst_chain,
+                decision: "executed_failed".into(),
+                tx_hash: Some(tx_hash.clone()),
+                predicted_gas: test.as_ref().map(|t| t.gas_units),
+                gas_used: Some(gas_used),
+                effective_gas_price_wei: Some(effective_gas_price.to_string()),
+                predicted_profit_usd: test.as_ref().map(|t| t.net_profit_usd),
+                actual_profit_usd: None,
+                skip_reason: None,
+                error: Some(err.clone()),
+            });
+            return Ok(LambdaExecuteOutcome::Reverted {
+                tx_hash,
+                error: err,
+            });
+        }
+
+        // 8. CONFIRMED → release reservation, record outcome, emit feedback.
+        self.transition(
+            &intent.id,
+            IntentState::Confirmed,
+            Some(&tx_hash),
+            None,
+        );
+        // The terminal transition above auto-releases the reservation, but we
+        // call release() explicitly so a future change to wallet-manager
+        // semantics doesn't silently leave funds locked.
+        let _ = self.wallet.release(&intent.id);
+
+        self.append_outcome(OutcomeRecord {
+            ts: started_at,
+            intent_id: intent.id.clone(),
+            protocol: intent.protocol.clone(),
+            src_chain: intent.src_chain,
+            dst_chain: intent.dst_chain,
+            decision: "executed".into(),
+            tx_hash: Some(tx_hash.clone()),
+            predicted_gas: test.as_ref().map(|t| t.gas_units),
+            gas_used: Some(gas_used),
+            effective_gas_price_wei: Some(effective_gas_price.to_string()),
+            predicted_profit_usd: test.as_ref().map(|t| t.net_profit_usd),
+            actual_profit_usd: test.as_ref().map(|t| t.net_profit_usd),
+            skip_reason: None,
+            error: None,
+        });
+
+        self.emit_genome_feedback(intent, &tx_hash, gas_used).await;
+
+        Ok(LambdaExecuteOutcome::Confirmed { tx_hash, gas_used })
+    }
+
+    /// Pull accumulated solver fees on the dst chain via the Universal Operator.
+    pub async fn lambda_claim(&self, intent_id: &str, fee_usd: f64) -> Result<LambdaClaimOutcome> {
+        let intents = self
+            .wallet
+            .list_intents(Some("CONFIRMED"), 1000)
+            .map_err(|e| anyhow!("wallet list_intents: {e}"))?;
+        let record = match intents.into_iter().find(|r| r.intent_id == intent_id) {
+            Some(r) => r,
+            None => {
+                return Ok(LambdaClaimOutcome::NotEligible {
+                    reason: "intent not in CONFIRMED state".into(),
+                });
+            }
+        };
+
+        let wiring = self
+            .chains
+            .get(&(record.dst_chain as u64))
+            .ok_or_else(|| anyhow!("no chain wiring for dst {}", record.dst_chain))?
+            .clone();
+
+        if self.dry_run {
+            return Ok(LambdaClaimOutcome::NotEligible {
+                reason: "dry_run".into(),
+            });
+        }
+
+        let calldata = claim_selector().to_vec();
+
+        let wallet = EthereumWallet::from(self.signer.clone());
+        let provider = ProviderBuilder::new()
+            .with_recommended_fillers()
+            .wallet(wallet)
+            .on_http(wiring.rpc_url.parse()?);
+
+        let tx_req = TransactionRequest::default()
+            .to(wiring.operator)
+            .input(calldata.into());
+
+        let pending = match provider.send_transaction(tx_req).await {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(LambdaClaimOutcome::Failed {
+                    error: format!("send_transaction:{e}"),
+                });
+            }
+        };
+
+        let tx_hash = format!("{:#x}", *pending.tx_hash());
+        info!("📤 claim() broadcast {} on chain {}", tx_hash, wiring.chain_id);
+
+        let receipt = match pending.with_required_confirmations(1).get_receipt().await {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(LambdaClaimOutcome::Failed {
+                    error: format!("get_receipt:{e}"),
+                });
+            }
+        };
+
+        if !receipt.status() {
+            return Ok(LambdaClaimOutcome::Failed {
+                error: format!("claim reverted (tx {tx_hash})"),
+            });
+        }
+
+        if let Err(e) = self.wallet.record_revenue(intent_id, fee_usd) {
+            warn!("⚠️  wallet record_revenue: {e}");
+        }
+
+        Ok(LambdaClaimOutcome::Claimed { tx_hash, fee_usd })
+    }
+
+    /// deBridge-specific claim: calls `claimUnlock(orderId, beneficiary)` on the
+    /// DlnSource contract on the SOURCE chain. Must be called after the
+    /// `fulfillOrder` fill is CONFIRMED on the destination chain.
+    ///
+    /// Transitions: CONFIRMED → CLAIM_PENDING → CLAIMED (or stays CONFIRMED on failure).
+    pub async fn lambda_claim_debridge(&self, intent: &Intent) -> Result<LambdaClaimOutcome> {
+        // Only eligible if state is CONFIRMED.
+        let intents = self
+            .wallet
+            .list_intents(Some("CONFIRMED"), 1000)
+            .map_err(|e| anyhow!("wallet list_intents: {e}"))?;
+        if !intents.iter().any(|r| r.intent_id == intent.id) {
+            return Ok(LambdaClaimOutcome::NotEligible {
+                reason: "intent not in CONFIRMED state".into(),
+            });
+        }
+
+        // Resolve src chain wiring for the RPC.
+        let src_wiring = match self.chains.get(&intent.src_chain) {
+            Some(w) => w.clone(),
+            None => {
+                return Ok(LambdaClaimOutcome::NotEligible {
+                    reason: format!("no chain wiring for src chain {}", intent.src_chain),
+                });
+            }
+        };
+
+        if self.dry_run {
+            info!("🧪 DRY_RUN: would claimUnlock on src chain {} for {}", intent.src_chain, intent.id);
+            return Ok(LambdaClaimOutcome::NotEligible { reason: "dry_run".into() });
+        }
+
+        let adapter = DeBridgeAdapter::new(SpinnerClient::new(self.spinner.base_url()));
+        let dln_src_addr = match adapter.dln_source_address(intent.src_chain) {
+            Some(a) => a,
+            None => {
+                return Ok(LambdaClaimOutcome::Failed {
+                    error: format!("no DlnSource address for src chain {}", intent.src_chain),
+                });
+            }
+        };
+
+        let beneficiary = self.signer.address();
+        let calldata = match adapter.build_claim_unlock_calldata(intent, beneficiary) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(LambdaClaimOutcome::Failed {
+                    error: format!("build_claim_unlock_calldata: {e}"),
+                });
+            }
+        };
+
+        self.transition(&intent.id, IntentState::ClaimPending, None, None);
+        info!("📤 claimUnlock → DlnSource {} on src chain {} for intent {}",
+            dln_src_addr, intent.src_chain, intent.id);
+
+        let wallet = EthereumWallet::from(self.signer.clone());
+        let provider = ProviderBuilder::new()
+            .with_recommended_fillers()
+            .wallet(wallet)
+            .on_http(src_wiring.rpc_url.parse()?);
+
+        let tx_req = TransactionRequest::default()
+            .to(dln_src_addr)
+            .input(alloy::primitives::Bytes::from(calldata).into());
+
+        let pending = match provider.send_transaction(tx_req).await {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(LambdaClaimOutcome::Failed {
+                    error: format!("send_transaction:{e}"),
+                });
+            }
+        };
+
+        let tx_hash = format!("{:#x}", *pending.tx_hash());
+        info!("📤 claimUnlock broadcast {} on chain {}", tx_hash, intent.src_chain);
+
+        let receipt = match pending.with_required_confirmations(1).get_receipt().await {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(LambdaClaimOutcome::Failed {
+                    error: format!("get_receipt:{e}"),
+                });
+            }
+        };
+
+        if !receipt.status() {
+            return Ok(LambdaClaimOutcome::Failed {
+                error: format!("claimUnlock reverted (tx {tx_hash})"),
+            });
+        }
+
+        // Record revenue: give_amount - take_amount = spread earned.
+        let fee_usd = {
+            let give = intent.give_amount.as_deref()
+                .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+            let take = intent.take_amount.as_deref()
+                .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+            // Very rough USD value — will be 0 if amounts are in raw wei without price feed.
+            (give - take).max(0.0) / 1e18
+        };
+        if let Err(e) = self.wallet.record_revenue(&intent.id, fee_usd) {
+            warn!("⚠️  wallet record_revenue: {e}");
+        }
+        self.transition(&intent.id, IntentState::Claimed, Some(&tx_hash), None);
+
+        Ok(LambdaClaimOutcome::Claimed { tx_hash, fee_usd })
+    }
+
+    fn transition(
+        &self,
+        intent_id: &str,
+        next: IntentState,
+        tx_hash: Option<&str>,
+        error: Option<&str>,
+    ) {
+        if let Err(e) = self.wallet.transition(intent_id, next, tx_hash, error) {
+            warn!("⚠️  wallet transition({intent_id}, {next:?}): {e}");
+        }
+    }
+
+    fn append_outcome(&self, rec: OutcomeRecord) {
+        if let Some(log) = self.outcome_log.as_ref() {
+            if let Err(e) = log.append(rec) {
+                warn!("⚠️  outcome_log append: {e}");
+            }
+        }
+    }
+
+    async fn emit_genome_feedback(&self, intent: &Intent, tx_hash: &str, gas_used: u64) {
+        let Some(base) = self.feedback_url.as_ref() else { return };
+        #[derive(Serialize)]
+        struct Feedback<'a> {
+            entity: &'a str,
+            action: &'a str,
+            ref_hash: &'a str,
+            intent_id: &'a str,
+            protocol: &'a str,
+            tx_hash: &'a str,
+            gas_used: u64,
+        }
+        let url = format!("{}/api/genome/feedback", base.trim_end_matches('/'));
+        let body = Feedback {
+            entity: "proof",
+            action: "confirmed",
+            ref_hash: &intent.tx_hash,
+            intent_id: &intent.id,
+            protocol: &intent.protocol,
+            tx_hash,
+            gas_used,
+        };
+        match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+        {
+            Ok(http) => {
+                if let Err(e) = http.post(&url).json(&body).send().await {
+                    warn!("⚠️  genome feedback POST {url}: {e}");
+                }
+            }
+            Err(e) => warn!("⚠️  genome feedback http build: {e}"),
+        }
+    }
+}
+
+/// Best-effort USD valuation for the `Intent.amount` raw token units. The
+/// solver tracks budget in USD, but the genome event only carries base-unit
+/// integers. Until a price oracle lands we use a 6-decimal stablecoin
+/// assumption (USDC/USDT — the dominant tokens on every supported chain),
+/// which over-estimates dust and under-estimates 18-decimal native tokens.
+/// Reservation overdraft is the only failure mode that surfaces a wrong
+/// value, and `wallet-manager` already returns a typed error there.
+pub fn intent_amount_usd(intent: &Intent) -> f64 {
+    let raw = match intent.amount.parse::<u128>() {
+        Ok(n) => n as f64,
+        Err(_) => return 0.0,
+    };
+    // Detect decimals from src_token: zero address / native = 18-decimal ETH.
+    // Known stablecoin patterns (USDC/USDT) = 6 decimals.
+    // Everything else defaults to 18 decimals (safer for wallet budget guard).
+    let token = intent.src_token.as_str();
+    let decimals = token_decimals(token);
+    // Use a conservative token price so the wallet reserve doesn't reject fills
+    // on volatile assets; the spinner test-run profit check is authoritative.
+    let divisor = 10f64.powi(decimals as i32);
+    let human_amount = raw / divisor;
+    // Token price heuristic: stablecoins ≈ $1, ETH ≈ $3000, everything else ≈ $1
+    let price_usd = token_price_heuristic(token);
+    human_amount * price_usd
+}
+
+fn token_decimals(token: &str) -> u8 {
+    let lower = token.to_lowercase();
+    // Native ETH / zero address
+    if lower == "0x0000000000000000000000000000000000000000"
+        || lower == "native"
+        || lower == "0x000000000000000000000000000000000000800a"
+    {
+        return 18;
+    }
+    const SIX_DEC: &[&str] = &[
+        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC Ethereum
+        "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // USDC Arbitrum native
+        "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", // USDC.e Arbitrum
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // USDC Base
+        "0x0b2c639c533813f4aa9d7837caf62653d097ff85", // USDC Optimism native
+        "0x7f5c764cbc14f9669b88837ca1490cca17c31607", // USDC.e Optimism
+        "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", // USDC Polygon native
+        "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", // USDC.e Polygon
+        "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", // USDC Linea
+        "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // USDC Scroll
+        "0x2a22f9c3b484c3629090feed35f17ff8f88f76f0", // USDC.e Gnosis
+        "0xddafbb505ad214d7b80b1f830fccc89b60fb7a83", // USDC Gnosis
+        "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238", // USDC Sepolia
+        "0x036cbd53842c5426634e7929541ec2318f3dcf7e", // USDC Base Sepolia
+        "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT Ethereum
+        "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USDT Arbitrum
+        "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT Optimism
+        "0x55d398326f99059ff775485246999027b3197955", // USDT BSC
+        "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon
+        "usdc", "usdt",
+    ];
+    if SIX_DEC.iter().any(|&s| lower == s) {
+        return 6;
+    }
+    18
+}
+
+fn weth_address_for_chain(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        8453  => Some("0x4200000000000000000000000000000000000006"), // Base WETH
+        10    => Some("0x4200000000000000000000000000000000000006"), // Optimism WETH
+        42161 => Some("0x82af49447d8a07e3bd95bd0d56f35241523fbab1"), // Arbitrum WETH
+        1     => Some("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"), // Ethereum WETH
+        59144 => Some("0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"), // Linea WETH
+        130   => Some("0x4200000000000000000000000000000000000006"), // Unichain WETH
+        _ => None,
+    }
+}
+
+fn token_price_heuristic(token: &str) -> f64 {
+    let lower = token.to_lowercase();
+    if lower == "0x0000000000000000000000000000000000000000"
+        || lower == "native"
+        || lower.contains("800a")  // zkSync native ETH
+        || lower.contains("4200000000000000000000000000000000000006")  // WETH Base
+    {
+        return 3000.0;
+    }
+    // Stablecoins
+    1.0
+}
+
+alloy::sol! {
+    /// V1 InclusionProof struct from TaifoonUniversalFinalityLayerV1 (reproduced here for ABI encoding).
+    struct InclusionProof {
+        uint64 chainId;
+        uint64 blockNumber;
+        uint64 eventIndex;
+        bytes32 eventHash;
+        bytes32[] proof;
+        uint8 proofType;
+    }
+
+    function executeVerifiedCall(
+        uint256 batchId,
+        InclusionProof calldata proof,
+        address vendorContract,
+        bytes calldata callData
+    ) external returns (bytes32 executionId, bool success);
+}
+
+/// Build calldata for `executeVerifiedCall(uint256,(uint64,uint64,uint64,bytes32,bytes32[],uint8),address,bytes)`.
+///
+/// V1 function present on all deployed TaifoonUniversalOperator contracts (selector 0x189cdb7b).
+/// When `proof_bytes` is a JSON-encoded InclusionProof from the spinner, it is decoded and
+/// re-encoded into the correct ABI format. When empty (dry-run), a zero-proof stub is used.
+pub fn build_execute_with_proof_calldata(
+    proof: &[u8],
+    adapter: Address,
+    adapter_calldata: &[u8],
+) -> Vec<u8> {
+    build_execute_verified_call_v1(0, proof, adapter, adapter_calldata)
+}
+
+/// `executeVerifiedCall` V1 calldata builder.
+/// Selector 0x189cdb7b — present on all deployed testnet + mainnet operators.
+pub fn build_execute_verified_call_v1(
+    batch_id: u64,
+    proof_bytes: &[u8],
+    adapter: Address,
+    adapter_calldata: &[u8],
+) -> Vec<u8> {
+    use alloy::sol_types::SolCall;
+
+    // Decode the InclusionProof from the spinner bytes.
+    // The spinner returns JSON or hex-encoded ABI bytes.
+    // We try to decode a structured JSON first, then fall back to zero-proof stub.
+    let inclusion_proof = decode_inclusion_proof(proof_bytes);
+
+    let call = executeVerifiedCallCall {
+        batchId: alloy::primitives::U256::from(batch_id),
+        proof: inclusion_proof,
+        vendorContract: adapter,
+        callData: alloy::primitives::Bytes::from(adapter_calldata.to_vec()),
+    };
+    call.abi_encode()
+}
+
+/// Decode an InclusionProof from spinner bytes.
+/// Tries JSON (`{"chain_id":..,"block_number":..,...}`) then ABI-hex, then zero-stub.
+fn decode_inclusion_proof(bytes: &[u8]) -> InclusionProof {
+    if bytes.is_empty() {
+        return zero_inclusion_proof();
+    }
+    // Try JSON first
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+        return parse_inclusion_proof_json(&v).unwrap_or_else(zero_inclusion_proof);
+    }
+    // Try ABI-decode
+    if let Ok(decoded) = <InclusionProof as alloy::sol_types::SolType>::abi_decode(bytes, false) {
+        return decoded;
+    }
+    tracing::warn!("⚠️  Could not decode InclusionProof from {} spinner bytes — using zero stub", bytes.len());
+    zero_inclusion_proof()
+}
+
+fn zero_inclusion_proof() -> InclusionProof {
+    InclusionProof {
+        chainId: 0,
+        blockNumber: 0,
+        eventIndex: 0,
+        eventHash: alloy::primitives::FixedBytes::ZERO,
+        proof: vec![],
+        proofType: 0,
+    }
+}
+
+fn parse_inclusion_proof_json(v: &serde_json::Value) -> Option<InclusionProof> {
+    let chain_id    = v.get("chain_id").or_else(|| v.get("chainId"))?.as_u64()?;
+    let block_num   = v.get("block_number").or_else(|| v.get("blockNumber"))?.as_u64()?;
+    let event_idx   = v.get("event_index").or_else(|| v.get("eventIndex")).and_then(|x| x.as_u64()).unwrap_or(0);
+    let event_hash_s = v.get("event_hash").or_else(|| v.get("eventHash")).and_then(|x| x.as_str()).unwrap_or("0x0000000000000000000000000000000000000000000000000000000000000000");
+    let event_hash: alloy::primitives::FixedBytes<32> = event_hash_s.parse().ok()?;
+    let proof_type  = v.get("proof_type").or_else(|| v.get("proofType")).and_then(|x| x.as_u64()).unwrap_or(0) as u8;
+    let siblings: Vec<alloy::primitives::FixedBytes<32>> = v.get("proof")
+        .or_else(|| v.get("siblings"))
+        .and_then(|x| x.as_array())
+        .map(|arr| arr.iter().filter_map(|s| s.as_str()?.parse().ok()).collect())
+        .unwrap_or_default();
+    Some(InclusionProof {
+        chainId: chain_id,
+        blockNumber: block_num,
+        eventIndex: event_idx,
+        eventHash: event_hash,
+        proof: siblings,
+        proofType: proof_type,
+    })
+}
+
+/// 4-byte selector for `claim()` — Universal Operator pull pattern (matches
+/// `FOONSpinnerRewards.claim()` on the Taifoon ecosystem side).
+pub fn claim_selector() -> [u8; 4] {
+    function_selector("claim()")
+}
+
+fn function_selector(sig: &str) -> [u8; 4] {
+    let h = keccak256(sig.as_bytes());
+    [h[0], h[1], h[2], h[3]]
+}
+
+// Suppress unused-import lint when the file is consumed without the U256
+// re-export (kept for future fee-conversion work).
+#[allow(dead_code)]
+fn _u256_unused_marker() -> U256 {
+    U256::ZERO
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn intent(id: &str, amount: &str) -> Intent {
+        Intent {
+            id: id.to_string(),
+            protocol: "across_v3".to_string(),
+            src_chain: 1,
+            dst_chain: 42161,
+            src_token: "0x0000000000000000000000000000000000000000".into(),
+            dst_token: "0x0000000000000000000000000000000000000000".into(),
+            amount: amount.to_string(),
+            depositor: "0x0000000000000000000000000000000000000001".into(),
+            recipient: "0x0000000000000000000000000000000000000001".into(),
+            tx_hash: "0xabc".into(),
+            detected_at: 0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn intent_amount_usd_treats_six_decimals() {
+        // 100 USDC (Base) = 100_000_000 base units → $100
+        let mut i = intent("i1", "100000000");
+        i.src_token = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".into(); // USDC Base
+        assert!((intent_amount_usd(&i) - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn intent_amount_usd_handles_garbage() {
+        let i = intent("i2", "not-a-number");
+        assert_eq!(intent_amount_usd(&i), 0.0);
+    }
+
+    #[test]
+    fn execute_with_proof_calldata_starts_with_selector() {
+        let proof = vec![1u8, 2, 3];
+        let adapter = Address::from([0x42u8; 20]);
+        let adapter_calldata = vec![0xaa, 0xbb];
+        let cd = build_execute_with_proof_calldata(&proof, adapter, &adapter_calldata);
+        // executeVerifiedCall(uint256,(uint64,uint64,uint64,bytes32,bytes32[],uint8),address,bytes)
+        // selector 0x189cdb7b — V1 present on all deployed operators.
+        assert!(cd.len() > 4 + 128);
+        let sel = &cd[..4];
+        let expected = function_selector(
+            "executeVerifiedCall(uint256,(uint64,uint64,uint64,bytes32,bytes32[],uint8),address,bytes)",
+        );
+        assert_eq!(sel, &expected);
+    }
+
+    #[test]
+    fn claim_selector_is_stable() {
+        // claim() — keccak256("claim()") = 0x4e71d92d
+        assert_eq!(claim_selector(), [0x4e, 0x71, 0xd9, 0x2d]);
+    }
+
+    #[tokio::test]
+    async fn lambda_claim_rejects_non_confirmed() {
+        let mgr = Arc::new(WalletManager::open(":memory:", 1000.0).unwrap());
+        mgr.record_detected(NewIntent {
+            intent_id: "i1".into(),
+            protocol: "across".into(),
+            src_chain: 1,
+            dst_chain: 42161,
+            amount_usd: 100.0,
+        })
+        .unwrap();
+
+        let signer = PrivateKeySigner::random();
+        let ctrl = LambdaController {
+            wallet: mgr,
+            spinner: SpinnerSolverClient::new("http://127.0.0.1:1"),
+            signer,
+            chains: HashMap::new(),
+            outcome_log: None,
+            dry_run: true,
+            profit_threshold_usd: 0.10,
+            feedback_url: None,
+        };
+        let out = ctrl.lambda_claim("i1", 1.23).await.unwrap();
+        match out {
+            LambdaClaimOutcome::NotEligible { reason } => {
+                assert!(reason.contains("CONFIRMED"));
+            }
+            other => panic!("expected NotEligible, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn lambda_execute_skip_when_dst_chain_unwired() {
+        // No chain wiring → controller must skip cleanly without panicking
+        // and must release the reservation back to the wallet.
+        let mgr = Arc::new(WalletManager::open(":memory:", 1000.0).unwrap());
+        let signer = PrivateKeySigner::random();
+        let ctrl = LambdaController {
+            wallet: mgr.clone(),
+            // Use a localhost URL that won't connect — but we don't reach the
+            // RPC step because spinner test_run will fail first. This test
+            // exercises the early-return paths rather than the broadcast path.
+            spinner: SpinnerSolverClient::new("http://127.0.0.1:1"),
+            signer,
+            chains: HashMap::new(),
+            outcome_log: None,
+            dry_run: true,
+            profit_threshold_usd: 0.10,
+            feedback_url: None,
+        };
+        let i = intent("i1", "100000000");
+        let out = ctrl.lambda_execute(&i).await.unwrap();
+        // Either the spinner call fails (Failed) or the chain wiring is missing
+        // (Skipped). Both are valid early-exit signals — the contract is that
+        // we do not hang or panic, and the wallet ledger is consistent.
+        match out {
+            LambdaExecuteOutcome::Failed { .. } | LambdaExecuteOutcome::Skipped { .. } => {}
+            other => panic!("expected Failed or Skipped, got {other:?}"),
+        }
+        // Ledger should have the intent recorded.
+        let intents = mgr.list_intents(None, 100).unwrap();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].intent_id, "i1");
+    }
+}

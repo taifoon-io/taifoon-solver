@@ -307,6 +307,48 @@ From `solver_intel.json`:
 5. **Month 2**: Expand to remaining Tier 2 protocols
 6. **Month 3**: Messaging protocol integration for advanced routing
 
+## Solver Reward / Repayment Mechanics
+
+Last verified: 2026-04-28 (after first live fill on Base).
+
+### Across V3
+- **Fill call**: `fillRelay(relayData, repaymentChainId, repaymentAddress)` on destination SpokePool
+- **Repayment**: **Automatic / trustless** — no claim call needed. Across's off-chain dataworker bundles all fills into a Merkle root every ~1.5h, submits to HubPool on Ethereum, challenge window passes, then HubPool pushes repayment to relayer on `repaymentChainId` at `repaymentAddress`.
+- **What we receive**: `inputAmount` of the deposit's input token on the repayment chain. Fee = `inputAmount - outputAmount`.
+- **Important**: Set `repaymentChainId = destinationChainId` (same chain you filled on) so repayment lands where you have gas and reusable liquidity. Setting it to origin chain means repayment arrives on a chain where you may have no gas (as happened with our first fill — repaymentChain=Polygon, we have 0 MATIC there).
+- **Solver code status**: Filler sets `repaymentChainId = DEST` as of 2026-04-28. First confirmed fill: tx `0x262b9d65...` on Base block 45298537.
+
+### deBridge DLN
+- **Fill call**: `fulfillOrder()` on DlnDestination contract (destination chain)
+- **Repayment**: **Manual** — after filling, solver must call `claimUnlock()` on DlnSource contract on the **source chain** to receive the locked input tokens.
+- **What we receive**: The order's input token on source chain.
+- **Solver code status**: `claim_funds()` exists in `crates/protocol-adapters/src/debridge.rs` but is stub-only (`"Live deBridge fill execution not yet implemented"`). `claimUnlock()` call is **not wired up**.
+
+### LiFi V2
+- **Fill call**: LiFi is a router/aggregator — it calls underlying bridges (Across, Stargate, etc.). No proprietary LiFi fill function.
+- **Repayment**: **Automatic** — cost/reward is baked into the spread quoted to the user. No separate claim.
+- **Solver code status**: `crates/protocol-adapters/src/lifi.rs` handles routing; no separate claim step needed.
+
+### Mayan Finance
+- **Fill call**: Solver wins an on-chain auction and executes the swap atomically via Wormhole.
+- **Repayment**: **Automatic** — profit is captured atomically within the swap execution (auction spread).
+- **Solver code status**: Mayan adapter exists; claim is N/A.
+
+### Taifoon Operator path (Linea, Arbitrum — `operator != 0x0`)
+- **Fill call**: `executeWithProof(v5ProofBlob, adapterContract, adapterCalldata)` on TaifoonUniversalOperator
+- **Repayment**: **Manual** — must call `claim()` on the operator contract after fill is confirmed to release solver fee.
+- **Solver code status**: `lambda_claim` in `HACKATHON_COLOSSEUM_PLAN.md` describes this step. **Not yet wired in production** — only stubbed in `lambda_controller.rs`. This path has not been exercised in live fills yet.
+
+### Summary
+
+| Protocol | Claim needed? | Where repaid | Status |
+|---|---|---|---|
+| Across V3 (direct, Base/Optimism) | ❌ Automatic | repaymentChain (set to dest) | ✅ Live |
+| deBridge DLN | ✅ `claimUnlock()` on src chain | Source chain, input token | 🔴 Not wired |
+| LiFi V2 | ❌ Automatic (spread) | N/A | ✅ (router only) |
+| Mayan Finance | ❌ Automatic (auction) | Atomic in swap | ⚠️ Untested |
+| Taifoon Operator (Linea/Arb) | ✅ `claim()` on operator | Operator contract | 🔴 Not wired |
+
 ## References
 
 - **Source XML**: `/Users/mbultra/projects/spinner/rust/crates/header-collector/protocols.xml`

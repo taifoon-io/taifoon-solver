@@ -24,6 +24,10 @@ impl SpinnerSolverClient {
         }
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// POST /api/solver/test-run
     pub async fn test_run(&self, protocol: &str, order_id: &str) -> Result<TestRunResult> {
         let url = format!("{}/api/solver/test-run", self.base_url);

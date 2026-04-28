@@ -20,6 +20,8 @@ chrono = "0.4"
 alloy = { version = "0.5", features = ["full"] }
 hex = "0.4"
 colored = "2"
+toml = "0.8"
+dirs = "5"
 
 # Local crates
 genome-client = { path = "../genome-client" }

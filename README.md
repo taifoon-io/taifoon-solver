@@ -4,6 +4,30 @@
 
 A high-performance Rust-based solver that monitors 31+ bridge protocols across 38+ chains, calculates profitability in real-time, and executes profitable fills using a multi-tier liquidity waterfall.
 
+## 👑 NEW: Taifoon CLI - Agent-Friendly Command Line Interface
+
+**The crown jewel of taifoon-solver**: A command-line interface for autonomous participation in cross-chain fills.
+
+```bash
+# Build CLI
+cargo build --release --bin taifoon
+
+# Crown jewel command: Autonomous participation
+./target/release/taifoon participate \
+  --private-key $SOLVER_PRIVATE_KEY \
+  --auto \
+  --min-profit 1.00 \
+  --protocol lifi
+
+# Monitor genome stream
+./target/release/taifoon monitor --limit 10
+
+# All commands support --json for AI agents
+./target/release/taifoon monitor --json --limit 5
+```
+
+**📖 Full CLI Documentation:** See [CLI_README.md](./CLI_README.md) for complete command reference, protocol adapter details, and genome SSE integration guide.
+
 ## Features
 
 - 🌉 **Multi-Protocol Support**: Monitors Across, Stargate, Hop, Connext, Celer, Synapse, deBridge, and 25+ more protocols

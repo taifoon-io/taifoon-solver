@@ -21,6 +21,7 @@ mod wallet;
 mod monitor;
 mod execute;
 mod test_mode;
+mod commands;
 
 use wallet::Wallet;
 
@@ -35,12 +36,12 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Spinner API URL
-    #[arg(long, env = "SPINNER_API_URL", default_value = "http://46.4.96.124:30081")]
+    /// Razor / WARMBED gas API URL (env: WARMBED_API_URL or SPINNER_API_URL)
+    #[arg(long, env = "WARMBED_API_URL", default_value = "https://api.taifoon.dev")]
     spinner_url: String,
 
     /// Genome SSE stream URL
-    #[arg(long, env = "GENOME_SSE_URL", default_value = "http://46.4.96.124:30081/api/genome/subscribe/sse")]
+    #[arg(long, env = "GENOME_SSE_URL", default_value = "https://api.taifoon.dev/api/genome/subscribe/sse")]
     genome_url: String,
 
     #[command(subcommand)]
@@ -155,6 +156,40 @@ enum Commands {
         /// Time window (e.g., "24h", "7d", "30d")
         #[arg(long, default_value = "24h")]
         since: String,
+    },
+
+    /// Show estimated fill costs per chain (gas × protocol) in wei, ETH, USDC, SOL
+    ///
+    /// Queries Razor/WARMBED gas API for real-time gas prices and computes
+    /// the cost of a standard fill call for each supported protocol and chain.
+    ///
+    /// Example:
+    /// $ taifoon fees
+    /// $ taifoon fees --json
+    Fees,
+
+    /// Bootstrap a solver: generate/import key, register on Base Sepolia,
+    /// write ~/.taifoon/solver.toml, print env-var snippets.
+    ///
+    /// Example:
+    /// $ taifoon onboard
+    /// $ taifoon onboard --import-key 0x... --registry-contract 0xCAFE...
+    Onboard {
+        /// Import an existing private key instead of generating one
+        #[arg(long)]
+        import_key: Option<String>,
+
+        /// Registry contract address on Base Sepolia (omit for stub mode)
+        #[arg(long)]
+        registry_contract: Option<String>,
+
+        /// Override the auto-derived solver_id
+        #[arg(long)]
+        solver_id: Option<String>,
+
+        /// Overwrite existing ~/.taifoon/solver.toml if present
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -345,6 +380,26 @@ async fn main() -> Result<()> {
 
         Commands::Stats { since } => {
             monitor::stats(&since, &cli.spinner_url, cli.json).await
+        }
+
+        Commands::Fees => {
+            commands::fees::run(&cli.spinner_url, cli.json).await
+        }
+
+        Commands::Onboard {
+            import_key,
+            registry_contract,
+            solver_id,
+            force,
+        } => {
+            commands::onboard::run(commands::onboard::OnboardArgs {
+                import_key,
+                registry_contract,
+                solver_id,
+                force,
+                json_mode: cli.json,
+            })
+            .await
         }
     };
 

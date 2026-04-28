@@ -11,6 +11,8 @@ members = [
     "crates/protocol-adapters-solana",
     "crates/mempool-monitor",
     "crates/taifoon-cli",
+    "crates/wallet-manager",
+    "crates/taifoon-arb-bridge",
 ]
 
 [workspace.package]

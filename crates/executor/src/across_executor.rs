@@ -41,10 +41,40 @@ sol! {
         ) external returns (bool);
     }
 
-    /// Across V3 SpokePool relay tuple — must match the deployed
-    /// `taifoon-eco/contracts/adapters/AcrossAdapter.sol` `IAcrossSpokePool.V3RelayData`
-    /// (note: depositId is `int64`, NOT uint32 — the AcrossAdapter contract
-    /// `abi.decode`s relayData as this exact tuple).
+    /// Across V3 SpokePool direct-fill interface (no adapter, no operator required).
+    /// Selector 0xdeff4b24 — verified against Base SpokePool 0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64.
+    /// Uses bytes32 for address fields (cross-chain compatible encoding) and a 3rd
+    /// repaymentAddress parameter specifying where the relayer gets repaid.
+    interface IAcrossSpokePool {
+        function fillRelay(
+            RelayData calldata relayData,
+            uint256 repaymentChainId,
+            bytes32 repaymentAddress
+        ) external;
+    }
+
+    /// Across V3 SpokePool relay tuple.
+    /// Fields use bytes32 (not address) for cross-chain address encoding.
+    /// depositId is uint256 (not int64).
+    /// Selector check: fillRelay((bytes32,bytes32,bytes32,bytes32,bytes32,uint256,uint256,uint256,uint256,uint32,uint32,bytes),uint256,bytes32) = 0xdeff4b24
+    struct RelayData {
+        bytes32 depositor;
+        bytes32 recipient;
+        bytes32 exclusiveRelayer;
+        bytes32 inputToken;
+        bytes32 outputToken;
+        uint256 inputAmount;
+        uint256 outputAmount;
+        uint256 originChainId;
+        uint256 depositId;
+        uint32  fillDeadline;
+        uint32  exclusivityDeadline;
+        bytes   message;
+    }
+
+    /// Legacy Across V3 SpokePool relay tuple — used by older deployments (Linea etc.)
+    /// and by the AcrossAdapter on operator-path chains.
+    /// Selector 0x7bfcc68f — fillV3Relay((address,address,address,address,address,uint256,uint256,uint256,int64,uint32,uint32,bytes),uint256)
     struct V3RelayData {
         address depositor;
         address recipient;
@@ -320,24 +350,48 @@ pub fn build_across_adapter_calldata(intent: &Intent) -> Result<Vec<u8>> {
         }
     };
 
+    // fillDeadline MUST match what's on-chain — use the value from the genome
+    // event, not a local clock estimate. Across enforces exact match on-chain.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let fill_deadline = intent.fill_deadline.unwrap_or_else(|| {
+        tracing::warn!(
+            "intent {} missing fill_deadline — using now+3600 (will likely revert on mainnet)",
+            intent.id
+        );
+        (now + 3600) as u32
+    });
+
+    let exclusivity_deadline = intent.exclusivity_deadline.unwrap_or(0);
+
+    let exclusive_relayer: Address = intent.exclusive_relayer
+        .as_deref()
+        .filter(|s| !s.is_empty() && *s != "0x")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(Address::ZERO);
+
+    let message_bytes: Bytes = intent.message
+        .as_deref()
+        .filter(|s| !s.is_empty() && *s != "0x")
+        .and_then(|s| hex::decode(s.trim_start_matches("0x")).ok())
+        .map(Bytes::from)
+        .unwrap_or_default();
 
     let relay = V3RelayData {
         depositor,
         recipient,
-        exclusiveRelayer: Address::ZERO,
+        exclusiveRelayer: exclusive_relayer,
         inputToken: input_token,
         outputToken: output_token,
         inputAmount: input_amount,
         outputAmount: output_amount,
         originChainId: U256::from(intent.src_chain),
         depositId: deposit_id,
-        fillDeadline: (now + 3600) as u32,
-        exclusivityDeadline: 0,
-        message: Bytes::new(),
+        fillDeadline: fill_deadline,
+        exclusivityDeadline: exclusivity_deadline,
+        message: message_bytes,
     };
 
     let encoded = alloy::sol_types::SolValue::abi_encode(&relay);
@@ -350,11 +404,262 @@ pub fn build_across_adapter_calldata(intent: &Intent) -> Result<Vec<u8>> {
     Ok(call.abi_encode())
 }
 
+/// Build `fillRelay(relayData, repaymentChainId, repaymentAddress)` calldata for chains where
+/// the Taifoon operator is not deployed (operator address == 0x0 in chain_wiring).
+/// Calls the Across V3 SpokePool directly — no proof wrapper required.
+///
+/// Uses the new-style SpokePool interface with bytes32 address fields and a repaymentAddress
+/// parameter (selector 0xdeff4b24, verified on Base 0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64).
+pub fn build_across_spoke_pool_calldata(intent: &Intent) -> Result<Vec<u8>> {
+    build_across_spoke_pool_calldata_with_relayer(intent, None)
+}
+
+/// Same as `build_across_spoke_pool_calldata` but allows specifying the repayment address
+/// (the relayer's address where Across will repay the fill on the origin chain).
+pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_address: Option<Address>) -> Result<Vec<u8>> {
+    let deposit_id = intent.deposit_id
+        .or_else(|| parse_deposit_id_legacy(&intent.id))
+        .or_else(|| parse_deposit_id_legacy(&intent.tx_hash))
+        .ok_or_else(|| anyhow!("cannot resolve depositId for intent {}", intent.id))?;
+
+    let depositor: Address = intent.depositor.parse().context("invalid depositor")?;
+    let recipient: Address = intent.recipient.parse().context("invalid recipient")?;
+    let input_token: Address = intent.src_token.parse().context("invalid src_token")?;
+    let output_token: Address = intent.dst_token.parse().context("invalid dst_token")?;
+    let input_amount = U256::from_str_radix(&intent.amount, 10).context("invalid input amount")?;
+
+    let output_amount = match intent.output_amount.as_deref() {
+        Some(s) => U256::from_str_radix(s, 10).context("invalid output_amount")?,
+        None => {
+            tracing::warn!("intent {} missing output_amount — falling back to input_amount", intent.id);
+            input_amount
+        }
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let fill_deadline = intent.fill_deadline.unwrap_or_else(|| {
+        tracing::warn!("intent {} missing fill_deadline — using now+3600", intent.id);
+        (now + 3600) as u32
+    });
+    let exclusivity_deadline = intent.exclusivity_deadline.unwrap_or(0);
+    let exclusive_relayer: Address = intent.exclusive_relayer
+        .as_deref()
+        .filter(|s| !s.is_empty() && *s != "0x")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(Address::ZERO);
+    let message_bytes: Bytes = intent.message
+        .as_deref()
+        .filter(|s| !s.is_empty() && *s != "0x")
+        .and_then(|s| hex::decode(s.trim_start_matches("0x")).ok())
+        .map(Bytes::from)
+        .unwrap_or_default();
+
+    // Convert address to bytes32 (left-padded with 12 zero bytes)
+    let addr_to_b32 = |addr: Address| -> alloy::primitives::FixedBytes<32> {
+        let mut b = [0u8; 32];
+        b[12..].copy_from_slice(addr.as_slice());
+        alloy::primitives::FixedBytes::<32>::from(b)
+    };
+
+    let relay = RelayData {
+        depositor: addr_to_b32(depositor),
+        recipient: addr_to_b32(recipient),
+        exclusiveRelayer: addr_to_b32(exclusive_relayer),
+        inputToken: addr_to_b32(input_token),
+        outputToken: addr_to_b32(output_token),
+        inputAmount: input_amount,
+        outputAmount: output_amount,
+        originChainId: U256::from(intent.src_chain),
+        depositId: U256::from(deposit_id as u64),
+        fillDeadline: fill_deadline,
+        exclusivityDeadline: exclusivity_deadline,
+        message: message_bytes,
+    };
+
+    // repaymentAddress is where Across repays the relayer on the origin chain.
+    // Default to the depositor's chain address (our solver address would be ideal but
+    // requires the solver address to be passed in; for now we use the relayer address
+    // from the intent or the depositor as a safe fallback).
+    let repayment_addr = relayer_address.unwrap_or(depositor);
+    let repayment_address = addr_to_b32(repayment_addr);
+
+    let call = IAcrossSpokePool::fillRelayCall {
+        relayData: relay,
+        repaymentChainId: U256::from(intent.src_chain),
+        repaymentAddress: repayment_address,
+    };
+    Ok(call.abi_encode())
+}
+
 /// Legacy parser kept as a fallback when `intent.deposit_id` is missing.
 fn parse_deposit_id_legacy(s: &str) -> Option<i64> {
     s.split(&[':', '_', '/'][..])
         .filter_map(|p| p.parse::<i64>().ok())
         .last()
+}
+
+/// Relay data fetched from the Across protocol API for a given deposit.
+/// Used to fill in missing fields (fill_deadline, output_amount, etc.)
+/// when the genome stream's `order/placed` event lacks them.
+#[derive(Debug, Clone, Default)]
+pub struct AcrossRelayData {
+    pub depositor: Option<String>,
+    pub recipient: Option<String>,
+    pub exclusive_relayer: Option<String>,
+    pub input_token: Option<String>,
+    pub output_token: Option<String>,
+    pub input_amount: Option<String>,
+    pub output_amount: Option<String>,
+    pub fill_deadline: Option<u32>,
+    pub exclusivity_deadline: Option<u32>,
+    pub message: Option<String>,
+    /// Deposit ID decoded from topics[2] of V3FundsDeposited.
+    pub deposit_id: Option<i64>,
+}
+
+/// Look up the deposit tx hash from the Across API, then decode relay params on-chain.
+/// The genome stream's order/placed event has deposit_id but not the tx hash needed
+/// to decode V3FundsDeposited. The Across API /deposit/status endpoint returns it.
+pub async fn fetch_relay_data_for_deposit(
+    deposit_id: i64,
+    origin_chain_id: u64,
+    src_chain_rpc: &str,
+) -> Option<AcrossRelayData> {
+    let url = format!(
+        "https://app.across.to/api/deposit/status?depositId={}&originChainId={}",
+        deposit_id, origin_chain_id
+    );
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .ok()?;
+    let resp = http.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        tracing::warn!("Across API deposit/status returned {} for deposit {}/{}", resp.status(), deposit_id, origin_chain_id);
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    // Extract depositTxHash (Across API returns "depositTxHash" or "depositTxnRef")
+    let tx_hash = v.get("depositTxHash")
+        .or_else(|| v.get("depositTxnRef"))
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty() && s.starts_with("0x"))?;
+    tracing::info!("🔍 Across API: deposit {}/{} → tx {}", deposit_id, origin_chain_id, tx_hash);
+    // Now decode relay data from the tx receipt on-chain
+    fetch_relay_data_from_tx(tx_hash, src_chain_rpc).await
+}
+
+/// Decode relay parameters from the V3FundsDeposited event in a tx receipt.
+/// Topic[0] = keccak256("V3FundsDeposited(address,address,address,address,address,uint256,uint256,uint256,int64,uint32,uint32,uint32,bytes)")
+/// = 0x32ed1a409ef04c7b0227189c3a103dc5ac10e775a15b785dcc510201f7c25ad3
+pub async fn fetch_relay_data_from_tx(
+    tx_hash: &str,
+    src_chain_rpc: &str,
+) -> Option<AcrossRelayData> {
+    if tx_hash.is_empty() || tx_hash == "0x" || tx_hash.starts_with("synthetic_") {
+        return None;
+    }
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+
+    // eth_getTransactionReceipt
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash]
+    });
+    let resp = http.post(src_chain_rpc).json(&payload).send().await.ok()?;
+    let v: serde_json::Value = resp.json().await.ok()?;
+    let logs = v["result"]["logs"].as_array()?;
+
+    // Two known V3FundsDeposited topics — same non-indexed data layout, different sig versions:
+    //   NEW (Optimism, Base, Arbitrum deployments): 0xa123dc29...
+    //   OLD (Linea, older deployments):             0x32ed1a40...
+    // Both: Indexed: destinationChainId (topic[1]), depositId (topic[2]), depositor (topic[3])
+    // Non-indexed data: inputToken, outputToken, inputAmount, outputAmount, quoteTimestamp,
+    //   fillDeadline, exclusivityDeadline, recipient, exclusiveRelayer, message
+    const V3_DEPOSITED_TOPICS: &[&str] = &[
+        "0xa123dc29aebf7d0c3322c8eeb5b999e859f39937950ed31056532713d0de396f",
+        "0x32ed1a409ef04c7b0227189c3a103dc5ac10e775a15b785dcc510201f7c25ad3",
+    ];
+
+    for log in logs {
+        let topics = log["topics"].as_array()?;
+        let topic0 = topics.first()?.as_str()?;
+        if !V3_DEPOSITED_TOPICS.contains(&topic0) {
+            continue;
+        }
+        // topics[1] = destinationChainId, topics[2] = depositId, topics[3] = depositor
+        let data_hex = log["data"].as_str()?.strip_prefix("0x")?;
+        let data = hex::decode(data_hex).ok()?;
+        if data.len() < 320 {
+            continue;
+        }
+        // ABI decode the non-indexed fields (32 bytes each):
+        // [0]:  inputToken (address, padded)
+        // [1]:  outputToken (address, padded)
+        // [2]:  inputAmount (uint256)
+        // [3]:  outputAmount (uint256)
+        // [4]:  quoteTimestamp (uint32)
+        // [5]:  fillDeadline (uint32)
+        // [6]:  exclusivityDeadline (uint32)
+        // [7]:  recipient (address, padded)
+        // [8]:  exclusiveRelayer (address, padded)
+        // [9]:  message offset
+        // [10]: message length (if present)
+        let read_u256 = |offset: usize| -> Option<U256> {
+            if offset + 32 > data.len() { return None; }
+            Some(U256::from_be_slice(&data[offset..offset + 32]))
+        };
+        let read_addr = |offset: usize| -> Option<String> {
+            if offset + 32 > data.len() { return None; }
+            Some(format!("0x{}", hex::encode(&data[offset + 12..offset + 32])))
+        };
+
+        let input_token  = read_addr(0)?;
+        let output_token = read_addr(32)?;
+        let input_amount = read_u256(64)?.to_string();
+        let output_amount = read_u256(96)?.to_string();
+        // quoteTimestamp at 128, fillDeadline at 160, exclusivityDeadline at 192
+        let fill_deadline_u256 = read_u256(160)?;
+        let fill_deadline: u32 = fill_deadline_u256.to::<u32>();
+        let excl_deadline_u256 = read_u256(192)?;
+        let exclusivity_deadline: u32 = excl_deadline_u256.to::<u32>();
+        let recipient = read_addr(224)?;
+        let exclusive_relayer = read_addr(256)?;
+        // depositor from topics[3]
+        let depositor_topic = topics.get(3)?.as_str()?;
+        let depositor = format!("0x{}", depositor_topic.trim_start_matches("0x").get(24..)?);
+        // depositId from topics[2] (indexed uint32/int64 — decode as i64)
+        let deposit_id = topics.get(2).and_then(|t| t.as_str()).and_then(|s| {
+            let s = s.trim_start_matches("0x");
+            i64::from_str_radix(s, 16).ok()
+        });
+
+        tracing::info!("🔍 On-chain relay data for {}: depositId={:?} outputAmount={} fillDeadline={} recipient={} exclRelayer={}",
+            tx_hash, deposit_id, output_amount, fill_deadline, recipient, exclusive_relayer);
+
+        return Some(AcrossRelayData {
+            depositor: Some(depositor),
+            recipient: Some(recipient),
+            exclusive_relayer: Some(exclusive_relayer),
+            input_token: Some(input_token),
+            output_token: Some(output_token),
+            input_amount: Some(input_amount),
+            output_amount: Some(output_amount),
+            fill_deadline: Some(fill_deadline),
+            exclusivity_deadline: Some(exclusivity_deadline),
+            message: None,
+            deposit_id,
+        });
+    }
+    None
 }
 
 fn estimate_gas_overrun_usd(

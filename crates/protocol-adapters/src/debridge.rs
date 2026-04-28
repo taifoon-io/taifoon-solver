@@ -41,6 +41,17 @@ use alloy::sol_types::SolCall;
 // ── deBridge DLN Contract ABIs ────────────────────────────────────────────────
 
 sol! {
+    /// deBridge DLN Source contract interface (same address on all chains)
+    interface DlnSource {
+        /// Unlock locked giveTokens to the solver after a successful fulfillment.
+        /// Must be called on the SOURCE chain after fulfillOrder is confirmed on dst.
+        /// `_beneficiary` is where the unlocked tokens are sent (our solver wallet).
+        function claimUnlock(
+            bytes32 _orderId,
+            address _beneficiary
+        ) external;
+    }
+
     /// deBridge DLN Destination contract interface
     interface DlnDestination {
         struct Order {
@@ -250,18 +261,50 @@ impl ProtocolAdapter for DeBridgeAdapter {
 
     async fn claim_funds(&self, intent: &Intent, fill_result: &FillResult) -> Result<ClaimResult> {
         if fill_result.simulated {
-            tracing::info!("✅ [SIMULATION] deBridge claim would occur on source chain");
+            tracing::info!("✅ [SIMULATION] deBridge claimUnlock would fire on src chain {}", intent.src_chain);
             return Ok(ClaimResult {
                 tx_hash: format!("0xsim_debridge_claim_{}", intent.id),
                 claimed_amount: intent.amount.clone(),
                 claimed_token: intent.src_token.clone(),
             });
         }
-        tracing::info!("ℹ️  deBridge DLN claim requires submitting proof to source chain {}", intent.src_chain);
-        Ok(ClaimResult {
-            tx_hash: "0x0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-            claimed_amount: intent.amount.clone(),
-            claimed_token: intent.src_token.clone(),
-        })
+        Err(anyhow!(
+            "Live deBridge claim execution not yet implemented - use SIMULATION_MODE=true. \
+             Call build_claim_unlock_calldata() to get calldata then broadcast via lambda_claim_debridge()"
+        ))
+    }
+}
+
+impl DeBridgeAdapter {
+    /// Build `fulfillOrder(order, fulfillAmount, orderId, permit, unlockAuthority)` calldata
+    /// for the DlnDestination contract on the destination chain.
+    pub fn build_fulfill_order_calldata(&self, intent: &Intent) -> Result<Vec<u8>> {
+        let order = self.parse_order(intent)?;
+        let order_id = self.extract_order_id(intent)?;
+        let fulfill_amount = U256::from_str_radix(&intent.amount, 10)?;
+        let call = DlnDestination::fulfillOrderCall {
+            _order: order,
+            _fulFillAmount: fulfill_amount,
+            _orderId: order_id,
+            _permit: Bytes::new(),
+            _unlockAuthority: Address::ZERO,
+        };
+        Ok(call.abi_encode())
+    }
+
+    /// Build `claimUnlock(orderId, beneficiary)` calldata for the DlnSource contract
+    /// on the SOURCE chain. Must be called after fulfillOrder is confirmed on dst chain.
+    pub fn build_claim_unlock_calldata(&self, intent: &Intent, beneficiary: Address) -> Result<Vec<u8>> {
+        let order_id = self.extract_order_id(intent)?;
+        let call = DlnSource::claimUnlockCall {
+            _orderId: order_id,
+            _beneficiary: beneficiary,
+        };
+        Ok(call.abi_encode())
+    }
+
+    /// Address of DlnSource on the given source chain (same contract handles both sides).
+    pub fn dln_source_address(&self, src_chain: u64) -> Option<Address> {
+        self.dln_addresses.get(&src_chain).copied()
     }
 }

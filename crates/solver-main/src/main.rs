@@ -1,20 +1,23 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use executor::{
-    AcrossExecutor, ChainWiring, Executor, OutcomeLog, OutcomeRecord, SkipRules,
-    SpinnerSolverClient,
+    ChainWiring, Executor, LambdaController, LambdaClaimOutcome, LambdaExecuteOutcome, LiFiMetaRouter,
+    OutcomeLog, OutcomeRecord, SkipRules, SpinnerSolverClient,
 };
 use genome_client::GenomeClient;
 use profit_calc::ProfitCalculator;
 use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use taifoon_arb_bridge::{BalanceHighHandler, StubBridge, ThresholdHandler};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+use wallet_manager::WalletManager;
 
-const DEFAULT_GENOME_SSE_URL: &str = "http://46.4.96.124:30081/api/genome/subscribe/sse";
-const DEFAULT_SPINNER_BASE: &str = "http://46.4.96.124:30081";
+const DEFAULT_GENOME_SSE_URL: &str = "https://api.taifoon.dev/api/genome/subscribe/sse";
+const DEFAULT_SPINNER_BASE: &str = "https://api.taifoon.dev";
 const DEFAULT_MIN_PROFIT_USD: f64 = 0.10;
 const SOLVER_INTEL_PATH: &str = "config/solver_intel.json";
 const API_PORT: u16 = 8082;
@@ -31,7 +34,8 @@ async fn main() -> Result<()> {
     // ── Configuration ─────────────────────────────────────────────────────────
     let genome_sse_url = std::env::var("GENOME_SSE_URL")
         .unwrap_or_else(|_| DEFAULT_GENOME_SSE_URL.to_string());
-    let spinner_base = std::env::var("SPINNER_API_URL")
+    let spinner_base = std::env::var("WARMBED_API_URL")
+        .or_else(|_| std::env::var("SPINNER_API_URL"))
         .unwrap_or_else(|_| DEFAULT_SPINNER_BASE.to_string());
     let min_profit_usd: f64 = std::env::var("MIN_PROFIT_USD")
         .ok()
@@ -96,25 +100,80 @@ async fn main() -> Result<()> {
         Err(e) => { warn!("rule-skip log init failed: {} — rule skips won't be recorded", e); None }
     };
 
-    // ── Across executor (only built if SOLVER_PRIVATE_KEY is set) ─────────────
-    let across_executor = match build_across_executor(&spinner_base, &outcome_db_path,
-                                                     mamba_lake_url.clone(), dry_run, min_profit_usd) {
-        Ok(Some(ex)) => {
-            info!("✅ Across executor live — solver={:?}", ex.signer_address());
-            Some(ex)
+    // ── Wallet manager (col-p2) — backs the Lambda controller's state machine
+    // and exposes /api/wallet/{status,intents} on the solver-event API port.
+    let wallet_db_path = std::env::var("WALLET_DB_PATH")
+        .unwrap_or_else(|_| "/tmp/taifoon_solver_wallet.sqlite".to_string());
+    let wallet_budget_usd: f64 = std::env::var("WALLET_BUDGET_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000.0);
+    let wallet_manager = Arc::new(
+        WalletManager::open(&wallet_db_path, wallet_budget_usd)
+            .map_err(|e| anyhow!("wallet-manager open: {e}"))?,
+    );
+    info!(
+        "💼 Wallet manager: db={} budget=${}",
+        wallet_db_path, wallet_budget_usd
+    );
+
+    // ── Lambda controller (col-p4) — replaces the standalone Across executor.
+    // Built only when SOLVER_PRIVATE_KEY is set and at least one chain is wired.
+    let lambda_controller = match build_lambda_controller(
+        &spinner_base,
+        &outcome_db_path,
+        mamba_lake_url.clone(),
+        dry_run,
+        min_profit_usd,
+        wallet_manager.clone(),
+    ) {
+        Ok(Some(ctrl)) => {
+            info!(
+                "✅ Lambda controller live — solver={:?}",
+                ctrl.signer.address()
+            );
+            Some(ctrl)
         }
         Ok(None) => {
-            warn!("⚠️  SOLVER_PRIVATE_KEY not set — Across executor disabled (legacy adapter path only)");
+            warn!(
+                "⚠️  SOLVER_PRIVATE_KEY not set — Lambda controller disabled (legacy adapter path only)"
+            );
             None
         }
         Err(e) => {
-            error!("Across executor init failed: {}", e);
+            error!("Lambda controller init failed: {}", e);
             None
         }
     };
 
     // ── Legacy executor (kept for non-Across protocols) ───────────────────────
     let legacy_executor = Executor::new()?;
+
+    // ── col-p3: balance_high consolidation handler ────────────────────────────
+    // STUB path: the real trigger will be a per-chain idle-USDC poll once that
+    // primitive lands on wallet-manager. For now we fire the handler once at
+    // startup if `WALLET_BALANCE_HIGH_USDC` is set, so the wiring is exercised
+    // and observable in logs. `taifoon-arb` does not yet provide a Rust bridge,
+    // so `StubBridge` just logs — see crates/taifoon-arb-bridge/src/lib.rs.
+    let balance_handler = ThresholdHandler::new(StubBridge);
+    if let Ok(raw) = std::env::var("WALLET_BALANCE_HIGH_USDC") {
+        if let Ok(balance) = raw.parse::<f64>() {
+            let src_chain: u64 = std::env::var("WALLET_BALANCE_SRC_CHAIN")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8453); // Base
+            let dst_chain: u64 = std::env::var("WALLET_BALANCE_DST_CHAIN")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1399811149); // Solana mainnet (informational chain id)
+            if let Err(e) = balance_handler
+                .on_balance_high(src_chain, dst_chain, balance)
+                .await
+            {
+                warn!("balance_high handler: {}", e);
+            }
+        }
+    }
 
     // ── Genome SSE consumer ───────────────────────────────────────────────────
     let genome_client = GenomeClient::new(&genome_sse_url);
@@ -126,6 +185,12 @@ async fn main() -> Result<()> {
     });
     info!("✅ Genome SSE subscriber started");
     info!("⏳ Waiting for intents...");
+
+    // Dedup: track intent IDs we've already dispatched in this session.
+    // The genome stream emits deposit + placed + executed for the same
+    // cross-chain transfer; we only want to act on `placed` (first time
+    // a deposit_id is resolvable). TTL is session-scoped — no persistence needed.
+    let mut dispatched: HashSet<String> = HashSet::new();
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     while let Some(intent) = intent_rx.recv().await {
@@ -186,25 +251,116 @@ async fn main() -> Result<()> {
             continue;
         }
 
+        // Dedup by canonical intent key (protocol + deposit_id if present, else tx_hash).
+        // This prevents double-fills when deposit + placed + executed all arrive.
+        let dedup_key = if let Some(dep_id) = intent.deposit_id {
+            format!("{}:dep:{}", intent.protocol, dep_id)
+        } else {
+            intent.id.clone()
+        };
+        if !dispatched.insert(dedup_key.clone()) {
+            info!("⏭️  dedup skip (already dispatched): {}", dedup_key);
+            continue;
+        }
+
         let proto_lower = intent.protocol.to_lowercase();
 
-        // Across path: full SSE → test-run → proof → executeWithProof → log
-        if proto_lower.contains(&protocol_filter) && proto_lower.contains("across") {
-            let Some(ex) = across_executor.as_ref() else {
-                info!("⏭️  Across executor disabled, skipping {}", intent.id);
+        // Lambda controller path: handles Across V3, deBridge DLN, and LiFi (via meta-router).
+        //   wallet.reserve → [spinner.test_run] → [spinner.fetch_v5_proof]
+        //   → build_calldata → broadcast → receipt
+        //   → on CONFIRMED: wallet.release + emit genome feedback
+        //   → for deBridge: fire lambda_claim_debridge (claimUnlock on src chain)
+        let is_across = proto_lower.contains("across");
+        let is_debridge = proto_lower.contains("debridge") || proto_lower.contains("dln");
+        let is_lifi = proto_lower.contains("lifi") || proto_lower.contains("li.fi");
+        let is_mayan = proto_lower.contains("mayan");
+        let filter_match = protocol_filter == "all"
+            || protocol_filter.split(',').any(|f| proto_lower.contains(f.trim()));
+
+        // For LiFi, project through the meta-router to get the underlying child intent
+        // then dispatch as if it were the underlying protocol directly.
+        let effective_intent;
+        let intent_ref = if is_lifi {
+            let bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
+            if bridge.is_empty() {
+                info!("⏭️  lifi skip (missing bridge/tool field): {}", intent.id);
+                // Fall through to legacy path for logging
+                &intent
+            } else {
+                effective_intent = LiFiMetaRouter::project_to_child(&intent, &bridge);
+                info!("🔀 LiFi→{} projection: {} intent id={}", bridge, intent.id, effective_intent.id);
+                &effective_intent
+            }
+        } else {
+            &intent
+        };
+        let effective_proto_lower = intent_ref.protocol.to_lowercase();
+        let effective_is_across = effective_proto_lower.contains("across");
+        let effective_is_debridge = effective_proto_lower.contains("debridge") || effective_proto_lower.contains("dln");
+        let effective_is_mayan = effective_proto_lower.contains("mayan");
+
+        let routable = is_across
+            || is_debridge
+            || is_mayan
+            || (is_lifi && (effective_is_across || effective_is_debridge || effective_is_mayan));
+
+        if filter_match && routable {
+            // Accept intents that have:
+            //   a) a depositId directly (from order/placed events), OR
+            //   b) a numeric suffix in the ID (legacy "across_v3::across_197928"), OR
+            //   c) a real tx_hash (proto/deposit events) — lambda controller enrichment
+            //      (Strategy B) will decode the depositId from the on-chain receipt.
+            // Across-specific: require depositId or real tx_hash for enrichment.
+            if effective_is_across && intent_ref.deposit_id.is_none() {
+                let has_id_in_str = intent_ref.id.rsplit(&[':', '_'][..])
+                    .find_map(|s| s.parse::<i64>().ok())
+                    .is_some();
+                let has_real_tx = intent_ref.tx_hash.starts_with("0x")
+                    && intent_ref.tx_hash.len() == 66
+                    && !intent_ref.tx_hash.starts_with("synthetic_");
+                if !has_id_in_str && !has_real_tx {
+                    info!("⏭️  across_v3 skip (no depositId or tx_hash in intent): {}", intent_ref.id);
+                    continue;
+                }
+            }
+            // Skip zero-amount intents regardless of protocol.
+            if intent_ref.amount == "0" && intent_ref.output_amount.as_deref().map(|s| s == "0" || s.is_empty()).unwrap_or(true) {
+                info!("⏭️  {} skip (zero input+output amount): {}", intent_ref.protocol, intent_ref.id);
+                continue;
+            }
+            let Some(ctrl) = lambda_controller.as_ref() else {
+                info!("⏭️  Lambda controller disabled, skipping {}", intent_ref.id);
                 continue;
             };
-            match ex.fill(&intent).await {
-                Ok(Some(tx)) => {
-                    info!("🎉 Across fill broadcast: {}", tx);
+            match ctrl.lambda_execute(intent_ref).await {
+                Ok(LambdaExecuteOutcome::Confirmed { tx_hash, gas_used }) => {
+                    let proto_tag = if effective_is_debridge { "deBridge" } else if effective_is_mayan { "Mayan" } else if is_lifi { "LiFi" } else { "Across" };
+                    info!("🎉 {} fill confirmed: {}", proto_tag, tx_hash);
                     solver_api.emit_event(SolverEvent::IntentSolved(SolvedData {
                         id: intent.id.clone(),
-                        tx_hash: tx,
+                        tx_hash,
                         actual_profit_usd: 0.0,
-                        gas_used: 0,
+                        gas_used,
                     }));
+                    // deBridge requires a follow-up claimUnlock on the source chain
+                    // to collect the locked giveTokens.
+                    if effective_is_debridge {
+                        match ctrl.lambda_claim_debridge(intent_ref).await {
+                            Ok(LambdaClaimOutcome::Claimed { tx_hash: claim_tx, fee_usd }) => {
+                                info!("💰 deBridge claimUnlock confirmed: {} (fee ~${:.4})", claim_tx, fee_usd);
+                            }
+                            Ok(LambdaClaimOutcome::NotEligible { reason }) => {
+                                warn!("⚠️  deBridge claim not eligible: {}", reason);
+                            }
+                            Ok(LambdaClaimOutcome::Failed { error: e }) => {
+                                error!("❌ deBridge claimUnlock failed: {}", e);
+                            }
+                            Err(e) => error!("❌ deBridge lambda_claim_debridge fatal: {}", e),
+                        }
+                    }
                 }
-                Ok(None) => {
+                Ok(LambdaExecuteOutcome::Skipped { reason }) => {
+                    info!("⏭️  Skipped {}: {}", intent_ref.id, reason);
                     solver_api.emit_event(SolverEvent::IntentAttempted(AttemptData {
                         id: intent.id.clone(),
                         profitable: false,
@@ -214,7 +370,13 @@ async fn main() -> Result<()> {
                         decision: "skip".into(),
                     }));
                 }
-                Err(e) => error!("❌ Across fill failed: {}", e),
+                Ok(LambdaExecuteOutcome::Reverted { tx_hash, error: e }) => {
+                    error!("❌ fill reverted (tx {}): {}", tx_hash, e);
+                }
+                Ok(LambdaExecuteOutcome::Failed { stage, error: e }) => {
+                    error!("❌ lambda_execute failed at {}: {}", stage, e);
+                }
+                Err(e) => error!("❌ lambda_execute fatal: {}", e),
             }
             continue;
         }
@@ -252,20 +414,22 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Build the Across executor from env. Returns Ok(None) if SOLVER_PRIVATE_KEY is missing
-/// (operator runs in observation-only mode).
-fn build_across_executor(
+/// Build the Lambda controller from env. Returns Ok(None) if SOLVER_PRIVATE_KEY
+/// is missing (operator runs in observation-only mode).
+fn build_lambda_controller(
     spinner_base: &str,
     outcome_db_path: &str,
     mamba_url: Option<String>,
     dry_run: bool,
     profit_threshold_usd: f64,
-) -> Result<Option<AcrossExecutor>> {
+    wallet: Arc<WalletManager>,
+) -> Result<Option<LambdaController>> {
     let pk = match std::env::var("SOLVER_PRIVATE_KEY") {
         Ok(v) if !v.is_empty() => v,
         _ => return Ok(None),
     };
-    let signer: alloy::signers::local::PrivateKeySigner = pk.parse()
+    let signer: alloy::signers::local::PrivateKeySigner = pk
+        .parse()
         .map_err(|e| anyhow!("SOLVER_PRIVATE_KEY parse: {}", e))?;
 
     let chains = parse_chain_wiring()?;
@@ -277,15 +441,18 @@ fn build_across_executor(
 
     let log = OutcomeLog::open(outcome_db_path, mamba_url)?;
     let spinner = SpinnerSolverClient::new(spinner_base);
+    let feedback_url = std::env::var("GENOME_FEEDBACK_URL").ok();
 
-    Ok(Some(AcrossExecutor::new(
+    Ok(Some(LambdaController {
+        wallet,
         spinner,
         signer,
         chains,
-        log,
+        outcome_log: Some(log),
         dry_run,
         profit_threshold_usd,
-    )))
+        feedback_url,
+    }))
 }
 
 /// Two ways to configure chain wiring:
@@ -297,16 +464,36 @@ fn parse_chain_wiring() -> Result<HashMap<u64, ChainWiring>> {
     use alloy::primitives::Address;
     let mut out = HashMap::new();
 
-    if let Ok(json) = std::env::var("CHAIN_WIRING_JSON") {
+    // Allow loading from a file path (e.g. config/chain_wiring.json) as an
+    // alternative to inlining the JSON in the env var.
+    let json_from_file = std::env::var("CHAIN_WIRING_FILE")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(&p).ok());
+
+    let json_inline = std::env::var("CHAIN_WIRING_JSON").ok();
+    let json_src = json_from_file.or(json_inline);
+
+    if let Some(json) = json_src {
         #[derive(serde::Deserialize)]
         struct Entry {
             rpc_url: String,
             operator: String,
             across_adapter: String,
         }
-        let map: HashMap<String, Entry> = serde_json::from_str(&json)?;
-        for (k, v) in map {
-            let chain_id: u64 = k.parse()?;
+        let map: HashMap<String, serde_json::Value> = serde_json::from_str(&json)?;
+        for (k, raw) in map {
+            // Skip comment/metadata keys (e.g. "_comment", "_updated").
+            let chain_id: u64 = match k.parse() {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            let v: Entry = match serde_json::from_value(raw) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("chain_wiring: skip chain {k}: {e}");
+                    continue;
+                }
+            };
             out.insert(
                 chain_id,
                 ChainWiring {
