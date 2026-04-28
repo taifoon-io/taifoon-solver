@@ -201,9 +201,17 @@ enum Commands {
     /// $ taifoon portfolio --private-key 0x...
     /// $ taifoon portfolio --private-key 0x... --json
     Portfolio {
-        /// Private key to derive solver address
-        #[arg(long, env = "SOLVER_PRIVATE_KEY")]
-        private_key: String,
+        /// Private key to derive solver address (mutually exclusive with --address)
+        #[arg(long, env = "SOLVER_PRIVATE_KEY", conflicts_with = "address")]
+        private_key: Option<String>,
+
+        /// Solver address to inspect directly (no private key needed)
+        #[arg(long, env = "SOLVER_ADDRESS")]
+        address: Option<String>,
+
+        /// Pull live data from the solver API instead of querying RPCs directly
+        #[arg(long, env = "SOLVER_API_URL")]
+        api_url: Option<String>,
     },
 }
 
@@ -416,9 +424,11 @@ async fn main() -> Result<()> {
             .await
         }
 
-        Commands::Portfolio { private_key } => {
+        Commands::Portfolio { private_key, address, api_url } => {
             commands::portfolio::run(commands::portfolio::PortfolioArgs {
-                private_key,
+                private_key: private_key.unwrap_or_default(),
+                address,
+                api_url,
                 json_mode: cli.json,
                 spinner_url: cli.spinner_url,
             })

@@ -58,6 +58,10 @@ pub struct Portfolio {
 
 pub struct PortfolioArgs {
     pub private_key: String,
+    /// Direct address override — skips private key derivation
+    pub address: Option<String>,
+    /// Solver API URL — if set, fetches portfolio from running solver API
+    pub api_url: Option<String>,
     pub json_mode: bool,
     pub spinner_url: String,
 }
@@ -302,9 +306,27 @@ fn resolve_solana_address() -> Option<String> {
 }
 
 pub async fn run(args: PortfolioArgs) -> Result<()> {
-    let evm_addr = match derive_evm_address(&args.private_key) {
-        Some(a) => a,
-        None => anyhow::bail!("could not derive EVM address (install foundry cast or check key format)"),
+    // If api_url is set, fetch portfolio from running solver API instead of querying RPCs
+    if let Some(ref api_url) = args.api_url {
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/solver/portfolio", api_url.trim_end_matches('/'));
+        let resp = client.get(&url).send().await?.json::<Portfolio>().await?;
+        if args.json_mode {
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+        } else {
+            print_portfolio(&resp);
+        }
+        return Ok(());
+    }
+
+    // Direct address override — no private key needed
+    let evm_addr = if let Some(ref addr) = args.address {
+        addr.clone()
+    } else {
+        match derive_evm_address(&args.private_key) {
+            Some(a) => a,
+            None => anyhow::bail!("provide --address or a valid --private-key"),
+        }
     };
 
     let solana_addr = resolve_solana_address();
@@ -433,6 +455,10 @@ impl FillStats {
     fn default_zeroes() -> Self {
         FillStats { confirmed: 0, reverted: 0, active: 0, total_volume_usd: 0.0, realized_profit_usd: 0.0 }
     }
+}
+
+fn print_portfolio(p: &Portfolio) {
+    print_portfolio_human(p, None);
 }
 
 fn print_portfolio_human(p: &Portfolio, solana_addr: Option<&str>) {
