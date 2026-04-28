@@ -457,7 +457,15 @@ impl LambdaController {
         };
 
         if self.dry_run {
-            let mode = if direct_fill { "direct_fillV3Relay" } else { "executeVerifiedCall" };
+            let mode = if is_debridge {
+                "deBridge_fulfillOrder"
+            } else if is_mayan {
+                "mayan_fulfillOrder"
+            } else if direct_fill {
+                "across_fillV3Relay"
+            } else {
+                "executeVerifiedCall"
+            };
             info!("🧪 DRY_RUN: would broadcast {} on chain {} to {}",
                 mode, wiring.chain_id, tx_target);
             self.transition(
