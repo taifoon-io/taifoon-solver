@@ -324,13 +324,13 @@ pub fn build_across_adapter_calldata(intent: &Intent) -> Result<Vec<u8>> {
         .ok_or_else(|| anyhow!("cannot resolve depositId for intent {}", intent.id))?;
 
     let depositor: Address = intent.depositor.parse()
-        .context("invalid depositor")?;
+        .with_context(|| format!("invalid depositor '{}'", intent.depositor))?;
     let recipient: Address = intent.recipient.parse()
-        .context("invalid recipient")?;
+        .with_context(|| format!("invalid recipient '{}'", intent.recipient))?;
     let input_token: Address = intent.src_token.parse()
-        .context("invalid src_token")?;
+        .with_context(|| format!("invalid src_token '{}'", intent.src_token))?;
     let output_token: Address = intent.dst_token.parse()
-        .context("invalid dst_token")?;
+        .with_context(|| format!("invalid dst_token '{}'", intent.dst_token))?;
     let input_amount = U256::from_str_radix(&intent.amount, 10)
         .context("invalid input amount")?;
 
@@ -422,10 +422,14 @@ pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_ad
         .or_else(|| parse_deposit_id_legacy(&intent.tx_hash))
         .ok_or_else(|| anyhow!("cannot resolve depositId for intent {}", intent.id))?;
 
-    let depositor: Address = intent.depositor.parse().context("invalid depositor")?;
-    let recipient: Address = intent.recipient.parse().context("invalid recipient")?;
-    let input_token: Address = intent.src_token.parse().context("invalid src_token")?;
-    let output_token: Address = intent.dst_token.parse().context("invalid dst_token")?;
+    let depositor: Address = intent.depositor.parse()
+        .with_context(|| format!("invalid depositor '{}'", intent.depositor))?;
+    let recipient: Address = intent.recipient.parse()
+        .with_context(|| format!("invalid recipient '{}'", intent.recipient))?;
+    let input_token: Address = intent.src_token.parse()
+        .with_context(|| format!("invalid src_token '{}'", intent.src_token))?;
+    let output_token: Address = intent.dst_token.parse()
+        .with_context(|| format!("invalid dst_token '{}'", intent.dst_token))?;
     let input_amount = U256::from_str_radix(&intent.amount, 10).context("invalid input amount")?;
 
     let output_amount = match intent.output_amount.as_deref() {

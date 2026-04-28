@@ -26,7 +26,7 @@ use crate::estimate::{
 
 /// Default mainnet-beta Solana RPC. Public, free, supports
 /// `simulateTransaction`. Override via `SOLANA_RPC_URL`.
-pub const DEFAULT_SOLANA_RPC: &str = "https://api.mainnet-beta.solana.com";
+pub const DEFAULT_SOLANA_RPC: &str = "https://mainnet.helius-rpc.com/?api-key=fce0a0a8-03a0-4a6c-b816-e70d5331669d";
 
 /// Source-of-truth pubkey we use for the calldata-only path when the macOS
 /// keychain entry `mamba-messiah-solana-key` is missing. `11111111…` is the

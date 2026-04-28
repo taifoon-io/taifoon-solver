@@ -647,15 +647,16 @@ impl DeBridgePoller {
     pub fn default_mainnet() -> Self {
         Self {
             chains: vec![
-                (1,     "https://eth.llamarpc.com".into()),
-                (10,    "https://optimism.blockpi.network/v1/rpc/206b05d563d8d7c2849f37a9962e022f3db8a13a".into()),
-                (42161, "https://arbitrum.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b".into()),
-                (8453,  "https://base.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b".into()),
-                (56,    "https://binance.llamarpc.com".into()),
+                (42161, "https://arbitrum-mainnet.infura.io/v3/9e09ec06e2fd43778f9fd52eb0265d75".into()),
+                (8453,  "https://base-mainnet.infura.io/v3/6c90d1c7ee4e4ff08ea67114a81c9ae0".into()),
+                (10,    "https://optimism-mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
+                (137,   "https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab".into()),
+                (56,    "https://bsc-mainnet.infura.io/v3/51022b81bc7e4030895fd39e5f80abbe".into()),
                 (59144, "https://rpc.linea.build".into()),
+                (1,     "https://mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
             ],
             poll_interval_secs: 12,
-            blocks_per_batch: 100,
+            blocks_per_batch: 2000,
         }
     }
 
@@ -705,6 +706,13 @@ impl DeBridgePoller {
                 for log in logs {
                     if let Some(intent) = decode_dln_order_created_log(&log, *chain_id) {
                         if !seen.insert(intent.id.clone()) { continue; }
+                        // Skip orders where the take-token is not a known stablecoin/WETH —
+                        // exotic tokens cause 18-decimal mis-pricing and we have no inventory.
+                        if !is_supported_fill_token(&intent.dst_token) {
+                            info!("⏭️  DeBridgePoller skip exotic take_token={} order={}",
+                                intent.dst_token, intent.order_id.as_deref().unwrap_or("?"));
+                            continue;
+                        }
                         info!("📡 DeBridgePoller chain={} orderId={} {}→{} give={}",
                             chain_id, intent.order_id.as_deref().unwrap_or("?"),
                             intent.src_chain, intent.dst_chain, intent.amount);
@@ -718,6 +726,42 @@ impl DeBridgePoller {
             tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
         }
     }
+}
+
+/// Returns true when `addr` is a token the solver can actually fill:
+/// USDC / USDT (any chain) or WETH / native-ETH.
+fn is_supported_fill_token(addr: &str) -> bool {
+    let lower = addr.to_lowercase();
+    // Native ETH sentinel
+    if lower == "0x0000000000000000000000000000000000000000" || lower == "native" {
+        return true;
+    }
+    const SUPPORTED: &[&str] = &[
+        // USDC (all chains)
+        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // ETH
+        "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // Arb native
+        "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", // USDC.e Arb
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // Base
+        "0x0b2c639c533813f4aa9d7837caf62653d097ff85", // OP native
+        "0x7f5c764cbc14f9669b88837ca1490cca17c31607", // USDC.e OP
+        "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", // Polygon native
+        "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", // USDC.e Polygon
+        "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", // Linea
+        "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", // BNB USDC
+        // USDT (all chains)
+        "0xdac17f958d2ee523a2206206994597c13d831ec7", // ETH
+        "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // Arb
+        "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // OP
+        // BSC USDT (0x55d398) is 18-decimal — skip until decimal handling is confirmed
+        "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // Polygon
+        // WETH (all chains)
+        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // ETH
+        "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", // Arb
+        "0x4200000000000000000000000000000000000006", // Base / OP / Unichain
+        "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f", // Linea
+        "0x2170ed0880ac9a755fd29b2688956bd959f933f8", // BSC WETH
+    ];
+    SUPPORTED.iter().any(|s| *s == lower.as_str())
 }
 
 async fn eth_block_number(client: &reqwest::Client, rpc: &str) -> Option<u64> {

@@ -250,7 +250,9 @@ impl LambdaController {
         //   A) If we have a deposit_id → Across API /deposit/status → depositTxHash → decode on-chain
         //   B) If we have a tx_hash that looks like a real tx → decode on-chain directly
         let enriched_intent;
-        let intent: &Intent = if direct_fill {
+        // Enrichment only applies to Across direct-fills. deBridge/Mayan carry all needed
+        // fields from their on-chain log decoders and never need Across relay-data lookup.
+        let intent: &Intent = if direct_fill && !is_debridge_pre && !is_mayan_pre {
             let needs_enrichment = intent.fill_deadline.is_none()
                 || intent.output_amount.is_none()
                 || intent.deposit_id.is_none();
@@ -940,8 +942,8 @@ fn token_decimals(token: &str) -> u8 {
         "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT Ethereum
         "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USDT Arbitrum
         "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT Optimism
-        "0x55d398326f99059ff775485246999027b3197955", // USDT BSC
-        "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon
+        // NOTE: BSC USDT (0x55d398) uses 18 decimals — intentionally omitted here
+        "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon (6 dec)
         "usdc", "usdt",
     ];
     if SIX_DEC.iter().any(|&s| lower == s) {

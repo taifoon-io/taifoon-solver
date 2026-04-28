@@ -118,6 +118,7 @@ impl DeBridgeAdapter {
         dln_addresses.insert(56, dln_addr);      // BSC
         dln_addresses.insert(43114, dln_addr);   // Avalanche
         dln_addresses.insert(59144, dln_addr);   // Linea
+        dln_addresses.insert(137, dln_addr);     // Polygon
 
         Self {
             spinner_client,
@@ -224,7 +225,10 @@ impl ProtocolAdapter for DeBridgeAdapter {
 
         let order = self.parse_order(intent)?;
         let order_id = self.extract_order_id(intent)?;
-        let fulfill_amount = U256::from_str_radix(&intent.amount, 10)?;
+        let fulfill_amount = match intent.take_amount.as_deref() {
+            Some(s) if !s.is_empty() => U256::from_str_radix(s, 10)?,
+            _ => U256::from_str_radix(&intent.amount, 10)?,
+        };
 
         let call = DlnDestination::fulfillOrderCall {
             _order: order,
@@ -281,7 +285,11 @@ impl DeBridgeAdapter {
     pub fn build_fulfill_order_calldata(&self, intent: &Intent) -> Result<Vec<u8>> {
         let order = self.parse_order(intent)?;
         let order_id = self.extract_order_id(intent)?;
-        let fulfill_amount = U256::from_str_radix(&intent.amount, 10)?;
+        // fulfill_amount is takeAmount (what solver sends to receiver on dst chain)
+        let fulfill_amount = match intent.take_amount.as_deref() {
+            Some(s) if !s.is_empty() => U256::from_str_radix(s, 10)?,
+            _ => U256::from_str_radix(&intent.amount, 10)?,
+        };
         let call = DlnDestination::fulfillOrderCall {
             _order: order,
             _fulFillAmount: fulfill_amount,

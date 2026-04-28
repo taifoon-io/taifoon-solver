@@ -60,12 +60,12 @@ pub fn default_debridge_dln_addresses() -> HashMap<u64, Address> {
 /// Premium RPCs sourced from rpc-hunter / t3rn-guardian endpoints.
 pub fn default_rpc_for_chain(chain_id: u64) -> Option<&'static str> {
     match chain_id {
-        1 => Some("https://eth.llamarpc.com"),
-        10 => Some("https://optimism.blockpi.network/v1/rpc/206b05d563d8d7c2849f37a9962e022f3db8a13a"),
-        42161 => Some("https://arbitrum.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b"),
-        8453 => Some("https://base.blockpi.network/v1/rpc/c97fc808e43db8495c7e292391867305a448dd6b"),
-        137 => Some("https://polygon.drpc.org"),
-        56 => Some("https://binance.llamarpc.com"),
+        1 => Some("https://mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
+        10 => Some("https://optimism-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
+        42161 => Some("https://arbitrum-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
+        8453 => Some("https://base-mainnet.infura.io/v3/753cc78f52604510b0dc93c72f623740"),
+        137 => Some("https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
+        56 => Some("https://bsc-mainnet.infura.io/v3/2aa61415c8df44278215d749d6ccd221"),
         43114 => Some("https://api.avax.network/ext/bc/C/rpc"),
         59144 => Some("https://rpc.linea.build"),
         _ => None,

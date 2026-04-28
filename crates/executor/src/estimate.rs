@@ -88,6 +88,25 @@ pub fn classify_evm_error(msg: &str) -> EstimateOutcome {
         return EstimateOutcome::InsufficientFundsLike(msg.to_string());
     }
     if lower.contains("revert") || lower.contains("execution failed") {
+        // "execution reverted, data: \"0x\"" means no error selector — almost always an
+        // ERC-20 balance check. Treat as InsufficientFundsLike so a funded key can fill.
+        // Any other revert form (human-readable message, non-empty selector data) is a
+        // real protocol-level reject and stays as Reverted.
+        let has_empty_data_field = lower.contains("data: \"0x\"")
+            || lower.contains("data: '0x'")
+            || lower.contains(", data: 0x\"")
+            || lower.ends_with(", data: 0x")
+            // BSC geth: "execution reverted: 0x"
+            || lower.ends_with("reverted: 0x")
+            // Some nodes strip data entirely and return just the bare phrase
+            || lower.trim() == "execution reverted";
+        // "execution reverted" with no trailing context (just the bare error from
+        // some RPCs) also maps to funds-like — the node stripped error data.
+        let is_bare_revert = lower.trim_end() == "execution reverted"
+            || lower.ends_with("execution reverted");
+        if has_empty_data_field || is_bare_revert {
+            return EstimateOutcome::InsufficientFundsLike(msg.to_string());
+        }
         return EstimateOutcome::Reverted(msg.to_string());
     }
     // Default unknown errors to AbiInvalid — safer than masking them as green.
