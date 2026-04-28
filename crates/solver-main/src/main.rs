@@ -365,7 +365,8 @@ async fn main() -> Result<()> {
                 }
             }
             if bridge.is_empty() {
-                &intent
+                // Bridge not routable — don't fall to legacy executor
+                continue;
             } else {
                 effective_intent = LiFiMetaRouter::project_to_child(&intent, &bridge);
                 info!("🔀 LiFi→{} projection: {} intent id={}", bridge, intent.id, effective_intent.id);
