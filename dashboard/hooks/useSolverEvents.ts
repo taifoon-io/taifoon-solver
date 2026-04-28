@@ -157,7 +157,7 @@ export function useSolverEvents() {
       const d = JSON.parse(e.data)
       setIntents(prev => [{
         id: d.id, protocol: d.protocol, timestamp: d.timestamp,
-        stage: 'detected', src_chain: d.src_chain, dst_chain: d.dst_chain,
+        stage: 'detected' as LambdaStage, src_chain: d.src_chain, dst_chain: d.dst_chain,
         amount: d.amount, token: d.token,
       }, ...prev].slice(0, 150))
       bump(d.protocol, { seen: 1 })
