@@ -13,6 +13,7 @@ services:
       - WARMBED_API_URL=https://api.taifoon.dev
       - MIN_PROFIT_USD=0.1
       - SIMULATION_MODE=true
+      - PROTOCOL_FILTER=all
       - CHAIN_WIRING_FILE=/home/solver/config/chain_wiring.json
       # Dummy key initializes the Lambda controller in dry-run mode (no real broadcasts).
       # Replace with a funded key to enable live fills.
