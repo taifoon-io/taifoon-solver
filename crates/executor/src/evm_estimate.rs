@@ -307,6 +307,76 @@ fn address_to_bytes(addr: &str) -> Result<Bytes> {
     Ok(Bytes::from(hex::decode(clean)?))
 }
 
+/// Per-chain gas price ranges (gwei). Mirrors t3rn-guardian GAS_PRICE_RANGES.
+/// Used as floor/ceiling guards when Razor API is unavailable.
+/// L2s (OP-stack, Arbitrum): typical ~0.001–0.005 gwei.
+/// L1 (Ethereum): typical ~5–20 gwei. BSC: typical ~3–5 gwei.
+pub struct GasPriceRange {
+    pub min_gwei: f64,
+    pub max_gwei: f64,
+    pub typical_gwei: f64,
+}
+
+pub fn gas_price_range_for_chain(chain_id: u64) -> GasPriceRange {
+    match chain_id {
+        1       => GasPriceRange { min_gwei: 1.0,   max_gwei: 200.0, typical_gwei: 10.0  }, // Ethereum
+        10      => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.001 }, // Optimism
+        56      => GasPriceRange { min_gwei: 1.0,   max_gwei: 20.0,  typical_gwei: 3.0   }, // BSC
+        137     => GasPriceRange { min_gwei: 30.0,  max_gwei: 500.0, typical_gwei: 50.0  }, // Polygon
+        8453    => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.005 }, // Base
+        42161   => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.01  }, // Arbitrum
+        43114   => GasPriceRange { min_gwei: 25.0,  max_gwei: 100.0, typical_gwei: 30.0  }, // Avalanche
+        59144   => GasPriceRange { min_gwei: 0.05,  max_gwei: 5.0,   typical_gwei: 0.1   }, // Linea
+        _       => GasPriceRange { min_gwei: 0.001, max_gwei: 200.0, typical_gwei: 1.0   },
+    }
+}
+
+/// Fetch real-time gas price (gwei) from Razor / Warmbed API.
+/// Returns `None` on any failure so the caller falls back to node gas price.
+/// Endpoint: `GET {base}/api/gas/latest/{chain_id}` → `{"gas_price_gwei": 0.005}`
+pub async fn fetch_razor_gas_price_gwei(chain_id: u64, warmbed_base: &str) -> Option<f64> {
+    #[derive(serde::Deserialize)]
+    struct GasResp { gas_price_gwei: Option<f64> }
+
+    let url = format!("{}/api/gas/latest/{}", warmbed_base.trim_end_matches('/'), chain_id);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    let parsed: GasResp = resp.json().await.ok()?;
+    parsed.gas_price_gwei
+}
+
+/// Compute the optimal maxFeePerGas (wei) for a chain.
+///
+/// Strategy (mirrors t3rn-guardian + Python filler):
+///   1. Try Razor API for live gas price.
+///   2. Clamp result against per-chain min/max from `GAS_PRICE_RANGES`.
+///   3. Apply 1.2× safety buffer.
+///   4. If Razor unavailable, use chain `typical` as fallback.
+///
+/// Returns (max_fee_per_gas_wei, priority_fee_wei).
+pub async fn optimal_gas_price_wei(chain_id: u64, warmbed_base: &str) -> (u128, u128) {
+    let range = gas_price_range_for_chain(chain_id);
+
+    let gwei = if let Some(live) = fetch_razor_gas_price_gwei(chain_id, warmbed_base).await {
+        // Clamp against known-sane range, then apply 1.2× buffer.
+        let clamped = live.max(range.min_gwei).min(range.max_gwei);
+        clamped * 1.2
+    } else {
+        // Razor unavailable — use chain typical as safe floor.
+        range.typical_gwei * 1.2
+    };
+
+    let max_fee_wei = (gwei * 1_000_000_000.0) as u128;
+    // Priority fee: 10% of max_fee, floored at 1 mwei (0.000001 gwei), capped at max_fee.
+    let priority_fee_wei = (max_fee_wei / 10).max(1_000).min(max_fee_wei);
+
+    (max_fee_wei, priority_fee_wei)
+}
+
 /// Run `eth_estimateGas` against the chain's RPC. Returns the appropriate
 /// outcome variant based on the result or error message.
 pub async fn run_evm_estimate(
@@ -314,6 +384,17 @@ pub async fn run_evm_estimate(
     from: Address,
     to: Address,
     calldata: &[u8],
+) -> EstimateOutcome {
+    run_evm_estimate_with_value(chain_id, from, to, calldata, None).await
+}
+
+/// Value-aware variant — use for `payable` calls (Mayan native-out, WETH fills).
+pub async fn run_evm_estimate_with_value(
+    chain_id: u64,
+    from: Address,
+    to: Address,
+    calldata: &[u8],
+    value: Option<U256>,
 ) -> EstimateOutcome {
     let rpc_url = match resolve_rpc_url(chain_id) {
         Some(u) => u,
@@ -332,15 +413,19 @@ pub async fn run_evm_estimate(
     };
     let provider = ProviderBuilder::new().on_http(url);
 
-    let req = TransactionRequest::default()
+    let mut req = TransactionRequest::default()
         .from(from)
         .to(to)
         .input(Bytes::from(calldata.to_vec()).into());
+    if let Some(v) = value {
+        req = req.value(v);
+    }
 
     info!(
         target: "estimate",
-        "→ eth_estimateGas chain={} from={:#x} to={:#x} bytes={}",
-        chain_id, from, to, calldata.len()
+        "→ eth_estimateGas chain={} from={:#x} to={:#x} bytes={} value={}",
+        chain_id, from, to, calldata.len(),
+        value.map(|v| v.to_string()).unwrap_or_else(|| "0".into())
     );
 
     match provider.estimate_gas(&req).await {

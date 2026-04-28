@@ -1,181 +1,217 @@
-//! Execute fills and manage autonomous participation
+//! Execute fills and manage autonomous participation via the Lambda controller pipeline.
+//!
+//! All four protocols (Across V3, deBridge DLN, Mayan EVM, Mayan Solana) and LiFi
+//! (projected to its underlying child protocol) flow through the same
+//! `lambda_execute` lifecycle: reserve → estimate → calldata → estimateGas gate →
+//! fee-aware broadcast → receipt → release.
 
 use anyhow::{anyhow, Result};
-use crate::wallet::Wallet;
+use executor::{
+    build_lambda_controller_from_env, LambdaClaimOutcome, LambdaExecuteOutcome, LiFiMetaRouter,
+};
 use genome_client::{GenomeClient, Intent};
-use protocol_adapters::AdapterFactory;
-use serde_json::json;
+use std::collections::HashSet;
+use std::sync::Arc;
 use tokio::sync::mpsc;
-use std::io::{self, Write};
+use tracing::{error, info, warn};
+use wallet_manager::WalletManager;
+
+const DEFAULT_WALLET_DB: &str = "/tmp/taifoon_cli_wallet.sqlite";
+const DEFAULT_OUTCOME_DB: &str = "/tmp/taifoon_cli_outcomes.sqlite";
+const DEFAULT_WALLET_BUDGET: f64 = 10_000.0;
 
 pub async fn participate(
     spinner_url: &str,
     genome_url: &str,
     private_key: &str,
-    auto: bool,
+    _auto: bool,
     min_profit: f64,
     protocol: &str,
     dry_run: bool,
-    max_concurrent: usize,
+    _max_concurrent: usize,
     json_mode: bool,
 ) -> Result<()> {
-    let signer = Wallet::from_private_key(private_key)?;
-    let address = signer.address();
+    // Inject private key into env so build_lambda_controller_from_env can pick it up.
+    // This avoids duplicating the signer-parse logic.
+    std::env::set_var("SOLVER_PRIVATE_KEY", private_key);
+    std::env::set_var("WARMBED_API_URL", spinner_url);
+    std::env::set_var("DRY_RUN", if dry_run { "true" } else { "false" });
+
+    let wallet_db = std::env::var("WALLET_DB_PATH").unwrap_or_else(|_| DEFAULT_WALLET_DB.into());
+    let outcome_db = std::env::var("OUTCOME_DB_PATH").unwrap_or_else(|_| DEFAULT_OUTCOME_DB.into());
+    let wallet_budget: f64 = std::env::var("WALLET_BUDGET_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_WALLET_BUDGET);
+    let mamba_url = std::env::var("MAMBA_LAKE_URL").ok();
+
+    let wallet_manager = Arc::new(
+        WalletManager::open(&wallet_db, wallet_budget)
+            .map_err(|e| anyhow!("wallet-manager: {e}"))?,
+    );
+
+    let ctrl = match build_lambda_controller_from_env(
+        spinner_url,
+        &outcome_db,
+        mamba_url,
+        dry_run,
+        min_profit,
+        wallet_manager,
+    )? {
+        Some(c) => c,
+        None => return Err(anyhow!("SOLVER_PRIVATE_KEY not set — cannot execute fills")),
+    };
+
+    let solver_addr = format!("{:?}", ctrl.signer.address());
 
     if json_mode {
-        println!(r#"{{"success":true,"message":"Starting autonomous solver","address":"{:?}","auto":{},"dry_run":{}}}"#,
-            address, auto, dry_run);
+        println!(
+            r#"{{"success":true,"message":"Starting solver","address":"{}","dry_run":{}}}"#,
+            solver_addr, dry_run
+        );
     } else {
-        println!("\n👑 TAIFOON SOLVER - AUTONOMOUS PARTICIPATION MODE");
+        println!("\n👑 TAIFOON SOLVER — UNIFIED LAMBDA PIPELINE");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("Wallet:         {:?}", address);
-        println!("Mode:           {}", if auto { "AUTONOMOUS" } else { "INTERACTIVE" });
-        println!("Min Profit:     ${:.2}", min_profit);
-        println!("Protocol:       {}", protocol);
-        println!("Dry Run:        {}", dry_run);
-        println!("Max Concurrent: {}", max_concurrent);
+        println!("Solver:     {}", solver_addr);
+        println!("Chains:     {} wired", ctrl.chains.len());
+        println!("Protocol:   {}", protocol);
+        println!("Min Profit: ${:.2}", min_profit);
+        println!("Dry Run:    {}", dry_run);
+        println!("Spinner:    {}", spinner_url);
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-
-        if dry_run {
-            println!("🧪 DRY-RUN MODE: Simulating fills, no transactions will be broadcast\n");
-        } else if auto {
-            println!("🚀 LIVE MODE: Will execute profitable fills automatically\n");
-        } else {
-            println!("💬 INTERACTIVE MODE: Will prompt for confirmation before fills\n");
-        }
-
-        println!("📡 Monitoring genome stream...\n");
     }
 
-    // Create adapter factory
-    let adapter_factory = AdapterFactory::new(spinner_url);
+    let protocol_filter = protocol.to_lowercase();
 
-    // Create channel for intents
-    let (intent_tx, mut intent_rx) = mpsc::channel::<Intent>(100);
-
-    // Spawn genome client in background
     let genome_client = GenomeClient::new(genome_url);
-    let genome_handle = tokio::spawn(async move {
+    let (intent_tx, mut intent_rx) = mpsc::channel::<Intent>(100);
+    let _genome_handle = tokio::spawn(async move {
         if let Err(e) = genome_client.subscribe(intent_tx).await {
-            eprintln!("Genome stream error: {}", e);
+            error!("genome stream error: {}", e);
         }
     });
 
-    // Process intents
-    let mut processed_count = 0;
-    let mut executed_count = 0;
+    if !json_mode {
+        println!("📡 Monitoring genome stream...\n");
+    }
+
+    let mut dispatched: HashSet<String> = HashSet::new();
 
     while let Some(intent) = intent_rx.recv().await {
-        // Apply protocol filter
-        let protocol_lower = protocol.to_lowercase();
-        if protocol_lower != "all" {
-            if !intent.protocol.to_lowercase().contains(&protocol_lower) {
-                continue;
-            }
-        }
+        let proto_lower = intent.protocol.to_lowercase();
 
-        processed_count += 1;
-
-        if !json_mode {
-            println!("🎯 Intent #{} detected", processed_count);
-            println!("   Protocol:   {}", intent.protocol);
-            println!("   Route:      {} → {}", intent.src_chain, intent.dst_chain);
-            println!("   Amount:     {}", intent.amount);
-            println!("   Depositor:  {}", intent.depositor);
-        }
-
-        // TODO: Estimate gas costs and calculate profitability
-        // For now, we'll simulate profitability check
-        let estimated_profit = 0.0; // Placeholder
-
-        if estimated_profit < min_profit {
-            if !json_mode {
-                println!("   ⚠️  Skipped: Estimated profit ${:.2} below minimum ${:.2}\n", estimated_profit, min_profit);
-            }
+        // Protocol filter
+        if protocol_filter != "all" && !protocol_filter.split(',').any(|f| proto_lower.contains(f.trim())) {
             continue;
         }
 
-        // In interactive mode, ask for confirmation
-        if !auto && !dry_run {
-            if !json_mode {
-                print!("   Execute fill? (y/n): ");
-                io::stdout().flush()?;
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
+        // LiFi projection
+        let effective_intent;
+        let intent_ref: &Intent = if proto_lower.contains("lifi") || proto_lower.contains("li.fi") {
+            let bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
+            if bridge.is_empty() {
+                info!("⏭️  lifi skip (missing bridge/tool): {}", intent.id);
+                continue;
+            }
+            effective_intent = LiFiMetaRouter::project_to_child(&intent, &bridge);
+            info!("🔀 LiFi→{} projection: {}", bridge, intent.id);
+            &effective_intent
+        } else {
+            &intent
+        };
 
-                if input.trim().to_lowercase() != "y" {
-                    println!("   Skipped by user\n");
-                    continue;
+        let eff_proto = intent_ref.protocol.to_lowercase();
+        let routable = eff_proto.contains("across")
+            || eff_proto.contains("debridge")
+            || eff_proto.contains("dln")
+            || eff_proto.contains("mayan");
+
+        if !routable {
+            info!("⏭️  unroutable protocol: {}", intent_ref.protocol);
+            continue;
+        }
+
+        // Zero-amount guard
+        if intent_ref.amount == "0"
+            && intent_ref.output_amount.as_deref().map(|s| s == "0" || s.is_empty()).unwrap_or(true)
+        {
+            info!("⏭️  skip zero-amount: {}", intent_ref.id);
+            continue;
+        }
+
+        // Dedup
+        let dedup_key = if let Some(dep_id) = intent_ref.deposit_id {
+            format!("{}:dep:{}", intent_ref.protocol, dep_id)
+        } else {
+            intent_ref.id.clone()
+        };
+        if !dispatched.insert(dedup_key.clone()) {
+            continue;
+        }
+
+        info!("📥 {} ({}) {}→{} amt={}",
+            intent_ref.id, intent_ref.protocol, intent_ref.src_chain, intent_ref.dst_chain, intent_ref.amount);
+
+        match ctrl.lambda_execute(intent_ref).await {
+            Ok(LambdaExecuteOutcome::Confirmed { tx_hash, gas_used }) => {
+                if json_mode {
+                    println!(
+                        r#"{{"action":"confirmed","intent_id":"{}","tx_hash":"{}","gas_used":{}}}"#,
+                        intent_ref.id, tx_hash, gas_used
+                    );
+                } else {
+                    println!("🎉 CONFIRMED: {} — tx {}", intent_ref.id, tx_hash);
+                }
+                // deBridge follow-up claim
+                if eff_proto.contains("debridge") || eff_proto.contains("dln") {
+                    match ctrl.lambda_claim_debridge(intent_ref).await {
+                        Ok(LambdaClaimOutcome::Claimed { tx_hash: claim_tx, fee_usd }) => {
+                            info!("💰 deBridge claimUnlock: {} (fee ~${:.4})", claim_tx, fee_usd);
+                        }
+                        Ok(LambdaClaimOutcome::NotEligible { reason }) => {
+                            warn!("⚠️  deBridge claim not eligible: {}", reason);
+                        }
+                        Ok(LambdaClaimOutcome::Failed { error: e }) => {
+                            error!("❌ deBridge claimUnlock failed: {}", e);
+                        }
+                        Err(e) => error!("❌ deBridge claim fatal: {}", e),
+                    }
                 }
             }
-        }
-
-        // Execute fill (or simulate in dry-run mode)
-        if dry_run {
-            if json_mode {
-                println!("{}", json!({
-                    "action": "simulated_fill",
-                    "intent_id": intent.id,
-                    "protocol": intent.protocol,
-                    "estimated_profit": estimated_profit
-                }));
-            } else {
-                println!("   🧪 SIMULATED: Would execute fill (dry-run mode)");
-                println!("   Estimated profit: ${:.2}\n", estimated_profit);
+            Ok(LambdaExecuteOutcome::Skipped { reason }) => {
+                if json_mode {
+                    println!(
+                        r#"{{"action":"skipped","intent_id":"{}","reason":"{}"}}"#,
+                        intent_ref.id, reason
+                    );
+                } else {
+                    info!("⏭️  skipped {}: {}", intent_ref.id, reason);
+                }
             }
-            executed_count += 1;
-        } else {
-            // TODO: Actually execute the fill via protocol adapter
-            if json_mode {
-                println!("{}", json!({
-                    "action": "executed_fill",
-                    "intent_id": intent.id,
-                    "protocol": intent.protocol,
-                    "status": "pending"
-                }));
-            } else {
-                println!("   ⚡ Executing fill...");
-                println!("   Status: Pending on-chain confirmation\n");
+            Ok(LambdaExecuteOutcome::Reverted { tx_hash, error: e }) => {
+                error!("❌ reverted (tx {}): {}", tx_hash, e);
             }
-            executed_count += 1;
+            Ok(LambdaExecuteOutcome::Failed { stage, error: e }) => {
+                error!("❌ failed at {}: {}", stage, e);
+            }
+            Err(e) => error!("❌ lambda_execute fatal: {}", e),
         }
-    }
-
-    // Cleanup
-    genome_handle.abort();
-
-    if !json_mode {
-        println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("Session ended");
-        println!("Intents processed: {}", processed_count);
-        println!("Fills executed: {}", executed_count);
     }
 
     Ok(())
 }
 
 pub async fn single_fill(
-    spinner_url: &str,
+    _spinner_url: &str,
     intent_id: &str,
-    private_key: &str,
-    dry_run: bool,
+    _private_key: &str,
+    _dry_run: bool,
     json_mode: bool,
 ) -> Result<()> {
-    let signer = Wallet::from_private_key(private_key)?;
-    let address = signer.address();
-
     if json_mode {
-        println!(r#"{{"success":true,"message":"Executing fill","intent_id":"{}","dry_run":{}}}"#,
-            intent_id, dry_run);
+        println!(r#"{{"success":false,"message":"single_fill not yet implemented","intent_id":"{}"}}"#, intent_id);
     } else {
-        println!("\n⚡ Executing Fill");
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("Intent ID: {}", intent_id);
-        println!("Wallet:    {:?}", address);
-        println!("Dry Run:   {}", dry_run);
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        println!("⚡ single_fill for {} — not yet implemented", intent_id);
     }
-
-    // TODO: Implement single fill execution
     Ok(())
 }

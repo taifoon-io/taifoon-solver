@@ -39,6 +39,9 @@ use tracing::{info, warn};
 use wallet_manager::{IntentState, NewIntent, WalletManager};
 
 use crate::across_executor::{build_across_adapter_calldata, build_across_spoke_pool_calldata_with_relayer, fetch_relay_data_for_deposit, fetch_relay_data_from_tx, ChainWiring};
+use crate::evm_estimate::{optimal_gas_price_wei, run_evm_estimate_with_value};
+use crate::estimate::EstimateOutcome;
+use crate::mayan_evm_estimate::MayanEvmEstimateAdapter;
 use crate::outcome_log::{OutcomeLog, OutcomeRecord};
 use crate::spinner_solver::SpinnerSolverClient;
 use protocol_adapters::debridge::DeBridgeAdapter;
@@ -333,22 +336,37 @@ impl LambdaController {
         }
 
         // 6. CALLDATA_BUILD.
-        // Two paths:
-        //   a) operator != 0x0  → wrap in executeVerifiedCall(V1) via TaifoonUniversalOperator
-        //   b) operator == 0x0  → call Across SpokePool.fillV3Relay directly (no Taifoon operator on this chain)
+        // Paths by protocol + chain:
+        //   a) is_mayan + EVM → MayanSwift.fulfillOrder() on Swift contract
+        //   b) is_mayan + Solana src → stub skip (broadcast not yet implemented)
+        //   c) is_debridge → DlnDestination.fulfillOrder()
+        //   d) direct_fill (Across, operator==0x0) → SpokePool.fillV3Relay directly
+        //   e) operator != 0x0 → wrap in executeVerifiedCall(V1)
         self.transition(&intent.id, IntentState::CalldataBuild, None, None);
-        // `direct_fill` was determined after chain wiring resolution above.
-        // For ETH fills (outputToken == WETH), fillV3Relay is payable — we attach msg.value.
-        // outputAmount comes from the intent; dst_token is the output token address.
-        let eth_fill_value: Option<U256> = if direct_fill {
+
+        let proto_lower = intent.protocol.to_lowercase();
+        let is_mayan = proto_lower.contains("mayan");
+        let is_debridge = proto_lower.contains("debridge") || proto_lower.contains("dln");
+        let is_solana_src = intent.is_solana_source.unwrap_or(false)
+            || intent.src_chain == 1_399_811_149;
+
+        // Mayan Solana-source: clean skip — EVM broadcast path doesn't apply.
+        if is_mayan && is_solana_src {
+            let reason = "mayan_solana_broadcast_not_yet_implemented".to_string();
+            info!("⏭️  Solana-source Mayan {} — {}", intent.id, reason);
+            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+            return Ok(LambdaExecuteOutcome::Skipped { reason });
+        }
+
+        // ETH/WETH fill value — applies to Across direct fills and Mayan native-out.
+        let eth_fill_value: Option<U256> = {
             let weth = weth_address_for_chain(wiring.chain_id);
             let dst = intent.dst_token.to_lowercase();
-            let is_weth = weth.map(|w| w.to_lowercase() == dst).unwrap_or(false)
+            let is_native_out = weth.map(|w| w.to_lowercase() == dst).unwrap_or(false)
                 || dst == "0x0000000000000000000000000000000000000000"
                 || dst == "native";
-            if is_weth {
+            if is_native_out {
                 let out_amt = intent.output_amount.as_deref().and_then(|s| {
-                    // Prefer decimal parse; only hex if explicitly 0x-prefixed.
                     if s.starts_with("0x") || s.starts_with("0X") {
                         U256::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()
                     } else {
@@ -356,16 +374,28 @@ impl LambdaController {
                     }
                 });
                 if let Some(v) = out_amt {
-                    info!("💰 ETH fill: attaching {} wei as msg.value", v);
+                    info!("💰 Native-out fill: attaching {} wei as msg.value", v);
                     Some(v)
                 } else { None }
             } else { None }
-        } else { None };
+        };
 
-        let proto_lower = intent.protocol.to_lowercase();
-        let is_debridge = proto_lower.contains("debridge") || proto_lower.contains("dln");
-
-        let (tx_target, tx_calldata) = if is_debridge {
+        let (tx_target, tx_calldata) = if is_mayan {
+            // Mayan Swift EVM: fulfillOrder(orderHash, fulfillAmount, encodedVm, OrderParams, recipient)
+            let adapter = MayanEvmEstimateAdapter::new(self.signer.address(), self.spinner.base_url());
+            let (swift_addr, calldata) = match adapter.build_estimate_call(intent) {
+                Ok(v) => v,
+                Err(e) => {
+                    let err = format!("calldata_build:{e}");
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
+            };
+            info!("📋 Mayan Swift fulfillOrder on chain {} (swift {}): {} bytes calldata{}",
+                wiring.chain_id, swift_addr, calldata.len(),
+                eth_fill_value.map(|v| format!(", value={v}wei")).unwrap_or_default());
+            (swift_addr, calldata)
+        } else if is_debridge {
             // deBridge DLN path: fulfillOrder() on DlnDestination (same address all chains).
             let adapter = DeBridgeAdapter::new(SpinnerClient::new(self.spinner.base_url()));
             let dln_addr = match adapter.dln_source_address(intent.dst_chain) {
@@ -450,7 +480,41 @@ impl LambdaController {
             });
         }
 
-        // 6. BROADCAST → PENDING_CONFIRMATION.
+        // 6b. ESTIMATE GATE — mandatory estimateGas before every broadcast.
+        // Catches AlreadyFilled / ABI mismatches before they burn gas on-chain.
+        // Solana-source intents are already guarded by the stub above.
+        {
+            let solver_addr = self.signer.address();
+            let estimate_outcome = run_evm_estimate_with_value(
+                wiring.chain_id,
+                solver_addr,
+                tx_target,
+                &tx_calldata,
+                eth_fill_value,
+            ).await;
+
+            if !estimate_outcome.is_green() {
+                let detail = match &estimate_outcome {
+                    EstimateOutcome::Reverted(s) | EstimateOutcome::AbiInvalid(s) => s.clone(),
+                    EstimateOutcome::RouteNotImplemented(s) => s.clone(),
+                    _ => String::new(),
+                };
+                let reason = format!("estimate_gate:{}:{}", estimate_outcome.tag(), detail);
+                warn!("⚠️  estimate gate blocked {} — {}", intent.id, reason);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
+            info!("✅ estimate gate passed ({:?})", estimate_outcome);
+        }
+
+        // 6c. FEE-AWARE GAS PRICE — fetch from Razor API, clamp to sane range, apply 1.2× buffer.
+        // Falls back to node's recommended gas if Razor is unavailable (API 502 etc).
+        let (max_fee_per_gas, max_priority_fee) =
+            optimal_gas_price_wei(wiring.chain_id, self.spinner.base_url()).await;
+        info!("⛽ gas chain={} maxFee={} priorityFee={} wei",
+            wiring.chain_id, max_fee_per_gas, max_priority_fee);
+
+        // 7. BROADCAST → PENDING_CONFIRMATION.
         self.transition(&intent.id, IntentState::Broadcast, None, None);
         let wallet = EthereumWallet::from(self.signer.clone());
         let provider = ProviderBuilder::new()
@@ -465,7 +529,9 @@ impl LambdaController {
 
         let mut tx_req = TransactionRequest::default()
             .to(tx_target)
-            .input(tx_calldata.into());
+            .input(tx_calldata.into())
+            .max_fee_per_gas(max_fee_per_gas)
+            .max_priority_fee_per_gas(max_priority_fee);
         if let Some(v) = eth_fill_value {
             tx_req = tx_req.value(v);
         }
@@ -921,6 +987,117 @@ alloy::sol! {
         address vendorContract,
         bytes calldata callData
     ) external returns (bytes32 executionId, bool success);
+}
+
+/// Build a `LambdaController` from environment variables.
+///
+/// Returns `Ok(None)` when `SOLVER_PRIVATE_KEY` is absent (observation-only mode).
+/// Chain wiring is loaded from `CHAIN_WIRING_FILE` → `CHAIN_WIRING_JSON` → per-chain
+/// `CHAINS` + `RPC_URL_<id>` + `OPERATOR_<id>` + `ADAPTER_<id>` vars.
+pub fn build_lambda_controller_from_env(
+    spinner_base: &str,
+    outcome_db_path: &str,
+    mamba_url: Option<String>,
+    dry_run: bool,
+    profit_threshold_usd: f64,
+    wallet: Arc<WalletManager>,
+) -> anyhow::Result<Option<LambdaController>> {
+    let pk = match std::env::var("SOLVER_PRIVATE_KEY") {
+        Ok(v) if !v.is_empty() => v,
+        _ => return Ok(None),
+    };
+    let signer: alloy::signers::local::PrivateKeySigner = pk
+        .parse()
+        .map_err(|e| anyhow::anyhow!("SOLVER_PRIVATE_KEY parse: {}", e))?;
+
+    let chains = parse_chain_wiring_from_env()?;
+    if chains.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no chain wiring — set CHAIN_WIRING_JSON or per-chain RPC_/OPERATOR_/ADAPTER_ vars"
+        ));
+    }
+
+    let log = OutcomeLog::open(outcome_db_path, mamba_url)?;
+    let spinner = SpinnerSolverClient::new(spinner_base);
+    let feedback_url = std::env::var("GENOME_FEEDBACK_URL").ok();
+
+    Ok(Some(LambdaController {
+        wallet,
+        spinner,
+        signer,
+        chains,
+        outcome_log: Some(log),
+        dry_run,
+        profit_threshold_usd,
+        feedback_url,
+    }))
+}
+
+/// Parse chain wiring from environment.
+///
+/// Two formats supported:
+///   A) `CHAIN_WIRING_FILE` path or `CHAIN_WIRING_JSON` inline JSON map.
+///   B) `CHAINS=8453,10` + per-chain `RPC_URL_<id>`, `OPERATOR_<id>`, `ADAPTER_<id>`.
+pub fn parse_chain_wiring_from_env() -> anyhow::Result<HashMap<u64, ChainWiring>> {
+    let mut out = HashMap::new();
+
+    let json_from_file = std::env::var("CHAIN_WIRING_FILE")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(&p).ok());
+    let json_inline = std::env::var("CHAIN_WIRING_JSON").ok();
+    let json_src = json_from_file.or(json_inline);
+
+    if let Some(json) = json_src {
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            rpc_url: String,
+            operator: String,
+            across_adapter: String,
+        }
+        let map: HashMap<String, serde_json::Value> = serde_json::from_str(&json)?;
+        for (k, raw) in map {
+            let chain_id: u64 = match k.parse() {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            let v: Entry = match serde_json::from_value(raw) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!("chain_wiring: skip chain {k}: {e}");
+                    continue;
+                }
+            };
+            out.insert(
+                chain_id,
+                ChainWiring {
+                    chain_id,
+                    rpc_url: v.rpc_url,
+                    operator: v.operator.parse::<Address>()?,
+                    across_adapter: v.across_adapter.parse::<Address>()?,
+                },
+            );
+        }
+        return Ok(out);
+    }
+
+    if let Ok(list) = std::env::var("CHAINS") {
+        for cs in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let chain_id: u64 = cs.parse()?;
+            let rpc = std::env::var(format!("RPC_URL_{}", chain_id))
+                .map_err(|_| anyhow::anyhow!("missing RPC_URL_{}", chain_id))?;
+            let operator: Address = std::env::var(format!("OPERATOR_{}", chain_id))
+                .map_err(|_| anyhow::anyhow!("missing OPERATOR_{}", chain_id))?
+                .parse()?;
+            let adapter: Address = std::env::var(format!("ADAPTER_{}", chain_id))
+                .map_err(|_| anyhow::anyhow!("missing ADAPTER_{}", chain_id))?
+                .parse()?;
+            out.insert(
+                chain_id,
+                ChainWiring { chain_id, rpc_url: rpc, operator, across_adapter: adapter },
+            );
+        }
+    }
+    Ok(out)
 }
 
 /// Build calldata for `executeVerifiedCall(uint256,(uint64,uint64,uint64,bytes32,bytes32[],uint8),address,bytes)`.

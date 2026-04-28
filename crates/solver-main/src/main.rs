@@ -1,15 +1,15 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use executor::{
-    ChainWiring, Executor, LambdaController, LambdaClaimOutcome, LambdaExecuteOutcome, LiFiMetaRouter,
-    OutcomeLog, OutcomeRecord, SkipRules, SpinnerSolverClient,
+    build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
+    LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
 use genome_client::GenomeClient;
 use profit_calc::ProfitCalculator;
 use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use taifoon_arb_bridge::{BalanceHighHandler, StubBridge, ThresholdHandler};
 use tokio::sync::mpsc;
@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
 
     // ── Lambda controller (col-p4) — replaces the standalone Across executor.
     // Built only when SOLVER_PRIVATE_KEY is set and at least one chain is wired.
-    let lambda_controller = match build_lambda_controller(
+    let lambda_controller = match build_lambda_controller_from_env(
         &spinner_base,
         &outcome_db_path,
         mamba_lake_url.clone(),
@@ -414,115 +414,3 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Build the Lambda controller from env. Returns Ok(None) if SOLVER_PRIVATE_KEY
-/// is missing (operator runs in observation-only mode).
-fn build_lambda_controller(
-    spinner_base: &str,
-    outcome_db_path: &str,
-    mamba_url: Option<String>,
-    dry_run: bool,
-    profit_threshold_usd: f64,
-    wallet: Arc<WalletManager>,
-) -> Result<Option<LambdaController>> {
-    let pk = match std::env::var("SOLVER_PRIVATE_KEY") {
-        Ok(v) if !v.is_empty() => v,
-        _ => return Ok(None),
-    };
-    let signer: alloy::signers::local::PrivateKeySigner = pk
-        .parse()
-        .map_err(|e| anyhow!("SOLVER_PRIVATE_KEY parse: {}", e))?;
-
-    let chains = parse_chain_wiring()?;
-    if chains.is_empty() {
-        return Err(anyhow!(
-            "no chain wiring — set CHAIN_WIRING_JSON or per-chain RPC_/OPERATOR_/ADAPTER_ vars"
-        ));
-    }
-
-    let log = OutcomeLog::open(outcome_db_path, mamba_url)?;
-    let spinner = SpinnerSolverClient::new(spinner_base);
-    let feedback_url = std::env::var("GENOME_FEEDBACK_URL").ok();
-
-    Ok(Some(LambdaController {
-        wallet,
-        spinner,
-        signer,
-        chains,
-        outcome_log: Some(log),
-        dry_run,
-        profit_threshold_usd,
-        feedback_url,
-    }))
-}
-
-/// Two ways to configure chain wiring:
-///   A) CHAIN_WIRING_JSON='{"11155111":{"rpc_url":"...","operator":"0x...","across_adapter":"0x..."}}'
-///   B) per-chain triplet:
-///      CHAINS=11155111,84532
-///      RPC_URL_11155111=...   OPERATOR_11155111=...   ADAPTER_11155111=...
-fn parse_chain_wiring() -> Result<HashMap<u64, ChainWiring>> {
-    use alloy::primitives::Address;
-    let mut out = HashMap::new();
-
-    // Allow loading from a file path (e.g. config/chain_wiring.json) as an
-    // alternative to inlining the JSON in the env var.
-    let json_from_file = std::env::var("CHAIN_WIRING_FILE")
-        .ok()
-        .and_then(|p| std::fs::read_to_string(&p).ok());
-
-    let json_inline = std::env::var("CHAIN_WIRING_JSON").ok();
-    let json_src = json_from_file.or(json_inline);
-
-    if let Some(json) = json_src {
-        #[derive(serde::Deserialize)]
-        struct Entry {
-            rpc_url: String,
-            operator: String,
-            across_adapter: String,
-        }
-        let map: HashMap<String, serde_json::Value> = serde_json::from_str(&json)?;
-        for (k, raw) in map {
-            // Skip comment/metadata keys (e.g. "_comment", "_updated").
-            let chain_id: u64 = match k.parse() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-            let v: Entry = match serde_json::from_value(raw) {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::warn!("chain_wiring: skip chain {k}: {e}");
-                    continue;
-                }
-            };
-            out.insert(
-                chain_id,
-                ChainWiring {
-                    chain_id,
-                    rpc_url: v.rpc_url,
-                    operator: v.operator.parse::<Address>()?,
-                    across_adapter: v.across_adapter.parse::<Address>()?,
-                },
-            );
-        }
-        return Ok(out);
-    }
-
-    if let Ok(list) = std::env::var("CHAINS") {
-        for cs in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            let chain_id: u64 = cs.parse()?;
-            let rpc = std::env::var(format!("RPC_URL_{}", chain_id))
-                .map_err(|_| anyhow!("missing RPC_URL_{}", chain_id))?;
-            let operator: Address = std::env::var(format!("OPERATOR_{}", chain_id))
-                .map_err(|_| anyhow!("missing OPERATOR_{}", chain_id))?
-                .parse()?;
-            let adapter: Address = std::env::var(format!("ADAPTER_{}", chain_id))
-                .map_err(|_| anyhow!("missing ADAPTER_{}", chain_id))?
-                .parse()?;
-            out.insert(
-                chain_id,
-                ChainWiring { chain_id, rpc_url: rpc, operator, across_adapter: adapter },
-            );
-        }
-    }
-    Ok(out)
-}
