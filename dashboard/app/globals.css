@@ -1,29 +1,209 @@
 @import "tailwindcss";
 
+/*
+ * solver.taifoon.dev — Design Tokens
+ * See DESIGN_SYSTEM.md for the full design system documentation.
+ *
+ * The solver portal is a sibling of taifoon.io with a sharper, more electric
+ * identity tuned for hackathon solvers and cross-chain operators. We retain
+ * the Taifoon cyan as primary and add a Solana-violet co-primary so the
+ * brand reads "cross-chain native, Solana-friendly" at a glance.
+ */
+
 :root {
-  --background: #1A1A1A;
-  --foreground: #ffffff;
-  --primary: #00D9FF;
-  --secondary: #1A1A1A;
-  --accent: #00FF88;
-  --warning: #FFB800;
-  --error: #FF3366;
+  /* ── Surfaces ─────────────────────────────────────────────────────── */
+  --bg-base:        #050507;   /* page background */
+  --bg-elevated:    #0B0B10;   /* card, modal */
+  --bg-raised:      #14141C;   /* inner card, input */
+  --bg-overlay:     #1C1C26;   /* tooltip, dropdown */
+
+  /* ── Borders ──────────────────────────────────────────────────────── */
+  --border-subtle:  #1A1A24;
+  --border-default: #242432;
+  --border-strong:  #383848;
+
+  /* ── Text ─────────────────────────────────────────────────────────── */
+  --text-primary:   #F5F5FA;
+  --text-secondary: #A0A0B0;
+  --text-tertiary:  #60606E;
+  --text-disabled:  #383846;
+
+  /* ── Brand ────────────────────────────────────────────────────────── */
+  --brand-cyan:     #00D9FF;   /* Taifoon cyan — speed, liquidity */
+  --brand-cyan-dim: #00A6C4;
+  --brand-violet:   #9945FF;   /* Solana violet — co-primary */
+  --brand-violet-dim:#7A33D6;
+  --brand-glow:     #14F195;   /* Solana mint, used sparingly */
+
+  /* ── Semantic ─────────────────────────────────────────────────────── */
+  --success:        #00FF88;
+  --success-dim:    #00B864;
+  --warning:        #FFB800;
+  --warning-dim:    #C68E00;
+  --danger:         #FF3366;
+  --danger-dim:     #C42850;
+  --info:           #00D9FF;
+
+  /* ── Protocol palette (used in IntentRow / ProtoPill) ─────────────── */
+  --proto-across:   #00D9FF;
+  --proto-debridge: #FF6B2B;
+  --proto-mayan:    #9945FF;
+  --proto-lifi:     #F1C40F;
+  --proto-orbiter:  #95A5A6;
+  --proto-stargate: #1AC8ED;
+  --proto-t3rn:     #14F195;
+  --proto-wormhole: #FE5E68;
+  --proto-cctp:     #2775CA;
+
+  /* ── Typography scale ─────────────────────────────────────────────── */
+  --fs-xs:   0.6875rem;  /* 11 */
+  --fs-sm:   0.8125rem;  /* 13 */
+  --fs-base: 0.9375rem;  /* 15 */
+  --fs-md:   1.0625rem;  /* 17 */
+  --fs-lg:   1.25rem;    /* 20 */
+  --fs-xl:   1.625rem;   /* 26 */
+  --fs-2xl:  2.25rem;    /* 36 */
+  --fs-3xl:  3.5rem;     /* 56 */
+  --fs-4xl:  5rem;       /* 80 */
+
+  /* ── Spacing scale (4px base) ─────────────────────────────────────── */
+  --sp-1:  0.25rem;
+  --sp-2:  0.5rem;
+  --sp-3:  0.75rem;
+  --sp-4:  1rem;
+  --sp-6:  1.5rem;
+  --sp-8:  2rem;
+  --sp-12: 3rem;
+  --sp-16: 4rem;
+  --sp-24: 6rem;
+
+  /* ── Radii ────────────────────────────────────────────────────────── */
+  --r-sm:  4px;
+  --r-md:  8px;
+  --r-lg:  12px;
+  --r-xl:  16px;
+  --r-pill:9999px;
+
+  /* ── Shadows / glows ──────────────────────────────────────────────── */
+  --shadow-card:   0 1px 2px 0 rgba(0,0,0,.4);
+  --shadow-raised: 0 8px 32px -8px rgba(0,0,0,.6);
+  --glow-cyan:     0 0 20px rgba(0, 217, 255, .35);
+  --glow-violet:   0 0 24px rgba(153, 69, 255, .4);
+  --glow-success:  0 0 16px rgba(0, 255, 136, .3);
+
+  /* ── Motion ───────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast:  120ms;
+  --dur-base:  200ms;
+  --dur-slow:  400ms;
 }
 
+/* Tailwind 4 theme bridge */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-primary: var(--primary);
-  --color-secondary: var(--secondary);
-  --color-accent: var(--accent);
+  --color-bg-base: var(--bg-base);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-overlay: var(--bg-overlay);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-text-disabled: var(--text-disabled);
+
+  --color-brand-cyan: var(--brand-cyan);
+  --color-brand-violet: var(--brand-violet);
+  --color-brand-glow: var(--brand-glow);
+
+  --color-success: var(--success);
   --color-warning: var(--warning);
-  --color-error: var(--error);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+/* ── Base resets ───────────────────────────────────────────────────── */
+html, body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(0, 217, 255, 0.3);
+  color: var(--text-primary);
+}
+
+/* ── Background mesh — used on landing hero ────────────────────────── */
+.mesh-bg {
+  background-image:
+    radial-gradient(at 20% 10%, rgba(0, 217, 255, 0.18) 0, transparent 45%),
+    radial-gradient(at 80% 0%,  rgba(153, 69, 255, 0.22) 0, transparent 50%),
+    radial-gradient(at 50% 100%, rgba(20, 241, 149, 0.08) 0, transparent 60%);
+}
+
+/* ── Subtle grid backdrop ──────────────────────────────────────────── */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────── */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--border-strong); background-clip: content-box; }
+
+/* ── Marquee animation (used on landing for protocol logos) ─────────── */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.marquee-track {
+  animation: marquee 40s linear infinite;
+  width: max-content;
+}
+
+/* ── Pulse ring (live indicators) ──────────────────────────────────── */
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.6); }
+  70%  { box-shadow: 0 0 0 12px rgba(0, 255, 136, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+}
+.pulse-live { animation: pulse-ring 2s infinite; }
+
+/* ── Gradient text utilities ───────────────────────────────────────── */
+.text-gradient-brand {
+  background: linear-gradient(135deg, var(--brand-cyan) 0%, var(--brand-violet) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.text-gradient-solana {
+  background: linear-gradient(135deg, var(--brand-violet) 0%, var(--brand-glow) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ── Focus ring (a11y) ─────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--brand-cyan);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
 }
