@@ -33,6 +33,7 @@ pub mod across;
 pub mod debridge;
 pub mod lifi;
 pub mod mayan;
+pub mod orbiter;
 pub mod stargate;
 
 // ── Protocol Adapter Trait ────────────────────────────────────────────────────
@@ -325,12 +326,18 @@ impl AdapterFactory {
             )));
         }
 
+        if protocol_lower.contains("orbiter") {
+            return Ok(Box::new(orbiter::OrbiterAdapter::new(
+                self.spinner_client.clone()
+            )));
+        }
+
         Err(anyhow!("No adapter found for protocol: {}", intent.protocol))
     }
 
     /// List all supported protocols
     pub fn supported_protocols(&self) -> Vec<&'static str> {
-        vec!["across", "across_v3", "debridge", "dln", "lifi", "li.fi", "mayan", "mayan_finance"]
+        vec!["across", "across_v3", "debridge", "dln", "lifi", "li.fi", "mayan", "mayan_finance", "orbiter_finance", "orbiter"]
     }
 }
 
@@ -339,3 +346,4 @@ pub use across::AcrossAdapter;
 pub use debridge::DeBridgeAdapter;
 pub use lifi::LiFiAdapter;
 pub use mayan::MayanAdapter;
+pub use orbiter::OrbiterAdapter;
