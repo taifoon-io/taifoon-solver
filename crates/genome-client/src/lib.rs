@@ -456,8 +456,9 @@ impl AcrossPoller {
 
         loop {
             for &dst_chain in &self.dst_chains {
+                // relayer-api.across.to is not rate-limited like app.across.to
                 let url = format!(
-                    "https://app.across.to/api/deposits?status=unfilled&destinationChainId={}&limit={}",
+                    "https://relayer-api.across.to/api/pending-fills?chainId={}&limit={}",
                     dst_chain, self.limit
                 );
                 let resp = match client.get(&url).send().await {
