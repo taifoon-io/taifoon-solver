@@ -7,9 +7,10 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-built binary
+# Copy pre-built binary and config
 COPY target/release/taifoon-solver /usr/local/bin/taifoon-solver
 RUN chmod +x /usr/local/bin/taifoon-solver
+COPY config/ /home/solver/config/
 
 # Create non-root user
 RUN useradd -m -u 9999 solver
