@@ -857,7 +857,7 @@ impl LambdaController {
         error: Option<&str>,
     ) {
         if let Err(e) = self.wallet.transition(intent_id, next, tx_hash, error) {
-            warn!("⚠️  wallet transition({intent_id}, {next:?}): {e}");
+            tracing::debug!("wallet transition({intent_id}, {next:?}): {e}");
         }
     }
 

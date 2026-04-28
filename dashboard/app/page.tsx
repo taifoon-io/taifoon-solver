@@ -13,6 +13,7 @@ import {
 } from '@/components/ui'
 import { ChainOrbits } from '@/components/marketing/ChainOrbits'
 import { LiveTicker } from '@/components/marketing/LiveTicker'
+import { CrossChainVolume } from '@/components/marketing/CrossChainVolume'
 import { Counter } from '@/components/marketing/Counter'
 import { protocolColors } from '@/lib/tokens'
 
@@ -111,10 +112,10 @@ function Hero() {
 
         {/* Right — the runtime, visibly working */}
         <div className="lg:pl-4">
-          <LiveTicker />
+          <CrossChainVolume />
 
           <div className="mt-4 flex items-center justify-between font-mono text-[10px] tracking-[0.2em] uppercase text-[var(--text-tertiary)]">
-            <span>Proof-of-runtime · not a mockup</span>
+            <span>Volume firehose · all 31 protocols</span>
             <PortalLink />
           </div>
         </div>

@@ -333,12 +333,38 @@ async fn main() -> Result<()> {
 
         // For LiFi, project through the meta-router to get the underlying child intent
         // then dispatch as if it were the underlying protocol directly.
+        // When genome omits bridge/tool, attempt async resolution via LiFi status API.
         let effective_intent;
         let intent_ref = if is_lifi {
-            let bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
+            let mut bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
             if bridge.is_empty() {
-                info!("⏭️  lifi skip (missing bridge/tool field): {}", intent.id);
-                // Fall through to legacy path for logging
+                // Attempt to resolve bridge from LiFi status API using tx_hash in intent id.
+                // Intent IDs look like: lifi_v2::lifi_0x<txhash> or lifi_v2:0x<txhash>
+                let tx_hash_from_id = if intent.id.contains("lifi_0x") {
+                    intent.id.split("lifi_0x").nth(1).map(|s| format!("0x{}", s))
+                } else {
+                    None
+                };
+                let lookup_hash = if intent.tx_hash.starts_with("0x") && intent.tx_hash.len() == 66 {
+                    Some(intent.tx_hash.clone())
+                } else {
+                    tx_hash_from_id
+                };
+                if let Some(ref hash) = lookup_hash {
+                    match resolve_lifi_bridge(hash).await {
+                        Some(b) => {
+                            info!("🔍 LiFi bridge resolved via API: {} → {}", hash, b);
+                            bridge = b;
+                        }
+                        None => {
+                            info!("⏭️  lifi skip (bridge not routable): {}", intent.id);
+                        }
+                    }
+                } else {
+                    info!("⏭️  lifi skip (no tx_hash for bridge lookup): {}", intent.id);
+                }
+            }
+            if bridge.is_empty() {
                 &intent
             } else {
                 effective_intent = LiFiMetaRouter::project_to_child(&intent, &bridge);
@@ -474,5 +500,32 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve the underlying bridge for a LiFi intent via the LiFi status API.
+/// Returns a normalized bridge slug ("across", "debridge", "mayan") or None
+/// if the underlying bridge is not something we can fill.
+async fn resolve_lifi_bridge(tx_hash: &str) -> Option<String> {
+    let url = format!("https://li.quest/v1/status?txHash={}", tx_hash);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let raw = body.get("tool")
+        .or_else(|| body.get("bridge"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase())?;
+    match raw.as_str() {
+        "across" | "across_v3" => Some("across".into()),
+        "debridge" | "dln" | "debridge_dln" => Some("debridge".into()),
+        "mayan" | "mayan_swift" | "mayanswift" => Some("mayan".into()),
+        _ => {
+            tracing::debug!("LiFi bridge '{}' not routable (not Across/deBridge/Mayan)", raw);
+            None
+        }
+    }
 }
 
