@@ -20,6 +20,7 @@ path = "src/bin/estimate_one.rs"
 genome-client = { path = "../genome-client" }
 profit-calc = { path = "../profit-calc" }
 executor = { path = "../executor" }
+protocol-adapters = { path = "../protocol-adapters" }
 solver-api = { path = "../solver-api" }
 taifoon-arb-bridge = { path = "../taifoon-arb-bridge" }
 wallet-manager = { path = "../wallet-manager" }

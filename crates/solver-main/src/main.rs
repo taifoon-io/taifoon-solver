@@ -6,6 +6,7 @@ use executor::{
 };
 use genome_client::{AcrossPoller, DeBridgePoller, GenomeClient};
 use profit_calc::ProfitCalculator;
+use protocol_adapters::AdapterFactory;
 use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
@@ -188,6 +189,9 @@ async fn main() -> Result<()> {
 
     // ── Legacy executor (kept for non-Across protocols) ───────────────────────
     let legacy_executor = Executor::new()?;
+    let adapter_factory = AdapterFactory::new(
+        std::env::var("WARMBED_API_URL").unwrap_or_else(|_| "https://api.taifoon.dev".into())
+    );
 
     // ── col-p3: balance_high consolidation handler ────────────────────────────
     // STUB path: the real trigger will be a per-chain idle-USDC poll once that
@@ -432,7 +436,9 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        // Legacy path for everything else
+        // Legacy path — profit-calc for all, execute only for protocols with adapters.
+        // Orbiter/Socket/t3rn etc. are tracked for observability but not yet executable.
+        let has_adapter = adapter_factory.get_adapter(&intent).is_ok();
         match profit_calc.calculate(&intent).await {
             Ok(p) => {
                 solver_api.emit_event(SolverEvent::IntentAttempted(AttemptData {
@@ -441,9 +447,9 @@ async fn main() -> Result<()> {
                     profit_usd: p.net_profit_usd,
                     protocol_fee_usd: p.breakdown.protocol_fee_usd,
                     gas_cost_usd: p.breakdown.gas_cost_usd,
-                    decision: if p.profitable { "execute".into() } else { "skip".into() },
+                    decision: if p.profitable && has_adapter { "execute".into() } else if p.profitable { "no_adapter".into() } else { "skip".into() },
                 }));
-                if p.profitable {
+                if p.profitable && has_adapter {
                     match legacy_executor.execute_fill(&intent, &p).await {
                         Ok(r) => {
                             info!("🎉 EXECUTED (legacy): {}", r.fill_tx);
@@ -456,6 +462,9 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => error!("❌ legacy execute: {}", e),
                     }
+                } else if p.profitable && !has_adapter {
+                    info!("⏭️  {} profitable (${:.4}) but no adapter yet — skipping execute",
+                        intent.protocol, p.net_profit_usd);
                 }
             }
             Err(e) => error!("❌ profit calc: {}", e),
