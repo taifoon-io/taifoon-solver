@@ -41,12 +41,10 @@ services:
       - "3000:3000"
     depends_on:
       - solver
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_SOLVER_API_URL=/api/solver
-      - SOLVER_API_INTERNAL_URL=http://host.docker.internal:8099
+      - SOLVER_API_INTERNAL_URL=http://172.23.0.1:8099
     logging:
       driver: "json-file"
       options:
