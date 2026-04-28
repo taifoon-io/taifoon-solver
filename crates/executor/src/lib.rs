@@ -177,9 +177,9 @@ impl Executor {
 
     /// Check if we have sufficient own funds
     async fn has_own_funds(&self, _intent: &Intent) -> Result<bool> {
-        // TODO: Check wallet balance on destination chain
-        // For now, assume no own funds (forcing fallback to other sources)
-        Ok(false)
+        // Own-funds path is active when a solver key is configured.
+        // Actual balance check happens inside the protocol adapter's estimate_gas.
+        Ok(std::env::var("SOLVER_PRIVATE_KEY").is_ok())
     }
 
     /// Check if flash loan is available
