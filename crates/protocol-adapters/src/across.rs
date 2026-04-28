@@ -124,6 +124,26 @@ impl AcrossAdapter {
             137, // Polygon
             "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096".parse().unwrap(),
         );
+        spoke_pool_addresses.insert(
+            59144, // Linea
+            "0x7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            324, // zkSync Era
+            "0xe0B015E54d54fc84a6cB9B666099c46adE9335FF".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            534352, // Scroll
+            "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            57073, // Ink
+            "0xeF684C38F94F48775959ECf2012D7E864ffb9dd4".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            34443, // Mode
+            "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96".parse().unwrap(),
+        );
 
         Self {
             spinner_client,

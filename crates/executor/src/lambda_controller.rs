@@ -970,12 +970,18 @@ fn token_decimals(token: &str) -> u8 {
 
 fn weth_address_for_chain(chain_id: u64) -> Option<&'static str> {
     match chain_id {
-        8453  => Some("0x4200000000000000000000000000000000000006"), // Base WETH
-        10    => Some("0x4200000000000000000000000000000000000006"), // Optimism WETH
-        42161 => Some("0x82af49447d8a07e3bd95bd0d56f35241523fbab1"), // Arbitrum WETH
-        1     => Some("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"), // Ethereum WETH
-        59144 => Some("0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"), // Linea WETH
-        130   => Some("0x4200000000000000000000000000000000000006"), // Unichain WETH
+        8453   => Some("0x4200000000000000000000000000000000000006"), // Base WETH
+        10     => Some("0x4200000000000000000000000000000000000006"), // Optimism WETH
+        42161  => Some("0x82af49447d8a07e3bd95bd0d56f35241523fbab1"), // Arbitrum WETH
+        1      => Some("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"), // Ethereum WETH
+        59144  => Some("0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"), // Linea WETH
+        130    => Some("0x4200000000000000000000000000000000000006"), // Unichain WETH
+        57073  => Some("0x4200000000000000000000000000000000000006"), // Ink WETH (OP Stack)
+        34443  => Some("0x4200000000000000000000000000000000000006"), // Mode WETH (OP Stack)
+        534352 => Some("0x5300000000000000000000000000000000000004"), // Scroll WETH
+        137    => Some("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"), // Polygon WETH
+        56     => Some("0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"), // BSC WBNB
+        43114  => Some("0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"), // Avalanche WETH.e
         _ => None,
     }
 }

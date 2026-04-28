@@ -119,6 +119,10 @@ impl DeBridgeAdapter {
         dln_addresses.insert(43114, dln_addr);   // Avalanche
         dln_addresses.insert(59144, dln_addr);   // Linea
         dln_addresses.insert(137, dln_addr);     // Polygon
+        dln_addresses.insert(534352, dln_addr);  // Scroll
+        dln_addresses.insert(57073, dln_addr);   // Ink
+        dln_addresses.insert(34443, dln_addr);   // Mode
+        dln_addresses.insert(100, dln_addr);     // Gnosis
 
         Self {
             spinner_client,
