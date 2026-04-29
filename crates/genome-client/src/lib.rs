@@ -683,16 +683,24 @@ const ORDER_CREATED_TOPIC: &str = "0xfc8703fd57380f9dd234a89dce51333782d49c5902f
 
 impl DeBridgePoller {
     /// Build a default poller for mainnet EVM chains that have a DlnSource.
+    ///
+    /// RPC URLs can be overridden via env vars:
+    ///   DEBRIDGE_RPC_42161, DEBRIDGE_RPC_8453, DEBRIDGE_RPC_10,
+    ///   DEBRIDGE_RPC_137, DEBRIDGE_RPC_56, DEBRIDGE_RPC_1
     pub fn default_mainnet() -> Self {
+        let rpc = |chain_id: u64, fallback: &str| -> String {
+            std::env::var(format!("DEBRIDGE_RPC_{}", chain_id))
+                .unwrap_or_else(|_| fallback.to_string())
+        };
         Self {
             chains: vec![
-                (42161,  "https://arbitrum-mainnet.infura.io/v3/9e09ec06e2fd43778f9fd52eb0265d75".into()),
-                (8453,   "https://base-mainnet.infura.io/v3/6c90d1c7ee4e4ff08ea67114a81c9ae0".into()),
-                (10,     "https://optimism-mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
-                (137,    "https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab".into()),
-                (56,     "https://bsc-mainnet.infura.io/v3/51022b81bc7e4030895fd39e5f80abbe".into()),
+                (42161,  rpc(42161,  "https://arbitrum-mainnet.infura.io/v3/9e09ec06e2fd43778f9fd52eb0265d75")),
+                (8453,   rpc(8453,   "https://base-mainnet.infura.io/v3/6c90d1c7ee4e4ff08ea67114a81c9ae0")),
+                (10,     rpc(10,     "https://optimism-mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410")),
+                (137,    rpc(137,    "https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab")),
+                (56,     rpc(56,     "https://bsc-mainnet.infura.io/v3/51022b81bc7e4030895fd39e5f80abbe")),
                 (59144,  "https://rpc.linea.build".into()),
-                (1,      "https://mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410".into()),
+                (1,      rpc(1,      "https://mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410")),
                 (534352, "https://rpc.scroll.io".into()),
                 (57073,  "https://rpc-gel.inkonchain.com".into()),
                 (34443,  "https://mainnet.mode.network".into()),
