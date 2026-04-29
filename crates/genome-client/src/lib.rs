@@ -335,10 +335,20 @@ impl Intent {
         // Recipient may be optional in some protocols
         let recipient = event.recipient.clone().unwrap_or_else(|| depositor.clone());
 
-        // Use ref_hash as tx hash, with fallback to generated ID for protocols without tx_hash
+        // Use ref_hash as tx hash; for LiFi events the Diamond tx appears in the genome entity
+        // addr (e.g. "T:1745678/proto:lifi_v2/deposit:1:0x8f402c...") but not in ref_hash.
+        // Extract it as a fallback before synthesizing a random hash.
+        let addr_tx_hash = if event.addr.contains("0x") {
+            event.addr.split("0x").last()
+                .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(|s| format!("0x{}", s))
+        } else {
+            None
+        };
         let tx_hash = event
             .reference.clone()
             .or_else(|| event.order_id.clone())
+            .or(addr_tx_hash)
             .unwrap_or_else(|| {
                 // Generate synthetic tx_hash for protocols that don't provide one (e.g., Li.Fi)
                 use std::collections::hash_map::DefaultHasher;
@@ -1384,6 +1394,35 @@ mod tests {
         assert_eq!(intent.src_chain, 1);
         assert_eq!(intent.dst_chain, 42161);
         assert_eq!(intent.amount, "1000000000");
+    }
+
+    #[test]
+    fn test_lifi_tx_hash_extracted_from_addr() {
+        // Genome LiFi events omit ref_hash but embed the Diamond tx in the addr path segment.
+        // Verify that tx_hash is correctly extracted so li.quest can be called.
+        let event_json = r#"{
+            "addr": "T:1745678/proto:lifi_v2/deposit:1:0x8f402c380754a14c8a216c67e219af96c8a449b6b6cd08553d455945e616bba4",
+            "entity": "proto",
+            "id": "lifi_v2",
+            "action": "deposit",
+            "chain_id": 59144,
+            "src_chain": 59144,
+            "dst_chain": 8453,
+            "depositor": "0xuser123",
+            "src_token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "input_amount": "2213850",
+            "ts": 1745678400
+        }"#;
+
+        let genome_event: GenomeEvent = serde_json::from_str(event_json).unwrap();
+        let intent = Intent::from_genome_event(genome_event).unwrap();
+
+        assert_eq!(
+            intent.tx_hash,
+            "0x8f402c380754a14c8a216c67e219af96c8a449b6b6cd08553d455945e616bba4",
+            "tx_hash must be extracted from addr for LiFi genome events without ref_hash"
+        );
+        assert!(!intent.tx_hash.starts_with("synthetic_"), "should not be synthetic");
     }
 
     #[test]

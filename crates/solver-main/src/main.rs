@@ -343,13 +343,11 @@ async fn main() -> Result<()> {
             let mut bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
             let mut api_sending_tx: Option<String> = None;
             let mut api_sending_chain: Option<u64> = None;
-            // Always attempt li.quest lookup when we don't yet have a real deposit tx.
-            // Even when genome provides bridge/tool, the intent.tx_hash is the LiFi Diamond
-            // tx — not the underlying deposit tx. We need sending.txHash + sending.chainId
-            // from the status API so lambda_controller can decode V3FundsDeposited.
-            let need_deposit_tx = intent.deposit_id.is_none()
-                && !(intent.tx_hash.starts_with("0x") && intent.tx_hash.len() == 66
-                     && !intent.tx_hash.starts_with("synthetic_"));
+            // Always call li.quest when deposit_id is absent: the intent.tx_hash for LiFi
+            // events is the LiFi Diamond tx, NOT the underlying deposit tx. We must fetch
+            // sending.txHash + sending.chainId so lambda_controller can decode V3FundsDeposited.
+            // Even when genome already provides bridge/tool, the Diamond tx still needs replacing.
+            let need_deposit_tx = intent.deposit_id.is_none();
             if bridge.is_empty() || need_deposit_tx {
                 // Attempt to resolve bridge + deposit tx from LiFi status API.
                 // Intent IDs look like: lifi_v2::lifi_0x<txhash> or lifi_v2:0x<txhash>
