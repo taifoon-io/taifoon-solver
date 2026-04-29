@@ -192,6 +192,25 @@ enum Commands {
         force: bool,
     },
 
+    /// Pre-approve fill tokens on Across SpokePools and deBridge DlnDestination.
+    ///
+    /// Must be run once after funding the solver wallet, before enabling live fills.
+    /// Sends approve(spender, MAX_UINT256) for USDC/USDT/WETH on Arbitrum, Base,
+    /// Optimism, Ethereum, Polygon, and Scroll. Skips tokens already approved.
+    ///
+    /// Example:
+    /// $ taifoon setup-approvals --private-key 0x... --dry-run
+    /// $ taifoon setup-approvals --private-key 0x...
+    SetupApprovals {
+        /// Private key (hex, with or without 0x prefix)
+        #[arg(long, env = "SOLVER_PRIVATE_KEY")]
+        private_key: String,
+
+        /// Show what would be approved without sending transactions
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Show multi-chain inventory: USDC/USDT/WETH balances + fill P&L
     ///
     /// Queries live RPC for Base, Optimism, and Arbitrum balances,
@@ -420,6 +439,14 @@ async fn main() -> Result<()> {
                 solver_id,
                 force,
                 json_mode: cli.json,
+            })
+            .await
+        }
+
+        Commands::SetupApprovals { private_key, dry_run } => {
+            commands::setup_approvals::run(commands::setup_approvals::ApprovalArgs {
+                private_key,
+                dry_run,
             })
             .await
         }
