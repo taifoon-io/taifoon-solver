@@ -49,7 +49,7 @@ pub fn default_across_spoke_pools() -> HashMap<u64, Address> {
 pub fn default_debridge_dln_addresses() -> HashMap<u64, Address> {
     let dln: Address = DEBRIDGE_DLN_DESTINATION.parse().unwrap();
     let mut m = HashMap::new();
-    for c in [1u64, 10, 42161, 8453, 56, 43114, 59144] {
+    for c in [1u64, 10, 42161, 8453, 56, 43114, 59144, 137, 534352, 57073, 34443, 100] {
         m.insert(c, dln);
     }
     m
@@ -68,6 +68,15 @@ pub fn default_rpc_for_chain(chain_id: u64) -> Option<&'static str> {
         56 => Some("https://bsc-mainnet.infura.io/v3/2aa61415c8df44278215d749d6ccd221"),
         43114 => Some("https://api.avax.network/ext/bc/C/rpc"),
         59144 => Some("https://rpc.linea.build"),
+        534352 => Some("https://rpc.scroll.io"),
+        57073 => Some("https://rpc-gel.inkonchain.com"),
+        34443 => Some("https://mainnet.mode.network"),
+        100 => Some("https://rpc.gnosischain.com"),
+        324 => Some("https://mainnet.era.zksync.io"),
+        999 => Some("https://rpc.hyperliquid.xyz/evm"),
+        1868 => Some("https://rpc.mainnet.taiko.xyz"),
+        81457 => Some("https://rpc.blast.io"),
+        1135 => Some("https://rpc.api.lisk.com"),
         _ => None,
     }
 }
