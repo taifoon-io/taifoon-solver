@@ -456,14 +456,13 @@ impl AcrossPoller {
 
         loop {
             for &dst_chain in &self.dst_chains {
-                // relayer-api.across.to is not rate-limited like app.across.to
                 let url = format!(
-                    "https://relayer-api.across.to/api/pending-fills?chainId={}&limit={}",
+                    "https://app.across.to/api/deposits?status=unfilled&destinationChainId={}&limit={}",
                     dst_chain, self.limit
                 );
                 let resp = match client.get(&url).send().await {
                     Ok(r) => r,
-                    Err(e) => { tracing::debug!("AcrossPoller chain={} request error: {}", dst_chain, e); continue; }
+                    Err(e) => { tracing::warn!("AcrossPoller chain={} request error: {}", dst_chain, e); continue; }
                 };
                 if !resp.status().is_success() {
                     tracing::warn!("AcrossPoller chain={} HTTP {}: likely rate-limited", dst_chain, resp.status());
