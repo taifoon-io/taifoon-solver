@@ -12,8 +12,8 @@
  *   1. A single secondary accent — Solana mint #14F195 — used sparingly
  *      for solver-specific moments (live indicators, fill confirmations).
  *   2. Slightly more generous use of mono numerics in stat call-outs.
- *   3. The wordmark in the nav reads "TAIFOON / spinners" — borrowing
- *      taifoon.io's term for solver nodes.
+ *   3. The wordmark in the nav reads "TAIFOON / SOLVERS" — disambiguating
+ *      this product (the solver runtime) from taifoon.io (the indexer).
  */
 
 :root {

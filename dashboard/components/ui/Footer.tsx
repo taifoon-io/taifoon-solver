@@ -12,11 +12,11 @@ export function Footer() {
           <div className="flex items-baseline gap-2 mb-3">
             <span className="text-[14px] font-medium tracking-[0.16em]">TAIFOON</span>
             <span className="text-[10px] font-mono tracking-[0.24em] text-[var(--brand-blue)]">
-              / SPINNERS
+              / SOLVERS
             </span>
           </div>
           <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-            The autonomous spinner runtime. One process, every protocol,
+            The autonomous solver runtime. One process, every protocol,
             Solana and EVM under the same root.
           </p>
         </div>

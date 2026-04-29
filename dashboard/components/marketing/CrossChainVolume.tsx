@@ -34,19 +34,46 @@ interface ProtocolBaseline {
   chain?: 'evm' | 'svm' | 'both'
 }
 
+/**
+ * Color discipline for the volume firehose:
+ *
+ *   - SVM-native protocols (Mayan Swift, Wormhole) → MINT family
+ *   - Everything else (EVM-only and EVM-leaning bridges) → AZURE ramp,
+ *     stepped by rank so the bars have natural visual hierarchy
+ *
+ * No yellow, orange, magenta, violet — those colors live in the
+ * IntentRow / per-fill surfaces where they distinguish individual
+ * protocol *executions*. At the aggregate-volume level, the brand
+ * discipline is azure + mint, full stop.
+ */
+const AZURE_RAMP = [
+  '#3DA5FF', // 100% — top tier
+  '#2A8FE0',
+  '#1F7BC4',
+  '#1A6FB8',
+  '#16619F',
+  '#125487',
+  '#0F476F',
+  '#0B3A57',
+  '#082E45',
+  '#062335', // 10% — long tail
+] as const
+const MINT_FULL = '#14F195'
+const MINT_DIM  = '#0FBE76'
+
 const BASELINES: ProtocolBaseline[] = [
-  { key: 'cctp',      label: 'CCTP',         daily: 75_000_000, color: '#2775CA', chain: 'both' },
-  { key: 'wormhole',  label: 'Wormhole',     daily: 80_000_000, color: '#FE5E68', chain: 'both' },
-  { key: 'across',    label: 'Across V3',    daily: 45_000_000, color: '#3DA5FF', chain: 'evm' },
-  { key: 'lifi',      label: 'LiFi',         daily: 40_000_000, color: '#F1C40F', chain: 'both' },
-  { key: 'stargate',  label: 'Stargate V2',  daily: 32_000_000, color: '#6BC8FF', chain: 'both' },
-  { key: 'debridge',  label: 'deBridge DLN', daily: 18_000_000, color: '#FF8A4C', chain: 'both' },
-  { key: 'mayan',     label: 'Mayan Swift',  daily: 12_000_000, color: '#9945FF', chain: 'svm' },
-  { key: 'orbiter',   label: 'Orbiter',      daily:  8_000_000, color: '#95A5A6', chain: 'evm' },
-  { key: 'synapse',   label: 'Synapse',      daily:  9_000_000, color: '#FF00BD', chain: 'evm' },
-  { key: 'hop',       label: 'Hop',          daily:  7_000_000, color: '#B45BFF', chain: 'evm' },
-  { key: 'squid',     label: 'Squid',        daily:  5_000_000, color: '#00C2A8', chain: 'both' },
-  { key: 'symbiosis', label: 'Symbiosis',    daily:  3_000_000, color: '#3FE0C2', chain: 'evm' },
+  { key: 'wormhole',  label: 'Wormhole',     daily: 80_000_000, color: MINT_DIM,       chain: 'both' },
+  { key: 'cctp',      label: 'CCTP',         daily: 75_000_000, color: AZURE_RAMP[0],  chain: 'both' },
+  { key: 'across',    label: 'Across V3',    daily: 45_000_000, color: AZURE_RAMP[1],  chain: 'evm' },
+  { key: 'lifi',      label: 'LiFi',         daily: 40_000_000, color: AZURE_RAMP[2],  chain: 'both' },
+  { key: 'stargate',  label: 'Stargate V2',  daily: 32_000_000, color: AZURE_RAMP[3],  chain: 'both' },
+  { key: 'debridge',  label: 'deBridge DLN', daily: 18_000_000, color: AZURE_RAMP[4],  chain: 'both' },
+  { key: 'mayan',     label: 'Mayan Swift',  daily: 12_000_000, color: MINT_FULL,      chain: 'svm' },
+  { key: 'synapse',   label: 'Synapse',      daily:  9_000_000, color: AZURE_RAMP[5],  chain: 'evm' },
+  { key: 'orbiter',   label: 'Orbiter',      daily:  8_000_000, color: AZURE_RAMP[6],  chain: 'evm' },
+  { key: 'hop',       label: 'Hop',          daily:  7_000_000, color: AZURE_RAMP[7],  chain: 'evm' },
+  { key: 'squid',     label: 'Squid',        daily:  5_000_000, color: AZURE_RAMP[8],  chain: 'both' },
+  { key: 'symbiosis', label: 'Symbiosis',    daily:  3_000_000, color: AZURE_RAMP[9],  chain: 'evm' },
 ]
 
 // ── Visualization config ───────────────────────────────────────────────

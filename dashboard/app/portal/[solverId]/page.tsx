@@ -275,7 +275,7 @@ export default function SolverMonitorPage({ params }: PageProps) {
               </Link>
               <span className="text-[var(--border-default)]">/</span>
               <span className="font-mono text-[13px] tracking-[0.08em] text-[var(--text-primary)]">
-                spinner_<span className="text-[var(--brand-blue)]">{solverId}</span>
+                solver_<span className="text-[var(--brand-blue)]">{solverId}</span>
               </span>
               <Badge tone={connected ? 'mint' : 'neutral'} dot pulse={connected}>
                 {connected ? 'LIVE' : 'CONNECTING'}

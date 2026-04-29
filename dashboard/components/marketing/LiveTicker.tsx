@@ -106,7 +106,7 @@ export function LiveTicker() {
           </span>
         </div>
         <span className="font-mono text-[10px] tracking-[0.18em] uppercase text-[var(--text-tertiary)]">
-          { 'spinner_b3e9a2' }
+          { 'solver_b3e9a2' }
         </span>
       </div>
 

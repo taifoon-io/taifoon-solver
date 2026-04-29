@@ -28,7 +28,7 @@ export function NavBar() {
               TAIFOON
             </span>
             <span className="text-[11px] font-mono tracking-[0.24em] text-[var(--brand-blue)]">
-              / SPINNERS
+              / SOLVERS
             </span>
           </div>
         </Link>

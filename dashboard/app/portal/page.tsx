@@ -108,17 +108,17 @@ export default function PortalPage() {
             <div>
               <Tag>The portal</Tag>
               <h1 className="tf-display tf-gradient-silver mt-4 text-[clamp(2rem,4vw,3rem)]">
-                Spinner fleet.
+                Solver fleet.
               </h1>
               <p className="mt-3 text-sm text-[var(--text-secondary)] max-w-[560px] leading-relaxed">
-                Spin up new spinners, monitor existing ones, pause or scale
-                the fleet. Each spinner runs as its own pod with its own
+                Spin up new solvers, monitor existing ones, pause or scale
+                the fleet. Each solver runs as its own pod with its own
                 wallet — Taifoon&apos;s grid keeps the proofs.
               </p>
             </div>
             <Button href="/onboard" variant="primary" size="lg">
               <span className="text-[var(--text-tertiary)]">+</span>
-              SPIN UP NEW SPINNER →
+              SPIN UP NEW SOLVER →
             </Button>
           </div>
 
@@ -156,7 +156,7 @@ export default function PortalPage() {
           {visible.length === 0 && (
             <Card padding="lg" className="text-center">
               <div className="text-[var(--text-secondary)]">
-                No spinners match this filter.
+                No solvers match this filter.
               </div>
             </Card>
           )}
@@ -172,7 +172,7 @@ export default function PortalPage() {
               <div>
                 <Tag>Onboard another team</Tag>
                 <h3 className="mt-3 text-xl font-light text-[var(--text-primary)]">
-                  Add a spinner in three phases.
+                  Add a solver in three phases.
                 </h3>
                 <p className="mt-2 text-sm text-[var(--text-secondary)] max-w-[520px]">
                   Pick chains and protocols, generate a wallet, copy the

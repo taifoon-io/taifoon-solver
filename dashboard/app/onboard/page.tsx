@@ -1,5 +1,8 @@
 'use client'
 
+// Per-route SEO is set in app/onboard/layout.tsx — keeping this file as
+// a client component for the wizard interactivity.
+
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { NavBar, Footer, Card, CardHeader, Stepper, StepBody, Button, Snippet, Tag } from '@/components/ui'
@@ -101,11 +104,11 @@ taifoon-cli run \\
           <div className="mb-10">
             <Tag>Onboarding</Tag>
             <h1 className="tf-display tf-gradient-silver mt-4 text-[clamp(2rem,4vw,3rem)]">
-              Spin up your spinner.
+              Spin up your solver.
             </h1>
             <p className="mt-3 text-[var(--text-secondary)] max-w-[560px] leading-relaxed">
               Four phases. About five minutes. End state: a registered
-              spinner pod, on-chain on Base + Solana, that you can monitor
+              solver pod, on-chain on Base + Solana, that you can monitor
               live in the portal.
             </p>
           </div>
@@ -335,7 +338,7 @@ taifoon-cli run \\
                   size="md"
                   onClick={() => router.push(`/portal/${solverId.replace('spinr_', '')}`)}
                 >
-                  OPEN MY SPINNER →
+                  OPEN MY SOLVER →
                 </Button>
               )}
             </div>

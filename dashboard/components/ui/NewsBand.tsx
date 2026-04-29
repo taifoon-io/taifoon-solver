@@ -36,7 +36,7 @@ const NEWS: NewsItem[] = [
     pill: 'Hackathon',
     pillTone: 'mint',
     headline:
-      'Live on Solana Colosseum — open-source bridge spinner runtime for hackathon teams.',
+      'Live on Solana Colosseum — open-source cross-chain solver runtime for hackathon teams.',
     href: 'https://www.colosseum.org',
     external: true,
     endsAt: '2026-06-15',

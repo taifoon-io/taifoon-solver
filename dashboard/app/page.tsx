@@ -47,7 +47,10 @@ export default function LandingPage() {
 // ── Cinematic hero ────────────────────────────────────────────────────────
 function Hero() {
   return (
-    <section className="relative overflow-hidden min-h-[760px] flex items-center">
+    <section
+      aria-label="Hero"
+      className="relative overflow-hidden min-h-[760px] flex items-center"
+    >
       {/* layers, back to front: chain-orbits → glow → vignette → content
           ChainOrbits already includes the tf-grid 3D infinite plane.    */}
       <ChainOrbits />
@@ -66,14 +69,14 @@ function Hero() {
         <div>
           <div className="inline-flex items-center gap-3 font-mono text-[11px] tracking-[0.25em] text-[var(--text-secondary)] mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--solana-mint)] pulse-live" />
-            TAIFOON · SPINNERS · SOLANA + EVM
+            TAIFOON · SOLVERS · SOLANA + EVM
           </div>
 
           <h1
             className="tf-display tf-gradient-silver"
             style={{ fontSize: 'clamp(3rem, 7.5vw, 6.25rem)' }}
           >
-            One spinner.
+            One solver.
             <br />
             <span className="tf-gradient-solana">Every protocol.</span>
             <br />
@@ -90,7 +93,7 @@ function Hero() {
           <div className="mt-10 flex flex-wrap items-center gap-3">
             <Button href="/onboard" variant="primary" size="lg">
               <span className="text-[var(--text-tertiary)]">{'>'}</span>
-              SPIN UP A SPINNER →
+              SPIN UP A SOLVER →
             </Button>
             <Button href="/portal" variant="secondary" size="lg">
               OPEN THE PORTAL
@@ -162,7 +165,10 @@ function KPI({
 function ProtocolMarquee() {
   const items = [...PROTOCOLS, ...PROTOCOLS]
   return (
-    <section className="border-y border-[var(--border-subtle)]">
+    <section
+      aria-label="Indexed protocols"
+      className="border-y border-[var(--border-subtle)]"
+    >
       <div className="max-w-[1400px] mx-auto px-6 py-8">
         <div className="tf-tag text-center mb-5">[ INDEXED PROTOCOLS ]</div>
         <div
@@ -205,7 +211,7 @@ const PHASES = [
     n: 1,
     step: 'Detect',
     title: 'The market sees it after we do',
-    body: '31 protocols, 38+ chains. Every intent, every order, every order-book delta — collected at the node-runner level before it reaches any public feed. SSE delivers raw signal to your spinner in under 100 ms.',
+    body: '31 protocols, 38+ chains. Every intent, every order, every order-book delta — collected at the node-runner level before it reaches any public feed. SSE delivers raw signal to your solver in under 100 ms.',
     stat: 'real-time',
     stat_value: '31 protocols',
     tone: 'blue' as const,
@@ -232,7 +238,7 @@ const PHASES = [
     n: 4,
     step: 'Compound',
     title: 'Every fill funds the next one',
-    body: 'Spinners earn protocol fees. Fees fund more wallets. More wallets fill more intents. The flywheel is autonomous. The runtime is open. The edge belongs to the operator.',
+    body: 'Solvers earn protocol fees. Fees fund more wallets. More wallets fill more intents. The flywheel is autonomous. The runtime is open. The edge belongs to the operator.',
     stat: 'flywheel',
     stat_value: '∞',
     tone: 'mint' as const,
@@ -241,14 +247,14 @@ const PHASES = [
 
 function Phases() {
   return (
-    <section className="max-w-[1280px] mx-auto px-6 py-32">
+    <section aria-label="The engine — four phases" className="max-w-[1280px] mx-auto px-6 py-32">
       <div className="grid lg:grid-cols-[1fr_2fr] gap-12">
         <div>
           <Tag>The engine</Tag>
           <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2rem,4vw,3.5rem)]">
             One grid.
             <br />
-            Every spinner.
+            Every solver.
           </h2>
           <p className="mt-6 text-[var(--text-secondary)] leading-relaxed max-w-[480px]">
             The same indexer, proof system, and signal layer that powers
@@ -297,7 +303,7 @@ function Phases() {
 // ── Flywheel ──────────────────────────────────────────────────────────────
 function Flywheel() {
   return (
-    <section className="border-y border-[var(--border-subtle)]">
+    <section aria-label="The flywheel economy" className="border-y border-[var(--border-subtle)]">
       <div className="max-w-[1280px] mx-auto px-6 py-32">
         <div className="text-center mb-16">
           <Tag>The economy</Tag>
@@ -307,16 +313,16 @@ function Flywheel() {
             feeds the same flywheel.
           </h2>
           <p className="mt-6 text-[var(--text-secondary)] leading-relaxed max-w-[640px] mx-auto">
-            Taifoon&apos;s grid pays the people who make it stronger. Spinners
+            Taifoon&apos;s grid pays the people who make it stronger. Solvers
             earn execution fees from the autonomous DeFi economy — the more
-            you fill, the more the protocol funds the next spinner.
+            you fill, the more the protocol funds the next solver.
           </p>
         </div>
 
         <div className="grid md:grid-cols-3 gap-px bg-[var(--border-subtle)]">
           {[
             {
-              tag: 'Spinners',
+              tag: 'Solvers',
               tone: 'blue' as const,
               contributes:
                 'GPU-aware solver pods that execute intents end-to-end. One process, many wallets.',
@@ -369,7 +375,7 @@ function Flywheel() {
 // ── Dashboard preview ─────────────────────────────────────────────────────
 function DashboardPreview() {
   return (
-    <section className="relative max-w-[1280px] mx-auto px-6 py-32">
+    <section aria-label="Live operator cockpit preview" className="relative max-w-[1280px] mx-auto px-6 py-32">
       <div className="absolute inset-0 tf-coordinate-grid opacity-50 pointer-events-none" />
       <div className="grid lg:grid-cols-[1fr_1.1fr] gap-16 items-center">
         <div>
@@ -423,16 +429,16 @@ function Bullet({ children }: { children: React.ReactNode }) {
 // ── Final CTA — folded Colosseum framing into copy + tabbed snippet ──────
 function FinalCTA() {
   return (
-    <section className="max-w-[1100px] mx-auto px-6 py-32 text-center">
+    <section aria-label="Get started" className="max-w-[1100px] mx-auto px-6 py-32 text-center">
       <Tag>Get on the grid</Tag>
       <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2.5rem,6vw,4.5rem)]">
-        Your spinner is
+        Your solver is
         <br />
         one command away.
       </h2>
       <p className="mt-6 text-[var(--text-secondary)] max-w-[560px] mx-auto leading-relaxed">
         Open-source, MIT, free for hackathon teams — Solana Colosseum
-        included. Fork the runtime, fork the indexer, run your spinner
+        included. Fork the runtime, fork the indexer, run your solver
         on testnet by lunch.
       </p>
 
@@ -458,7 +464,7 @@ function FinalCTA() {
 
       <div className="mt-10 flex justify-center gap-3 flex-wrap">
         <Button href="/onboard" variant="primary" size="lg">
-          SPIN UP A SPINNER →
+          SPIN UP A SOLVER →
         </Button>
         <Button href="/portal" variant="secondary" size="lg">
           OPEN THE PORTAL

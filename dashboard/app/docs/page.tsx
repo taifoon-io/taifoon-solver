@@ -10,7 +10,7 @@ export default function DocsPage() {
         <div className="max-w-[920px] mx-auto px-6 py-16">
           <Tag>Docs</Tag>
           <h1 className="tf-display tf-gradient-silver mt-4 text-[clamp(2rem,4vw,3rem)]">
-            Spinner runtime
+            Solver runtime
             <br />
             in three pages.
           </h1>
@@ -47,7 +47,7 @@ export default function DocsPage() {
             <Card padding="md">
               <CardHeader title="Architecture" />
               <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-                A spinner is a single Rust process composed of a genome-stream client,
+                A solver is a single Rust process composed of a genome-stream client,
                 a profitability calculator, a wallet manager, a protocol-adapter
                 layer (per-protocol calldata builders), and an executor. Each pod
                 owns one wallet and one set of protocol/chain registrations.

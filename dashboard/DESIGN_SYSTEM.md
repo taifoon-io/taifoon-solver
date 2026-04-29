@@ -18,7 +18,7 @@ sibling, not a copy":
 
 1. **Solana-mint accent** `#14F195` — used sparingly for live dots, P&L
    confirmations, and the **mint** Button variant on solver-specific CTAs.
-2. **Wordmark** reads `TAIFOON / SPINNERS` in the nav — borrowing
+2. **Wordmark** reads `TAIFOON / SOLVERS` in the nav — disambiguating
    taifoon.io's term for solver pods.
 3. **Solana-violet accent** `#9945FF` — used as a tertiary tone for
    protocol pills (Mayan Swift, Hop) and one Tag tone.
@@ -176,7 +176,7 @@ Variant guide:
 - `secondary` — outlined neutral, supporting action
 - `ghost` — link-like, no border
 - `mint` — outlined solana-mint, solver-specific moments only (e.g.
-  "OPEN MY SPINNER" at the end of onboarding)
+  "OPEN MY SOLVER" at the end of onboarding)
 
 ### Card / CardHeader
 
@@ -254,8 +254,8 @@ the seed entry; when it ends it'll quietly disappear via `endsAt`.
 
 ### NavBar
 
-Sticky, backdrop-blur. Triangle/peak gradient mark + `TAIFOON / SPINNERS`
-wordmark (the "/ SPINNERS" disambiguates from taifoon.io). Mono ALL-CAPS
+Sticky, backdrop-blur. Triangle/peak gradient mark + `TAIFOON / SOLVERS`
+wordmark (the "/ SOLVERS" disambiguates from taifoon.io). Mono ALL-CAPS
 link labels. CTA is bracketed: `> SPIN_UP ▼`.
 
 ### Footer
@@ -277,7 +277,7 @@ Every section opens with a tag and a sentence-case display headline:
 <h2 className="tf-display tf-gradient-silver">
   One grid.
   <br />
-  Every spinner.
+  Every solver.
 </h2>
 ```
 
@@ -300,6 +300,32 @@ The hero's right column. Three sub-panels in a single bordered card:
 3. **Top-protocols leaderboard** — eight protocols sorted by 24h running
    total, with mini-bars sized by share-of-leader. Re-orders smoothly
    as protocols overtake each other.
+
+**Color discipline:** the chart and leaderboard are locked to a
+**monochromatic azure ramp + mint accent** — no yellow, orange,
+magenta, or violet anywhere. SVM-native protocols (Mayan Swift,
+Wormhole) get mint (full and dim respectively); everything else gets
+an azure shade ranked by daily volume:
+
+| Protocol      | Color                  |
+|---------------|------------------------|
+| Wormhole      | mint dim `#0FBE76`     |
+| CCTP          | azure 100% `#3DA5FF`   |
+| Across V3     | azure `#2A8FE0`        |
+| LiFi          | azure `#1F7BC4`        |
+| Stargate V2   | azure `#1A6FB8`        |
+| deBridge DLN  | azure `#16619F`        |
+| Mayan Swift   | mint full `#14F195`    |
+| Synapse       | azure `#125487`        |
+| Orbiter       | azure `#0F476F`        |
+| Hop           | azure `#0B3A57`        |
+| Squid         | azure `#082E45`        |
+| Symbiosis     | azure `#062335`        |
+
+This is intentional: at the aggregate-volume level, the brand reads
+azure + mint. The full multicolor protocol palette (yellow, orange,
+violet, etc.) is reserved for **per-fill surfaces** — IntentRow,
+LiveTicker rows — where color distinguishes individual executions.
 
 **Honesty note:** the seed values in `BASELINES` are approximate
 historical 24h volumes (per-protocol, USD). They are simulated forward —
@@ -388,7 +414,7 @@ content columns:
 
 Content sits in two columns:
 
-- **Left**: silver-gradient display headline ("One spinner / Every protocol /
+- **Left**: silver-gradient display headline ("One solver / Every protocol /
   Every chain"), where "Every protocol" gets the `tf-gradient-solana`
   blue→mint treatment for emphasis. Below the CTAs sits a four-tile KPI
   strip — "$ FILLED · 24H" and "FILLS · 24H" use `<Counter />` to tick up
@@ -424,7 +450,7 @@ No card chrome. Direct competition to the parent brand's pattern.
 
 ### Live indicator
 
-A 1.5px green dot wrapped in `pulse-live` keyframes, paired with `<Badge tone="mint" dot pulse>LIVE</Badge>`. Used wherever a spinner, stream, or
+A 1.5px green dot wrapped in `pulse-live` keyframes, paired with `<Badge tone="mint" dot pulse>LIVE</Badge>`. Used wherever a solver, stream, or
 pod is actively connected. Mint instead of generic green so it reads as
 solver-flavored.
 
@@ -442,11 +468,12 @@ Aligned with taifoon.io's quiet-confident-technical-poetic register:
 
 - **Sentence case**, not ALL-CAPS, in display copy. ALL-CAPS is reserved
   for buttons, nav links, tags, and phase markers.
-- **Period-separated taglines** — "One spinner. Every protocol. Every chain."
+- **Period-separated taglines** — "One solver. Every protocol. Every chain."
 - **Bracketed labels** — `[ THE ENGINE ]`, `[ THE ECONOMY ]`, `[ THE COCKPIT ]`
 - **Phases over steps** — "PHASE 04 — COMPOUND"
-- **"Spinner" not "solver"** at the brand level (matches taifoon.io's
-  internal lingo); "solver" is fine in technical copy.
+- **"Solver"** is the canonical term — used at the brand level, in copy,
+  and in code. ("Spinner" appeared in earlier drafts and was removed when
+  the grant scope locked in "solver" as the product noun.)
 - **Show the numbers** — 31 protocols, 38+ chains, 127ms median latency.
   Specific beats generic.
 
@@ -462,13 +489,32 @@ Avoid:
 | Route                | Purpose                                              |
 |----------------------|------------------------------------------------------|
 | `/`                  | Landing — `[ THE ENGINE ]` narrative arc with phases |
-| `/portal`            | Multi-spinner fleet view + onboarding launcher       |
+| `/portal`            | Multi-solver fleet view + onboarding launcher        |
 | `/portal/[solverId]` | Live monitor — bracketed panels, mono tickers        |
 | `/onboard`           | 4-phase wizard with `PHASE 0X` stepper               |
 | `/docs`              | Stub linking to repo                                 |
 | `/api/solver/*`      | Pre-existing SSE proxy (unchanged)                   |
 
 ---
+
+## SEO
+
+- **Per-route metadata** lives in `app/<route>/layout.tsx` using Next.js
+  `Metadata` exports. Public routes (`/`, `/portal`, `/onboard`, `/docs`)
+  set canonical URLs and OG/Twitter cards. Per-solver routes
+  (`/portal/[solverId]/`) are deliberately marked `noindex`.
+- **Sitemap** at `/sitemap.xml` (generated by `app/sitemap.ts`).
+- **Robots** at `/robots.txt` (generated by `app/robots.ts`) — disallows
+  `/api/*` and `/portal/*/`.
+- **JSON-LD** structured data in the root layout exposes both
+  `Organization` and `SoftwareApplication` shapes for knowledge-panel
+  pickup and AI-search citations.
+- **Keywords** and **OG image** (`/public/og.png`) are owned in
+  `app/layout.tsx`. The OG image needs to exist as a 1200×630 PNG —
+  add to `/public/og.png` before going live.
+- **Canonical noun**: solver. Used at the brand level, in copy, and in
+  code. "Spinner" is reserved for taifoon.io's internal lingo for node
+  operators of the indexer; this product is the **solver runtime**.
 
 ## Open questions / next iterations
 
