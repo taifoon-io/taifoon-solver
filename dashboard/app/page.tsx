@@ -88,7 +88,7 @@ function Hero() {
           </p>
 
           <div className="mt-10 flex flex-wrap items-center gap-3">
-            <Button href="/onboard" variant="primary" size="lg" rim>
+            <Button href="/onboard" variant="primary" size="lg">
               <span className="text-[var(--text-tertiary)]">{'>'}</span>
               SPIN UP A SPINNER →
             </Button>
@@ -457,7 +457,7 @@ function FinalCTA() {
       </div>
 
       <div className="mt-10 flex justify-center gap-3 flex-wrap">
-        <Button href="/onboard" variant="primary" size="lg" rim>
+        <Button href="/onboard" variant="primary" size="lg">
           SPIN UP A SPINNER →
         </Button>
         <Button href="/portal" variant="secondary" size="lg">

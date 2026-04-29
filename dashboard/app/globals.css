@@ -216,8 +216,11 @@ html, body {
 }
 
 /*
- * tf-orbital-spin — the slow concentric rotation taifoon.io applies to
- * its orbital traces. 70s and 90s in their build; we use the same.
+ * tf-orbital-spin — concentric rotation, but applied AFTER a 3D X-tilt.
+ * The wrapper holds the inclination; this keyframe spins around the
+ * wrapper's local Z (which after tilt is no longer the screen Z).
+ *
+ * Two timings, mirroring taifoon.io: 90s and 70s.
  */
 @keyframes tf-orbital-spin {
   from { transform: rotate(0deg); }
@@ -225,6 +228,94 @@ html, body {
 }
 .tf-orbital-trace { animation: tf-orbital-spin 90s linear infinite; }
 .tf-orbital-trace-2 { animation: tf-orbital-spin 70s linear infinite reverse; }
+
+/*
+ * tf-floor — perspective grid floor.
+ *
+ * Strong rotateX (55°) makes the grid lie almost flat to the viewer,
+ * with `perspective` on the parent giving real vanishing-point recession.
+ * `tf-floor-flow` advances background-position one cell over 12s, so
+ * grid lines appear to flow toward the camera infinitely.
+ *
+ * Color: azure at 4% — slightly stronger than tf-grid because the
+ * extreme tilt foreshortens lines and the eye reads less ink overall.
+ *
+ * Fade-to-black at horizon is applied via a child element with a
+ * linear-gradient mask in ChainOrbits.tsx so the floor never has a
+ * visible edge.
+ */
+.tf-floor-wrap {
+  perspective: 1200px;
+  perspective-origin: 50% 28%;
+}
+.tf-floor {
+  position: absolute;
+  width: 240%;
+  height: 200%;
+  left: -70%;
+  top: 38%;
+  transform-origin: 50% 0%;
+  transform: rotateX(58deg);
+  transform-style: preserve-3d;
+  background-image:
+    linear-gradient(rgba(61, 165, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61, 165, 255, 0.05) 1px, transparent 1px);
+  background-size: 80px 80px, 80px 80px;
+  animation: tf-floor-flow 12s linear infinite;
+  pointer-events: none;
+}
+@keyframes tf-floor-flow {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 0 80px, 80px 80px; }
+}
+
+/*
+ * tf-gyro — CSS-3D wireframe gyroscope at the singularity.
+ *
+ * Composition: three concentric 1px-stroked rings, each rotated onto a
+ * different axis (X, Y, Z) so they form a true 3D wireframe. The whole
+ * gyroscope co-rotates around Y over 60s, infinite, linear. One ring
+ * uses mint to signal the Solana plane; the other two are azure.
+ *
+ * The "core" is a small mint square at the center, breathing on 6s.
+ *
+ * No SVG, no library — just nested divs with `transform-style: preserve-3d`.
+ * ~50 LOC, no layout shift, no JS.
+ */
+.tf-gyro {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  transform-style: preserve-3d;
+  animation: tf-gyro-spin 60s linear infinite;
+}
+.tf-gyro-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(61, 165, 255, 0.55);
+  border-radius: 50%;
+}
+.tf-gyro-ring--y { transform: rotateY(75deg); }
+.tf-gyro-ring--x { transform: rotateX(75deg); }
+.tf-gyro-ring--z {
+  transform: rotateZ(15deg);
+  border-color: rgba(20, 241, 149, 0.65);
+}
+.tf-gyro-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  background: #14F195;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 14px #14F19580, 0 0 32px #14F19533;
+  animation: tf-singularity-breathe 6s ease-in-out infinite;
+}
+@keyframes tf-gyro-spin {
+  from { transform: rotateY(0deg) rotateX(15deg); }
+  to   { transform: rotateY(360deg) rotateX(15deg); }
+}
 
 /*
  * singularity-breathe — soft 6s pulse for central nodes.
@@ -312,48 +403,13 @@ html, body {
 }
 
 /*
- * tf-button-rim — rotating gradient stroke for primary CTAs.
- *
- * Applied to a span:before. The conic gradient cycles through azure →
- * mint → transparent so the visible "highlight" sweeps around the rim
- * over 20s. Color set is locked: only the brand blue and mint.
+ * Note: the rotating gradient-stroke "rim" effect on buttons (tf-rim /
+ * tf-rim-rotate) was removed. The page already has plenty of perpetual
+ * motion — the 3D-tilted hero grid, the orbital traces, the volume
+ * stream, the silver-shimmer headlines. Adding rotation to buttons on
+ * top of all that pushed past "alive" into "busy". CTAs now hold still
+ * so the eye lands on them cleanly.
  */
-.tf-rim {
-  position: relative;
-  isolation: isolate;
-}
-.tf-rim::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: conic-gradient(
-    from 0deg,
-    rgba(61, 165, 255, 0)    0%,
-    rgba(61, 165, 255, 0.9) 12%,
-    rgba(20, 241, 149, 0.9) 24%,
-    rgba(61, 165, 255, 0)   40%,
-    rgba(61, 165, 255, 0)   100%
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
-  animation: tf-rim-rotate 20s linear infinite;
-  pointer-events: none;
-  z-index: 0;
-}
-.tf-rim > * {
-  position: relative;
-  z-index: 1;
-}
-
-@keyframes tf-rim-rotate {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
 
 /* ── Display headline conventions (taifoon.io-aligned) ──────────── */
 .tf-display {

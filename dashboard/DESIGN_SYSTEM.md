@@ -135,7 +135,12 @@ to 180s so the page feels alive without ever being frantic.
 | `.tf-orbital-trace-2`      | taifoon.io        |     70s  | infinite | Slow CW rotation                                                      |
 | `tf-singularity-breathe` (`.tf-breathe`) | taifoon.io |  6s | infinite | 0.55→1 opacity oscillation on central nodes                          |
 | `tf-silver-shimmer`        | taifoon.io        |      8s  | infinite | Auto-applied to `.tf-gradient-silver` and `.tf-gradient-solana`       |
-| `tf-rim-rotate` (`.tf-rim`)| taifoon.io buttons|     20s  | infinite | Conic azure→mint gradient stroke rotates around primary CTAs          |
+
+**Removed deliberately:** the rotating gradient stroke on buttons
+(`tf-rim` / `tf-rim-rotate`). Between the hero grid drifting, two
+orbital traces rotating, the volume stream sliding, and the silver
+shimmer on every headline, adding rotation to CTAs pushed past
+"cinematic" into "busy". Buttons hold still so the eye lands on them.
 
 Standard motion tokens still apply for state changes:
 - `--dur-fast` 120ms — hover
@@ -317,6 +322,56 @@ The footer reads `seeded · approximate · rolling 24h · source: defillama brid
 
 The component already accepts `volumes` as a prop, so swapping seed → live
 is a one-line change at the call site.
+
+### Infinite hero geometry (v3 — re-envisioned for true 3D)
+
+The hero is now a **single 3D scene, single camera, single light** —
+six layers, all sharing one perspective:
+
+| # | Layer            | Plane         | Motion                                  | Color                          |
+|---|------------------|---------------|-----------------------------------------|--------------------------------|
+| 1 | `tf-grid`        | overhead, 1.7° X-tilt | 80px cells, 180s drift          | white at 2.4%                  |
+| 2 | `tf-floor`       | floor, 55° X-tilt    | 80px cells, 12s flow toward camera | azure at 4%             |
+| 3 | orbital ring A   | tilted +25° X | 90s spin, square node                   | azure at 32% (#3DA5FF node)    |
+| 4 | orbital ring B   | tilted −15° X, +8° Y | 70s reverse spin, square node    | mint at 42% (#14F195 node)     |
+| 5 | `tf-gyro`        | center singularity | 60s rotateY, three perpendicular rings | azure + mint              |
+| 6 | link line        | ring B → center | 4s pulse, gradient stroke              | azure → mint → azure           |
+
+**Layer 2 — perspective floor** is the "infinite" win. Strong rotateX
+makes the grid lie almost flat to the viewer; a `perspective: 1200px`
+parent gives real vanishing-point recession; `tf-floor-flow` advances
+background-position one cell every 12s so grid lines visibly stream
+toward the camera. A linear-gradient mask fades the far edge to black
+so the floor never has a visible horizon line — true infinite recession.
+
+**Layer 3 & 4 — tilted orbital rings** make the geometry feel like
+*orbits*, not nested 2D circles. Each ring lives inside its own
+3D-tilted wrapper; the inclination is fixed, the rotation animates on
+the ring's local Z-axis (which is no longer the screen Z, so the spin
+reads as an orbital path through 3D space).
+
+**Layer 5 — `tf-gyro`** replaces the previous static center square.
+Three perpendicular hairline circles (rotated to X, Y, Z planes) are
+parented to a wrapper that co-rotates around Y over 60s. The Z-plane
+ring is mint (the Solana-flavored axis); the X and Y rings are azure.
+A breathing mint core sits at the singularity. The whole thing is
+nested inside `perspective: 600px` so the rings foreshorten correctly
+as they spin.
+
+**Locked ambient palette** — strict 4-value set. Anything else in motion
+layers is a defect:
+
+| Token                              | Value                                |
+|------------------------------------|--------------------------------------|
+| `rgba(230, 240, 247, 0.024)`       | overhead grid line                   |
+| `rgba(61, 165, 255, 0.05)`         | floor grid line                      |
+| `rgba(61, 165, 255, 0.32–0.55)`    | azure orbital + gyro stroke          |
+| `rgba(20, 241, 149, 0.42–0.65)`    | mint orbital + gyro stroke           |
+| `#3DA5FF` `#14F195`                | square nodes + breathing core (solid)|
+
+Multicolor protocol palette (yellow, orange, etc.) lives only in the
+LiveTicker, CrossChainVolume, and IntentRow surfaces — where color
+carries meaning. Ambient geometry never uses it.
 
 ### Cinematic hero (the "big bang")
 
