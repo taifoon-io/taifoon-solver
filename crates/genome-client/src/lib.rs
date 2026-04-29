@@ -1337,4 +1337,59 @@ mod tests {
         assert_eq!(intent.dst_chain, 42161);
         assert_eq!(intent.amount, "1000000000");
     }
+
+    #[test]
+    fn test_decode_dln_order_created_log_round_trip() {
+        // Synthetic ABI-encoded OrderCreated log verified against the real Arbitrum DLN layout:
+        // slot[0]=offset_to_order(224), slot[1]=orderId, slots[2..6]=padding, slots[7..]=Order struct
+        let mut slots: Vec<[u8; 32]> = Vec::new();
+        let p = |v: u128| -> [u8; 32] { let mut s = [0u8; 32]; s[16..].copy_from_slice(&v.to_be_bytes()); s };
+        let p64 = |v: u64| -> [u8; 32] { let mut s = [0u8; 32]; s[24..].copy_from_slice(&v.to_be_bytes()); s };
+        let addr = |hex: &str| -> [u8; 32] { let b = hex::decode(hex).unwrap(); let mut s = [0u8; 32]; s[..b.len()].copy_from_slice(&b); s };
+
+        // Top-level
+        slots.push(p64(224));  // [0] order offset = 7*32
+        slots.push(addr("4f5e6d7c8b9a0123456789abcdef0123456789abcdef0123456789abcdef0123")); // [1] orderId
+        for _ in 0..5 { slots.push([0u8; 32]); }  // [2..6] padding
+
+        // Order struct at slot[7] (os=7). Offsets are RELATIVE to Order struct start.
+        // Dynamic data starts 9 slots (288 bytes) after Order struct start.
+        slots.push(p64(12345));          // [os+0] makerOrderNonce
+        slots.push(p64(9 * 32));         // [os+1] makerSrc offset = 288
+        slots.push(p64(42161));          // [os+2] giveChainId
+        slots.push(p64(9 * 32 + 64));    // [os+3] giveToken offset = 352
+        slots.push(p(1_000_000_000));    // [os+4] giveAmount
+        slots.push(p64(10));             // [os+5] takeChainId
+        slots.push(p64(9 * 32 + 128));   // [os+6] takeToken offset = 416
+        slots.push(p(998_000_000));      // [os+7] takeAmount
+        slots.push(p64(9 * 32 + 192));   // [os+8] receiverDst offset = 480
+        // Dynamic data: each = length(32) + data(padded to 32)
+        let push_bytes = |slots: &mut Vec<[u8; 32]>, hex: &str| {
+            let b = hex::decode(hex).unwrap();
+            slots.push(p64(b.len() as u64));
+            let mut d = [0u8; 32]; d[..b.len()].copy_from_slice(&b); slots.push(d);
+        };
+        push_bytes(&mut slots, "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"); // makerSrc
+        push_bytes(&mut slots, "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"); // giveToken
+        push_bytes(&mut slots, "0b2c639c533813f4aa9d7837caf62653d097ff85"); // takeToken
+        push_bytes(&mut slots, "abcdef1234567890abcdef1234567890abcdef12"); // receiverDst
+
+        let data_hex = format!("0x{}", slots.iter().map(|s| hex::encode(s)).collect::<String>());
+        let log = serde_json::json!({
+            "data": data_hex,
+            "transactionHash": "0xdeadbeefdeadbeef"
+        });
+
+        let intent = decode_dln_order_created_log(&log, 42161).expect("should decode");
+        assert_eq!(intent.maker_order_nonce, Some(12345));
+        assert_eq!(intent.src_chain, 42161);
+        assert_eq!(intent.dst_chain, 10);
+        assert_eq!(intent.give_amount.as_deref(), Some("1000000000"));
+        assert_eq!(intent.take_amount.as_deref(), Some("998000000"));
+        assert_eq!(intent.depositor, "0x9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b");
+        assert_eq!(intent.src_token, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
+        assert_eq!(intent.dst_token, "0x0b2c639c533813f4aa9d7837caf62653d097ff85");
+        assert_eq!(intent.recipient, "0xabcdef1234567890abcdef1234567890abcdef12");
+        assert!(intent.order_id.as_deref().unwrap().starts_with("0x4f5e6d7c"));
+    }
 }
