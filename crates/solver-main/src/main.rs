@@ -381,7 +381,9 @@ async fn main() -> Result<()> {
                 }
             }
             if bridge.is_empty() {
-                // Bridge not routable — don't fall to legacy executor
+                // Bridge not yet indexed by li.quest (tx in-flight) or not routable.
+                // Remove from dispatched so the next genome event can retry.
+                dispatched.remove(&dedup_key);
                 continue;
             } else {
                 let mut child = LiFiMetaRouter::project_to_child(&intent, &bridge);
@@ -390,6 +392,12 @@ async fn main() -> Result<()> {
                 // underlying Across/deBridge deposit tx to decode relay parameters.
                 if let Some(stx) = api_sending_tx {
                     child.tx_hash = stx;
+                } else if child.deposit_id.is_none() {
+                    // li.quest didn't return a sending tx yet — the Diamond tx is in-flight.
+                    // Remove from dispatched so the next genome event (placed/executed) can retry.
+                    dispatched.remove(&dedup_key);
+                    info!("⏭️  lifi retry-on-next (sending_tx pending): {}", intent.id);
+                    continue;
                 }
                 if let Some(sc) = api_sending_chain {
                     child.src_chain = sc;
