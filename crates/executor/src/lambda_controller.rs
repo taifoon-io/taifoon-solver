@@ -1095,14 +1095,21 @@ fn weth_address_for_chain(chain_id: u64) -> Option<&'static str> {
 
 fn token_price_heuristic(token: &str) -> f64 {
     let lower = token.to_lowercase();
-    if lower == "0x0000000000000000000000000000000000000000"
-        || lower == "native"
-        || lower.contains("800a")  // zkSync native ETH
-        || lower.contains("4200000000000000000000000000000000000006")  // WETH Base
-    {
+    const ETH_LIKE: &[&str] = &[
+        "0x0000000000000000000000000000000000000000",  // native ETH
+        "native",
+        "0x000000000000000000000000000000000000800a",  // zkSync native ETH
+        "0x4200000000000000000000000000000000000006",  // WETH OP-stack (Base/Optimism/Ink/Mode)
+        "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",  // WETH Arbitrum
+        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",  // WETH Ethereum
+        "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f",  // WETH Linea
+        "0x5300000000000000000000000000000000000004",  // WETH Scroll
+        "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",  // WETH Polygon
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",  // WETH.e Avalanche
+    ];
+    if ETH_LIKE.iter().any(|&s| lower == s) {
         return 3000.0;
     }
-    // Stablecoins
     1.0
 }
 
