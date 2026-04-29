@@ -17,17 +17,17 @@ RUN useradd -m -u 9999 solver
 USER solver
 WORKDIR /home/solver
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget -q --spider http://localhost:8082/api/solver/stats || exit 1
-
-# Expose API port
-EXPOSE 8082
-
-# Environment defaults (can be overridden)
+# Environment defaults (can be overridden at runtime)
 ENV GENOME_SSE_URL=http://localhost:30081/api/genome/subscribe/sse \
     WARMBED_API_URL=http://localhost:8081 \
     MIN_PROFIT_USD=0.1 \
-    SIMULATION_MODE=true
+    SIMULATION_MODE=true \
+    API_PORT=8099
+
+# Health check uses $API_PORT via shell so docker-compose override takes effect
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -q --spider http://localhost:${API_PORT}/api/solver/stats || exit 1
+
+EXPOSE ${API_PORT}
 
 CMD ["/usr/local/bin/taifoon-solver"]

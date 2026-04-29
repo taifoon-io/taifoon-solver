@@ -25,9 +25,8 @@ use crate::estimate::{
     classify_evm_error, write_attempt_bundle, AttemptBundle, EstimateAdapter, EstimateOutcome,
 };
 
-// Re-use protocol-adapters ABIs so we agree on selectors with the legacy path.
 use protocol_adapters::across::SpokePoolV3;
-use protocol_adapters::debridge::DlnDestination;
+use protocol_adapters::{DeBridgeAdapter, SpinnerClient};
 
 use alloy::sol_types::SolCall;
 
@@ -222,65 +221,13 @@ impl DeBridgeEstimateAdapter {
             .get(&intent.dst_chain)
             .ok_or_else(|| anyhow::anyhow!("no deBridge DLN for chain {}", intent.dst_chain))?;
 
-        let nonce = intent.maker_order_nonce.ok_or_else(|| {
-            anyhow::anyhow!("deBridge estimate requires intent.maker_order_nonce")
-        })?;
+        // Delegate to DeBridgeAdapter so the estimate uses the same Order struct
+        // (including authority fields) as the actual fulfillOrder broadcast.
+        // A mismatch would cause the on-chain orderId hash check to revert.
+        let adapter = DeBridgeAdapter::new(SpinnerClient::new(&self.spinner_base));
+        let calldata = adapter.build_fulfill_order_calldata(intent)?;
 
-        let give_amount = match intent.give_amount.as_deref() {
-            Some(s) => U256::from_str_radix(s, 10)?,
-            None => U256::from_str_radix(&intent.amount, 10)?,
-        };
-        let take_amount = match intent.take_amount.as_deref() {
-            Some(s) => U256::from_str_radix(s, 10)?,
-            None => give_amount,
-        };
-
-        let order = DlnDestination::Order {
-            makerOrderNonce: nonce,
-            makerSrc: address_to_bytes(&intent.depositor)?,
-            giveChainId: U256::from(intent.src_chain),
-            giveTokenAddress: address_to_bytes(&intent.src_token)?,
-            giveAmount: give_amount,
-            takeTokenAddress: address_to_bytes(&intent.dst_token)?,
-            takeAmount: take_amount,
-            receiverDst: address_to_bytes(&intent.recipient)?,
-            givePatchAuthoritySrc: Bytes::new(),
-            orderAuthorityAddressDst: Bytes::new(),
-            allowedTakerDst: Bytes::new(),
-            allowedCancelBeneficiarySrc: Bytes::new(),
-            externalCall: Bytes::new(),
-        };
-
-        let order_id = match intent.order_id.as_deref() {
-            Some(s) => {
-                let clean = s.trim_start_matches("0x");
-                let mut arr = [0u8; 32];
-                let bytes = hex::decode(clean)
-                    .map_err(|e| anyhow::anyhow!("invalid order_id hex: {}", e))?;
-                if bytes.len() != 32 {
-                    return Err(anyhow::anyhow!(
-                        "order_id must be 32 bytes, got {}", bytes.len()
-                    ));
-                }
-                arr.copy_from_slice(&bytes);
-                alloy::primitives::FixedBytes(arr)
-            }
-            None => alloy::primitives::keccak256(intent.id.as_bytes()),
-        };
-
-        let call = DlnDestination::fulfillOrderCall {
-            _order: order,
-            _fulFillAmount: take_amount,
-            _orderId: order_id,
-            _permit: Bytes::new(),
-            _unlockAuthority: Address::ZERO,
-        };
-
-        // deBridge fulfillOrder is `payable`. For ERC-20 paths we pass 0 value;
-        // for native-out paths the production solver would attach take_amount.
-        // Either is fine for estimateGas (the wallet is underfunded anyway).
-        let value = U256::ZERO;
-        Ok((dln, call.abi_encode(), value))
+        Ok((dln, calldata, U256::ZERO))
     }
 }
 
@@ -310,12 +257,6 @@ impl EstimateAdapter for DeBridgeEstimateAdapter {
     }
 }
 
-// ── shared ───────────────────────────────────────────────────────────────────
-
-fn address_to_bytes(addr: &str) -> Result<Bytes> {
-    let clean = addr.trim_start_matches("0x");
-    Ok(Bytes::from(hex::decode(clean)?))
-}
 
 /// Per-chain gas price ranges (gwei). Mirrors t3rn-guardian GAS_PRICE_RANGES.
 /// Used as floor/ceiling guards when Razor API is unavailable.
