@@ -205,7 +205,31 @@ impl LambdaController {
             }
         }
 
-        // 4-pre. (Chain wiring already resolved at step 2 above — no redundant lookup needed.)
+        // 4-pre. Spread check for deBridge (spinner bypassed → no external profitability gate).
+        // give_amount is what the user locked on src; take_amount is what we must pay on dst.
+        // The spread is give - take in token units. We require spread_pct ≥ 0.5 % to cover
+        // gas and slippage, otherwise skip.
+        if is_debridge_pre {
+            let give = intent.give_amount.as_deref()
+                .and_then(|s| s.parse::<u128>().ok());
+            let take = intent.take_amount.as_deref()
+                .and_then(|s| s.parse::<u128>().ok());
+            if let (Some(g), Some(t)) = (give, take) {
+                if t == 0 || g <= t {
+                    let reason = format!("debridge_no_spread:give={g}<=take={t}");
+                    info!("⏭️  {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+                let spread_pct = (g - t) as f64 / g as f64 * 100.0;
+                if spread_pct < 0.5 {
+                    let reason = format!("debridge_spread_too_thin:{spread_pct:.3}pct");
+                    info!("⏭️  {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            }
+        }
 
         // 4. PROOF_FETCH — skipped for direct-fill chains (operator==0x0) and for
         // deBridge/Mayan which submit directly to their own contracts (no Taifoon proof).
