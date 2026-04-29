@@ -909,14 +909,20 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
         u128::from_be_bytes(s[16..32].try_into().unwrap_or([0u8; 16])).to_string()
     };
 
-    // Read bytes field: offset is RELATIVE to order struct start, then length+data
+    // Read bytes field: offset is RELATIVE to order struct start, then length+data (multi-slot).
     let read_bytes_relative = |offset_slot: &[u8; 32]| -> Option<Vec<u8>> {
         let rel = u64_at(offset_slot) as usize / 32;
         let abs = os + rel;
         let len = u64_at(slots.get(abs)?) as usize;
         if len == 0 { return Some(vec![]); }
-        let data_slot = slots.get(abs + 1)?;
-        Some(data_slot[..len.min(32)].to_vec())
+        let num_slots = len.div_ceil(32);
+        let mut out = Vec::with_capacity(len);
+        for i in 0..num_slots {
+            let s = slots.get(abs + 1 + i)?;
+            let take = if i + 1 == num_slots { len - i * 32 } else { 32 };
+            out.extend_from_slice(&s[..take]);
+        }
+        Some(out)
     };
 
     let maker_nonce = u64_at(&slots[os]);
