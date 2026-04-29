@@ -334,9 +334,14 @@ async fn main() -> Result<()> {
         // For LiFi, project through the meta-router to get the underlying child intent
         // then dispatch as if it were the underlying protocol directly.
         // When genome omits bridge/tool, attempt async resolution via LiFi status API.
+        // The API also returns the actual deposit tx (sending.txHash / sending.chainId)
+        // which we patch onto the child intent so enrichment decodes V3FundsDeposited
+        // from the right tx on the right chain (not the LiFi Diamond tx).
         let effective_intent;
         let intent_ref = if is_lifi {
             let mut bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
+            let mut api_sending_tx: Option<String> = None;
+            let mut api_sending_chain: Option<u64> = None;
             if bridge.is_empty() {
                 // Attempt to resolve bridge from LiFi status API using tx_hash in intent id.
                 // Intent IDs look like: lifi_v2::lifi_0x<txhash> or lifi_v2:0x<txhash>
@@ -352,9 +357,12 @@ async fn main() -> Result<()> {
                 };
                 if let Some(ref hash) = lookup_hash {
                     match resolve_lifi_bridge(hash).await {
-                        Some(b) => {
-                            info!("🔍 LiFi bridge resolved via API: {} → {}", hash, b);
-                            bridge = b;
+                        Some(res) => {
+                            info!("🔍 LiFi bridge resolved via API: {} → {} (deposit_tx={:?} src_chain={:?})",
+                                hash, res.bridge, res.sending_tx_hash, res.sending_chain_id);
+                            bridge = res.bridge;
+                            api_sending_tx = res.sending_tx_hash;
+                            api_sending_chain = res.sending_chain_id;
                         }
                         None => {
                             info!("⏭️  lifi skip (bridge not routable): {}", intent.id);
@@ -368,8 +376,19 @@ async fn main() -> Result<()> {
                 // Bridge not routable — don't fall to legacy executor
                 continue;
             } else {
-                effective_intent = LiFiMetaRouter::project_to_child(&intent, &bridge);
-                info!("🔀 LiFi→{} projection: {} intent id={}", bridge, intent.id, effective_intent.id);
+                let mut child = LiFiMetaRouter::project_to_child(&intent, &bridge);
+                // Patch the child intent with the actual deposit tx from the LiFi API.
+                // The genome event carries the LiFi Diamond tx; enrichment needs the
+                // underlying Across/deBridge deposit tx to decode relay parameters.
+                if let Some(stx) = api_sending_tx {
+                    child.tx_hash = stx;
+                }
+                if let Some(sc) = api_sending_chain {
+                    child.src_chain = sc;
+                }
+                info!("🔀 LiFi→{} projection: {} intent id={} src_chain={} tx={}",
+                    bridge, intent.id, child.id, child.src_chain, &child.tx_hash[..child.tx_hash.len().min(18)]);
+                effective_intent = child;
                 &effective_intent
             }
         } else {
@@ -510,10 +529,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Rich resolution result from the LiFi status API.
+/// Carries the bridge slug plus the actual source-side deposit tx details so the
+/// enrichment path in lambda_controller can decode V3FundsDeposited correctly.
+struct LifiResolution {
+    bridge: String,
+    /// txHash of the actual underlying deposit (e.g. V3FundsDeposited tx), NOT the LiFi Diamond tx.
+    sending_tx_hash: Option<String>,
+    /// Chain id where the deposit tx was emitted.
+    sending_chain_id: Option<u64>,
+}
+
 /// Resolve the underlying bridge for a LiFi intent via the LiFi status API.
-/// Returns a normalized bridge slug ("across", "debridge", "mayan") or None
+/// Returns a `LifiResolution` with bridge slug + deposit tx details, or None
 /// if the underlying bridge is not something we can fill.
-async fn resolve_lifi_bridge(tx_hash: &str) -> Option<String> {
+async fn resolve_lifi_bridge(tx_hash: &str) -> Option<LifiResolution> {
     let url = format!("https://li.quest/v1/status?txHash={}", tx_hash);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
@@ -526,14 +556,27 @@ async fn resolve_lifi_bridge(tx_hash: &str) -> Option<String> {
         .or_else(|| body.get("bridge"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_lowercase())?;
-    match raw.as_str() {
-        "across" | "across_v3" => Some("across".into()),
-        "debridge" | "dln" | "debridge_dln" => Some("debridge".into()),
-        "mayan" | "mayan_swift" | "mayanswift" => Some("mayan".into()),
+    let bridge = match raw.as_str() {
+        "across" | "across_v3" => "across".to_string(),
+        "debridge" | "dln" | "debridge_dln" => "debridge".to_string(),
+        "mayan" | "mayan_swift" | "mayanswift" => "mayan".to_string(),
         _ => {
             tracing::debug!("LiFi bridge '{}' not routable (not Across/deBridge/Mayan)", raw);
-            None
+            return None;
         }
-    }
+    };
+    // Extract the actual deposit-side tx so lambda_controller can decode it
+    // directly (e.g. V3FundsDeposited log for Across) without relying on the
+    // LiFi Diamond tx, which may be on an unwired or archive-pruned chain.
+    let sending = body.get("sending");
+    let sending_tx_hash = sending
+        .and_then(|s| s.get("txHash"))
+        .and_then(|v| v.as_str())
+        .filter(|s| s.starts_with("0x") && s.len() == 66)
+        .map(String::from);
+    let sending_chain_id = sending
+        .and_then(|s| s.get("chainId"))
+        .and_then(|v| v.as_u64());
+    Some(LifiResolution { bridge, sending_tx_hash, sending_chain_id })
 }
 

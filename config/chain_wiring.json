@@ -105,5 +105,33 @@
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x0000000000000000000000000000000000000000",
     "_note": "deBridge DLN supported; Across not deployed on Gnosis"
+  },
+  "999": {
+    "_chain": "HyperEVM",
+    "rpc_url": "https://rpc.hyperliquid.xyz/evm",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x35e63ea3eb0fb7a3bc543c71fb66412e1f6b0e04",
+    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment only; SpokePool confirmed at 0x35e63ea3"
+  },
+  "1868": {
+    "_chain": "Taiko",
+    "rpc_url": "https://rpc.mainnet.taiko.xyz",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment; confirm SpokePool addr before enabling as fill dst"
+  },
+  "81457": {
+    "_chain": "Blast",
+    "rpc_url": "https://rpc.blast.io",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment; Across SpokePool not confirmed on Blast"
+  },
+  "1135": {
+    "_chain": "Lisk",
+    "rpc_url": "https://rpc.api.lisk.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment; Across SpokePool not confirmed on Lisk"
   }
 }
