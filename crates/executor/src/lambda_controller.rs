@@ -423,6 +423,22 @@ impl LambdaController {
             }
         }
 
+        // Skip Across fills that carry a non-empty message payload. The SpokePool calls
+        // recipient.handleV3AcrossMessage() on fills with message != 0x — if that handler
+        // reverts the fill reverts and we lose gas. We have no way to validate the handler
+        // without knowing the target contract, so skip all message-hook deposits.
+        if (direct_fill || is_across_pre) && !is_debridge && !is_mayan {
+            let has_message = intent.message.as_deref()
+                .map(|m| !m.is_empty() && m != "0x" && m != "0x0")
+                .unwrap_or(false);
+            if has_message {
+                let reason = "across_message_hook_unsupported".to_string();
+                info!("⏭️  {} — {}", intent.id, reason);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
+        }
+
         // Across intents (both direct-fill and operator paths) require a depositId to build
         // fillV3Relay calldata. Skip cleanly when enrichment couldn't resolve one — avoids
         // a hard 'cannot resolve depositId' error from the calldata builder.
