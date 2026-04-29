@@ -318,6 +318,16 @@ html, body {
 }
 
 /*
+ * tf-particle-fade — slow opacity oscillation for the volumetric dust
+ * field. Each particle gets its own delay/duration so the field never
+ * pulses in unison.
+ */
+@keyframes tf-particle-fade {
+  0%, 100% { opacity: 0.15; }
+  50%      { opacity: 0.85; }
+}
+
+/*
  * singularity-breathe — soft 6s pulse for central nodes.
  * One opacity oscillation, no scale, so it never competes with content.
  */

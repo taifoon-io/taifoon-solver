@@ -349,19 +349,46 @@ The footer reads `seeded · approximate · rolling 24h · source: defillama brid
 The component already accepts `volumes` as a prop, so swapping seed → live
 is a one-line change at the call site.
 
-### Infinite hero geometry (v3 — re-envisioned for true 3D)
+### Infinite hero geometry (v4 — unified 3D scene with shared camera)
 
-The hero is now a **single 3D scene, single camera, single light** —
-six layers, all sharing one perspective:
+The biggest unlock from v3 → v4: every layer now lives inside a **single
+`perspective: 1400px` parent with `perspective-origin: 50% 32%`**. One
+camera, one vanishing point, one light. The geometry no longer reads as
+a stack of pasted layers — it reads as a 3D scene we are looking down
+into from slightly above.
 
-| # | Layer            | Plane         | Motion                                  | Color                          |
-|---|------------------|---------------|-----------------------------------------|--------------------------------|
-| 1 | `tf-grid`        | overhead, 1.7° X-tilt | 80px cells, 180s drift          | white at 2.4%                  |
-| 2 | `tf-floor`       | floor, 55° X-tilt    | 80px cells, 12s flow toward camera | azure at 4%             |
-| 3 | orbital ring A   | tilted +25° X | 90s spin, square node                   | azure at 32% (#3DA5FF node)    |
-| 4 | orbital ring B   | tilted −15° X, +8° Y | 70s reverse spin, square node    | mint at 42% (#14F195 node)     |
-| 5 | `tf-gyro`        | center singularity | 60s rotateY, three perpendicular rings | azure + mint              |
-| 6 | link line        | ring B → center | 4s pulse, gradient stroke              | azure → mint → azure           |
+Z-stratified composition (back to front):
+
+| Z       | Layer            | Plane / motion                                      | Color                          |
+|--------:|------------------|-----------------------------------------------------|--------------------------------|
+| −300    | `tf-grid`        | overhead, 1.7° X-tilt, 80px cells, 180s drift       | white at 2.4%                  |
+| −260…−200 | particles (far) | 2px squares, 13–16s breathing                      | azure at 22%                   |
+| −180…−100 | particles (mid-back) | 2–3px squares, 7–12s breathing                 | azure / mint at 35%            |
+| −100    | `tf-floor`       | 55° X-tilt + perspective recession, 12s flow toward camera | azure at 5%             |
+| −40     | orbit A          | 25° X-tilt, 90s spin, square node                   | azure at 32%                   |
+| 0       | orbit B          | −15° X, +8° Y, 70s reverse, square node             | mint at 42%                    |
+| 0…+40   | particles (mid-front) | 3px squares, 6–10s breathing                  | azure / mint at 50%            |
+| +60…+110 | particles (foreground) | 3–4px squares, 5–9s breathing                | azure / mint at 70%            |
+| +20     | link line        | ring B node → center, 4s pulse                      | azure → mint → azure           |
+| +80     | `tf-gyro`        | three perpendicular rings, 60s rotate, mint core    | azure + mint                   |
+
+**Volumetric cues** layered on top of the 3D scene:
+
+- **Camera tilt** — `perspective-origin: 50% 32%` puts the camera above
+  center. We're looking *down into* the scene. Single CSS value, biggest
+  perceptual win.
+- **Directional rim-light** — radial gradient `60% 50% at 82% 12%` in
+  azure at 8% opacity. Reads as illumination from upper-right.
+- **Cool fog** — radial gradient `55% 50% at 12% 88%` in mint at 5%.
+  Reinforces volume + signals "Solana plane is below".
+- **Depth-cued particles** — 18 dust squares at varied translateZ
+  (−300 to +120). Far particles are dimmer + smaller, near are brighter
+  + larger. Each breathes on a staggered 5–16s cycle so the field never
+  pulses in unison.
+
+**Locked ambient palette** still 4 values (azure, mint, two whites at
+low opacity). No new colors introduced — the volumetric depth comes
+from positioning, not new ink.
 
 **Layer 2 — perspective floor** is the "infinite" win. Strong rotateX
 makes the grid lie almost flat to the viewer; a `perspective: 1200px`

@@ -1,29 +1,72 @@
 'use client'
 /**
- * ChainOrbits — re-envisioned hero geometry, v3.
+ * ChainOrbits — unified 3D scene, v4.
  *
- * Composition (back to front, single 3D scene, single light, one camera):
+ * Six layers all parented to ONE perspective camera so they share a
+ * single vanishing point. The "3D alignment" the brief asked for is
+ * really one thing: every transform respects the same camera.
  *
- *   1. tf-grid           80px square grid, 1.7° X-tilt, 180s drift (overhead plane)
- *   2. tf-floor          Perspective grid floor — 55° X-tilt, vanishing-point
- *                        recession, drifts toward camera over 12s
- *   3. orbital ring A    Tilted ~25° around X, azure stroke, 90s spin, square node
- *   4. orbital ring B    Tilted ~−15° around X with a small Y twist, mint stroke,
- *                        70s reverse spin, mint square node — the "Solana plane"
- *   5. tf-gyro           CSS-3D wireframe gyroscope at the singularity:
- *                        three perpendicular hairline rings co-rotating over 60s
- *                        with a mint core breathing on 6s
- *   6. link line         A faint mint line connecting Solana node → singularity
+ * Layers, back to front (low Z → high Z):
  *
- * Color palette is locked to four ambient values — anything outside this
- * set is a defect:
- *   - rgba(230, 240, 247, 0.024)  white-overhead
- *   - rgba( 61, 165, 255, 0.05)   azure-floor
- *   - rgba( 61, 165, 255, 0.55)   azure-stroke
- *   - rgba( 20, 241, 149, 0.65)   mint-stroke (+ #14F195 solid for the core)
+ *   z = -300   tf-grid      overhead drift grid, pushed deep into the scene
+ *   z = -100   tf-floor     Tron-style perspective floor flowing toward camera
+ *   z = -150   particles*   azure/mint dust at varied Z, staggered breathing
+ *   z = -40    orbit A      tilted +25° X, azure, 90s
+ *   z =   0    orbit B      tilted -15° X, mint, 70s reverse — "Solana plane"
+ *   z = +60    particles*   foreground particles, brighter
+ *   z = +80    tf-gyro      wireframe gyroscope, brightest
  *
- * No JS animation state. No layout shift. No external libraries.
+ * (* particles span -200 to +120, distributed across Z)
+ *
+ * Camera-tilt: perspective-origin 50% 32% — we're looking *down into*
+ * the scene, not at it head-on. Single value, biggest perceptual win.
+ *
+ * Lighting cheat: a radial gradient overlay simulates a light source
+ * at upper-right. The eye reads it as illumination direction.
+ *
+ * Palette is strictly locked to:
+ *   - rgba(230,240,247,0.024 → 0.18)   white at low opacity
+ *   - rgba(61,165,255, 0.05 → 0.7)     azure ramp
+ *   - rgba(20,241,149, 0.42 → 0.9)     mint ramp + #14F195 solid
  */
+
+const PARTICLES: ParticleSpec[] = [
+  // Background dust (z < 0) — smaller, dimmer
+  { x: 8,  y: 22, z: -180, size: 2, color: 'azure', dur: 9,  delay: 0 },
+  { x: 18, y: 76, z: -160, size: 2, color: 'azure', dur: 7,  delay: 1.4 },
+  { x: 84, y: 18, z: -200, size: 2, color: 'azure', dur: 11, delay: 2.7 },
+  { x: 92, y: 64, z: -140, size: 3, color: 'azure', dur: 8,  delay: 0.6 },
+  { x: 30, y: 40, z: -120, size: 2, color: 'mint',  dur: 12, delay: 3.4 },
+  { x: 70, y: 82, z: -100, size: 2, color: 'azure', dur: 9,  delay: 4.1 },
+
+  // Mid-plane (z ≈ 0)
+  { x: 14, y: 50, z: -20,  size: 3, color: 'azure', dur: 6,  delay: 0.9 },
+  { x: 86, y: 38, z: -10,  size: 3, color: 'azure', dur: 8,  delay: 2.2 },
+  { x: 50, y: 12, z: 30,   size: 3, color: 'mint',  dur: 7,  delay: 1.6 },
+  { x: 42, y: 88, z: 20,   size: 3, color: 'azure', dur: 10, delay: 3.0 },
+
+  // Foreground (z > 0) — larger, brighter
+  { x: 62, y: 28, z: 80,   size: 4, color: 'mint',  dur: 5,  delay: 0.3 },
+  { x: 22, y: 70, z: 100,  size: 4, color: 'azure', dur: 6,  delay: 2.0 },
+  { x: 78, y: 56, z: 60,   size: 3, color: 'azure', dur: 8,  delay: 4.5 },
+  { x: 36, y: 24, z: 110,  size: 3, color: 'azure', dur: 7,  delay: 1.1 },
+  { x: 58, y: 78, z: 70,   size: 4, color: 'mint',  dur: 9,  delay: 3.7 },
+
+  // A few far-off bright bits to suggest infinite depth
+  { x: 6,  y: 60, z: -260, size: 2, color: 'azure', dur: 14, delay: 0 },
+  { x: 96, y: 48, z: -240, size: 2, color: 'azure', dur: 13, delay: 5.0 },
+  { x: 50, y: 50, z: -300, size: 2, color: 'mint',  dur: 16, delay: 7.0 },
+]
+
+interface ParticleSpec {
+  x: number
+  y: number
+  z: number
+  size: number
+  color: 'azure' | 'mint'
+  dur: number
+  delay: number
+}
 
 export function ChainOrbits({ className = '' }: { className?: string }) {
   return (
@@ -31,34 +74,61 @@ export function ChainOrbits({ className = '' }: { className?: string }) {
       className={`absolute inset-0 pointer-events-none overflow-hidden ${className}`}
       aria-hidden="true"
     >
-      {/* ── Layer 1 — overhead drift grid ─────────────────────────── */}
-      <div className="tf-grid absolute inset-[-10%]" />
-
-      {/* ── Layer 2 — perspective floor (Tron-style infinite recession) ── */}
-      <div className="tf-floor-wrap absolute inset-0">
-        <div className="tf-floor" />
-        {/* Horizon fade — no visible far edge */}
+      {/* ── ONE perspective scene ──────────────────────────────────── */}
+      <div
+        className="absolute inset-0"
+        style={{
+          perspective: '1400px',
+          perspectiveOrigin: '50% 32%',
+          transformStyle: 'preserve-3d',
+        }}
+      >
+        {/* Layer 1 — overhead drift grid, pushed deep ─────────────── */}
         <div
-          className="absolute inset-0 pointer-events-none"
+          className="tf-grid absolute inset-[-15%]"
           style={{
-            background:
-              'linear-gradient(180deg, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 36%, rgba(0,0,0,0.6) 50%, rgba(0,0,0,0) 70%)',
+            transform: 'translateZ(-300px)',
+            transformStyle: 'preserve-3d',
           }}
         />
-      </div>
 
-      {/* ── Layers 3 & 4 — two 3D-tilted orbital rings ───────────── */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-        {/* Outer azure ring — tilted ~25° around X */}
+        {/* Layer 2 — Tron-style floor at the back of mid-plane ────── */}
+        <div className="absolute inset-0" style={{ transformStyle: 'preserve-3d' }}>
+          <div className="tf-floor" style={{ transform: 'rotateX(58deg) translateZ(-100px)' }} />
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              background:
+                'linear-gradient(180deg, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 36%, rgba(0,0,0,0.6) 50%, rgba(0,0,0,0) 70%)',
+            }}
+          />
+        </div>
+
+        {/* Layer 3 — particle dust field ──────────────────────────── */}
         <div
+          className="absolute inset-0"
+          style={{ transformStyle: 'preserve-3d' }}
+        >
+          {PARTICLES.map((p, i) => (
+            <Particle key={i} {...p} />
+          ))}
+        </div>
+
+        {/* Layer 4 — outer azure orbit, behind center ─────────────── */}
+        <div
+          className="absolute left-1/2 top-1/2"
           style={{
-            width: 'min(78vh, 700px)',
-            height: 'min(78vh, 700px)',
+            transform: 'translate(-50%, -50%) translateZ(-40px) rotateX(25deg)',
             transformStyle: 'preserve-3d',
-            transform: 'rotateX(25deg)',
           }}
         >
-          <div className="tf-orbital-trace relative w-full h-full">
+          <div
+            className="tf-orbital-trace relative"
+            style={{
+              width: 'min(78vh, 700px)',
+              height: 'min(78vh, 700px)',
+            }}
+          >
             <RingNode
               stroke="rgba(61, 165, 255, 0.32)"
               nodeColor="#3DA5FF"
@@ -68,38 +138,37 @@ export function ChainOrbits({ className = '' }: { className?: string }) {
           </div>
         </div>
 
-        {/* Inner mint ring — tilted ~−15° around X with a small Y twist */}
+        {/* Layer 5 — inner mint orbit, mid-plane ──────────────────── */}
         <div
-          className="absolute inset-0 grid place-items-center"
-          style={{ transformStyle: 'preserve-3d' }}
+          className="absolute left-1/2 top-1/2"
+          style={{
+            transform: 'translate(-50%, -50%) rotateX(-15deg) rotateY(8deg)',
+            transformStyle: 'preserve-3d',
+          }}
         >
           <div
+            className="tf-orbital-trace-2 relative"
             style={{
               width: 'min(54vh, 460px)',
               height: 'min(54vh, 460px)',
-              transformStyle: 'preserve-3d',
-              transform: 'rotateX(-15deg) rotateY(8deg)',
             }}
           >
-            <div className="tf-orbital-trace-2 relative w-full h-full">
-              <RingNode
-                stroke="rgba(20, 241, 149, 0.42)"
-                nodeColor="#14F195"
-                nodeAngle={210}
-                label="SVM PLANE"
-                solana
-              />
-            </div>
+            <RingNode
+              stroke="rgba(20, 241, 149, 0.42)"
+              nodeColor="#14F195"
+              nodeAngle={210}
+              label="SVM PLANE"
+              solana
+            />
           </div>
         </div>
-      </div>
 
-      {/* ── Layer 5 — wireframe gyroscope at the singularity ──────── */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+        {/* Layer 6 — wireframe gyroscope, foreground ──────────────── */}
         <div
+          className="absolute left-1/2 top-1/2"
           style={{
-            perspective: 600,
-            perspectiveOrigin: '50% 50%',
+            transform: 'translate(-50%, -50%) translateZ(80px)',
+            transformStyle: 'preserve-3d',
           }}
         >
           <div className="tf-gyro">
@@ -109,40 +178,89 @@ export function ChainOrbits({ className = '' }: { className?: string }) {
             <div className="tf-gyro-core" />
           </div>
         </div>
+
+        {/* Layer 7 — link line, singularity ↔ Solana node ─────────── */}
+        <svg
+          className="absolute left-1/2 top-1/2"
+          width="min(54vh, 460px)"
+          height="min(54vh, 460px)"
+          viewBox="0 0 460 460"
+          style={{
+            width: 'min(54vh, 460px)',
+            height: 'min(54vh, 460px)',
+            transform: 'translate(-50%, -50%) translateZ(20px)',
+          }}
+        >
+          <defs>
+            <linearGradient id="tf-link-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#3DA5FF" stopOpacity="0" />
+              <stop offset="50%" stopColor="#14F195" stopOpacity="0.65" />
+              <stop offset="100%" stopColor="#3DA5FF" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <line
+            x1="230"
+            y1="230"
+            x2={230 + 230 * Math.cos((210 * Math.PI) / 180)}
+            y2={230 + 230 * Math.sin((210 * Math.PI) / 180)}
+            stroke="url(#tf-link-grad)"
+            strokeWidth="1"
+            style={{ animation: 'tf-link-pulse 4s ease-in-out infinite' }}
+          />
+          <style>{`
+            @keyframes tf-link-pulse {
+              0%, 100% { opacity: 0.18; }
+              50%      { opacity: 1; }
+            }
+          `}</style>
+        </svg>
       </div>
 
-      {/* ── Layer 6 — link line, singularity ↔ Solana node ────────── */}
-      <svg
-        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-        width="min(54vh, 460px)"
-        height="min(54vh, 460px)"
-        viewBox="0 0 460 460"
-        style={{ width: 'min(54vh, 460px)', height: 'min(54vh, 460px)' }}
-      >
-        <defs>
-          <linearGradient id="tf-link-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#3DA5FF" stopOpacity="0" />
-            <stop offset="50%" stopColor="#14F195" stopOpacity="0.65" />
-            <stop offset="100%" stopColor="#3DA5FF" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <line
-          x1="230"
-          y1="230"
-          x2={230 + 230 * Math.cos((210 * Math.PI) / 180)}
-          y2={230 + 230 * Math.sin((210 * Math.PI) / 180)}
-          stroke="url(#tf-link-grad)"
-          strokeWidth="1"
-          style={{ animation: 'tf-link-pulse 4s ease-in-out infinite' }}
-        />
-        <style>{`
-          @keyframes tf-link-pulse {
-            0%, 100% { opacity: 0.18; }
-            50%      { opacity: 1; }
-          }
-        `}</style>
-      </svg>
+      {/* Directional rim-light — implies a light source upper-right */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(ellipse 60% 50% at 82% 12%, rgba(61, 165, 255, 0.08) 0%, transparent 60%)',
+        }}
+      />
+      {/* Cool fog from the lower-left — reinforces volume */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(ellipse 55% 50% at 12% 88%, rgba(20, 241, 149, 0.05) 0%, transparent 60%)',
+        }}
+      />
     </div>
+  )
+}
+
+/**
+ * Particle — a single 3D-positioned dust square. Lives inside the
+ * scene's perspective context, so its translateZ creates real parallax
+ * relative to other layers.
+ */
+function Particle({ x, y, z, size, color, dur, delay }: ParticleSpec) {
+  const hex = color === 'mint' ? '#14F195' : '#3DA5FF'
+  // Closer particles are brighter — depth cue.
+  const baseOpacity = z > 50 ? 0.7 : z > 0 ? 0.5 : z > -100 ? 0.35 : 0.22
+  return (
+    <span
+      style={{
+        position: 'absolute',
+        left: `${x}%`,
+        top: `${y}%`,
+        width: size,
+        height: size,
+        background: hex,
+        transform: `translate3d(-50%, -50%, ${z}px)`,
+        opacity: baseOpacity,
+        boxShadow: `0 0 ${size * 3}px ${hex}55`,
+        animation: `tf-particle-fade ${dur}s ease-in-out infinite`,
+        animationDelay: `${delay}s`,
+      }}
+    />
   )
 }
 
