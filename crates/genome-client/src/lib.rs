@@ -522,11 +522,8 @@ impl AcrossPoller {
                         }
                         None => continue,
                     };
-                    if !seen.insert(dep_id) {
-                        continue;
-                    }
-
-                    // Exclusivity check: skip if exclusiveRelayer is set and deadline hasn't passed
+                    // Exclusivity check: skip (but don't dedup) if still in exclusive window.
+                    // Dedup after exclusivity so an expiring exclusive deposit can be filled later.
                     let excl = dep.get("exclusiveRelayer")
                         .and_then(|v| v.as_str())
                         .unwrap_or("0x0000000000000000000000000000000000000000");
@@ -538,7 +535,7 @@ impl AcrossPoller {
                             .and_then(|s| chrono_unix_from_iso(s))
                             .unwrap_or(0);
                         if excl_deadline > now_secs {
-                            continue; // still exclusive
+                            continue; // still exclusive — don't add to seen, retry when expired
                         }
                     }
 
@@ -548,6 +545,12 @@ impl AcrossPoller {
                         .and_then(|s| chrono_unix_from_iso(s))
                         .unwrap_or(0);
                     if fill_deadline_unix > 0 && fill_deadline_unix - now_secs < 60 {
+                        continue;
+                    }
+
+                    // Dedup: only after deadline/exclusivity checks so we don't permanently
+                    // block deposits that were skipped due to a temporary condition.
+                    if !seen.insert(dep_id) {
                         continue;
                     }
 
