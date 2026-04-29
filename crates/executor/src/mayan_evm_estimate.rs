@@ -271,7 +271,20 @@ fn parse_u64_amount(s: &str, field: &str) -> Result<u64> {
     // Mayan's OrderParams uses uint64 for amounts (their on-chain norm). USDC
     // at 6 decimals fits comfortably (max ~1.8e13 USD). Native ETH at 18
     // decimals would overflow above ~18 ETH; we cap and warn.
-    let big = U256::from_str_radix(s, 10)
+    //
+    // MayanPoller stores human-readable decimals from the explorer API (e.g.
+    // "0.0216374004" ETH). Detect the decimal point and convert to 18-decimal
+    // wei representation so the u64 parse succeeds.
+    let s = if s.contains('.') {
+        // Parse as f64 and convert to wei (18 decimals). Precision loss above
+        // ~18 ETH but acceptable for amount-in estimation.
+        let f: f64 = s.parse().map_err(|e| anyhow::anyhow!("invalid {} decimal: {}", field, e))?;
+        let wei = (f * 1e18) as u128;
+        format!("{}", wei)
+    } else {
+        s.to_string()
+    };
+    let big = U256::from_str_radix(&s, 10)
         .map_err(|e| anyhow::anyhow!("invalid {}: {}", field, e))?;
     if big > U256::from(u64::MAX) {
         warn!(

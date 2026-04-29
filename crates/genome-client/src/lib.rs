@@ -936,6 +936,177 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
     })
 }
 
+// ── Mayan Swift poller ────────────────────────────────────────────────────────
+
+/// Mayan Swift ORDER_CREATED poller.
+///
+/// Polls `explorer-api.mayan.finance/v3/swaps` for SWIFT_V2 `ORDER_CREATED`
+/// entries whose destination chain is an EVM network we can fill. Mayan uses
+/// its own chain-ID namespace: 2=Eth, 4=BSC, 5=Polygon, 6=Avalanche, 23=Base,
+/// 30=Arbitrum, 47=Optimism. We map those to standard EVM chain IDs.
+///
+/// Orders settle in 7-17 seconds, so we poll at 3s and deduplicate by orderHash.
+pub struct MayanPoller {
+    /// Poll interval in seconds (default: 3).
+    pub poll_interval_secs: u64,
+    /// Max orders per poll.
+    pub limit: usize,
+}
+
+/// Mayan internal chain ID → EVM chain ID
+fn mayan_chain_to_evm(mayan: &str) -> Option<u64> {
+    match mayan {
+        "2"  => Some(1),      // Ethereum
+        "4"  => Some(56),     // BSC
+        "5"  => Some(137),    // Polygon
+        "6"  => Some(43114),  // Avalanche
+        "23" => Some(8453),   // Base
+        "30" => Some(42161),  // Arbitrum
+        "47" => Some(10),     // Optimism
+        _    => None,
+    }
+}
+
+impl Default for MayanPoller {
+    fn default() -> Self {
+        Self { poll_interval_secs: 3, limit: 20 }
+    }
+}
+
+impl MayanPoller {
+    /// Run forever, emitting fillable Mayan Swift EVM intents to `intent_tx`.
+    pub async fn run(self, intent_tx: tokio::sync::mpsc::Sender<Intent>) {
+        use std::collections::HashSet;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .user_agent("Mozilla/5.0 (compatible; taifoon-solver/1.0)")
+            .build()
+            .unwrap_or_default();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        loop {
+            let url = format!(
+                "https://explorer-api.mayan.finance/v3/swaps?limit={}&service=SWIFT_V2",
+                self.limit
+            );
+            let resp = match client.get(&url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!("MayanPoller request error: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
+                    continue;
+                }
+            };
+            if !resp.status().is_success() {
+                tracing::warn!("MayanPoller HTTP {}: {}", resp.status(), url);
+                tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
+                continue;
+            }
+            let body: serde_json::Value = match resp.json().await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::debug!("MayanPoller parse error: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
+                    continue;
+                }
+            };
+            let orders = match body.get("data").and_then(|v| v.as_array()) {
+                Some(arr) => arr.clone(),
+                None => {
+                    tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
+                    continue;
+                }
+            };
+
+            for order in &orders {
+                let st = order.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                if st != "ORDER_CREATED" {
+                    continue;
+                }
+                let order_hash = match order.get("orderHash").and_then(|v| v.as_str()) {
+                    Some(h) if !h.is_empty() => h.to_string(),
+                    _ => continue,
+                };
+                if !seen.insert(order_hash.clone()) {
+                    continue;
+                }
+
+                let dst_chain_mayan = order.get("destChain").and_then(|v| v.as_str()).unwrap_or("0");
+                let dst_chain = match mayan_chain_to_evm(dst_chain_mayan) {
+                    Some(c) => c,
+                    None => {
+                        tracing::debug!("MayanPoller skip non-EVM dest chain {}", dst_chain_mayan);
+                        continue;
+                    }
+                };
+
+                let src_chain_mayan = order.get("sourceChain").and_then(|v| v.as_str()).unwrap_or("0");
+                // swapChain=1 means the order routes via Solana; swapChain=2 means direct EVM-EVM
+                let swap_chain = order.get("swapChain").and_then(|v| v.as_str()).unwrap_or("0");
+                let src_chain = mayan_chain_to_evm(src_chain_mayan).unwrap_or(0);
+
+                let from_token = order.get("fromTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+                let to_token = order.get("toTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+                let dest_addr = order.get("destAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+                let trader = order.get("trader").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+                let source_tx = order.get("sourceTxHash").and_then(|v| v.as_str()).unwrap_or("0x").to_string();
+                let state_addr = order.get("stateAddr").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                // fromAmount is a human-readable decimal string like "0.009"
+                // We store it as-is in the amount field; lambda_controller handles the
+                // conversion when building fulfillOrder calldata.
+                let from_amount_str = order.get("fromAmount").and_then(|v| v.as_str()).unwrap_or("0");
+                let to_amount_str = order.get("toAmount").and_then(|v| v.as_str());
+
+                // Auction mode: 0=English, 1=Dutch, 2=No-auction (direct fill)
+                let auction_mode = order.get("auctionMode").and_then(|v| v.as_u64()).unwrap_or(2);
+                // is_solana_source: swapChain=1 means Solana intermediary
+                let is_solana_src = swap_chain == "1" && src_chain == 0;
+
+                info!("📡 MayanPoller ORDER_CREATED orderHash={} src={}({}) dst={}({}) {}→{} mode={}",
+                    &order_hash[..20.min(order_hash.len())],
+                    src_chain_mayan, src_chain,
+                    dst_chain_mayan, dst_chain,
+                    order.get("fromTokenSymbol").and_then(|v| v.as_str()).unwrap_or("?"),
+                    order.get("toTokenSymbol").and_then(|v| v.as_str()).unwrap_or("?"),
+                    auction_mode);
+
+                let intent = Intent {
+                    id: format!("mayan_swift:{}", order_hash),
+                    protocol: "mayan_swift".to_string(),
+                    src_chain,
+                    dst_chain,
+                    src_token: from_token,
+                    dst_token: to_token,
+                    amount: from_amount_str.to_string(),
+                    depositor: trader.clone(),
+                    recipient: dest_addr,
+                    tx_hash: source_tx,
+                    output_amount: to_amount_str.map(|s| s.to_string()),
+                    mayan_order_id: Some(order_hash),
+                    trader: Some(trader),
+                    is_solana_source: Some(is_solana_src),
+                    // stateAddr is the Solana PDA holding the order — useful for VAA lookup
+                    batch_id: None,
+                    detected_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    ..Default::default()
+                };
+
+                if intent_tx.send(intent).await.is_err() {
+                    return;
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
+        }
+    }
+}
+
+// ── GenomeClient ──────────────────────────────────────────────────────────────
+
 impl GenomeClient {
     /// Create new genome client
     pub fn new(sse_url: impl Into<String>) -> Self {
@@ -962,12 +1133,25 @@ impl GenomeClient {
         self.subscribe(intent_tx).await
     }
 
-    /// Like `subscribe_with_pollers` but also spawns deBridge on-chain log pollers.
+    /// Like `subscribe_with_pollers` but also spawns deBridge and Mayan pollers.
     pub async fn subscribe_with_all_pollers(
         &self,
         intent_tx: mpsc::Sender<Intent>,
         across_pollers: Vec<AcrossPoller>,
         debridge_poller: Option<DeBridgePoller>,
+    ) -> Result<()> {
+        self.subscribe_with_all_pollers_and_mayan(
+            intent_tx, across_pollers, debridge_poller, Some(MayanPoller::default())
+        ).await
+    }
+
+    /// Full poller suite: Across + deBridge + Mayan.
+    pub async fn subscribe_with_all_pollers_and_mayan(
+        &self,
+        intent_tx: mpsc::Sender<Intent>,
+        across_pollers: Vec<AcrossPoller>,
+        debridge_poller: Option<DeBridgePoller>,
+        mayan_poller: Option<MayanPoller>,
     ) -> Result<()> {
         for poller in across_pollers {
             let tx = intent_tx.clone();
@@ -976,6 +1160,10 @@ impl GenomeClient {
         if let Some(dp) = debridge_poller {
             let tx = intent_tx.clone();
             tokio::spawn(async move { dp.run(tx).await });
+        }
+        if let Some(mp) = mayan_poller {
+            let tx = intent_tx.clone();
+            tokio::spawn(async move { mp.run(tx).await });
         }
         self.subscribe(intent_tx).await
     }

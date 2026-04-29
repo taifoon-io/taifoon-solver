@@ -337,7 +337,7 @@ impl AdapterFactory {
 
     /// List all supported protocols
     pub fn supported_protocols(&self) -> Vec<&'static str> {
-        vec!["across", "across_v3", "debridge", "dln", "lifi", "li.fi", "mayan", "mayan_finance", "orbiter_finance", "orbiter"]
+        vec!["across", "across_v3", "debridge", "dln", "lifi", "li.fi", "mayan", "mayan_finance", "mayan_swift", "orbiter_finance", "orbiter"]
     }
 }
 
