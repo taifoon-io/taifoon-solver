@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_MIN_PROFIT_USD);
     let dry_run = std::env::var("DRY_RUN")
+        .or_else(|_| std::env::var("SIMULATION_MODE"))
         .map(|v| v != "false" && v != "0")
         .unwrap_or(true);
     let outcome_db_path = std::env::var("OUTCOME_DB_PATH")
