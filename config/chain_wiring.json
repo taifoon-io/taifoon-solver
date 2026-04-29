@@ -3,31 +3,31 @@
   "_updated": "2026-04-29",
   "1": {
     "_chain": "Ethereum",
-    "rpc_url": "https://mainnet.infura.io/v3/9e09ec06e2fd43778f9fd52eb0265d75",
+    "rpc_url": "https://ethereum-rpc.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"
   },
   "10": {
     "_chain": "Optimism",
-    "rpc_url": "https://optimism-mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410",
+    "rpc_url": "https://mainnet.optimism.io",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x6f26Bf09B1C792e3228e5467807a900A503c0281"
   },
   "137": {
     "_chain": "Polygon",
-    "rpc_url": "https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab",
+    "rpc_url": "https://polygon-bor-rpc.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096"
   },
   "8453": {
     "_chain": "Base",
-    "rpc_url": "https://base-mainnet.infura.io/v3/84cf92429d124b6c909c45a429601cfd",
+    "rpc_url": "https://base-rpc.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64"
   },
   "42161": {
     "_chain": "Arbitrum",
-    "rpc_url": "https://arbitrum-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab",
+    "rpc_url": "https://arb1.arbitrum.io/rpc",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A"
   },

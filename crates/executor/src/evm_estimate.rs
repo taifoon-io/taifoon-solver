@@ -239,7 +239,7 @@ pub fn gas_price_range_for_chain(chain_id: u64) -> GasPriceRange {
         10      => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.001 }, // Optimism
         56      => GasPriceRange { min_gwei: 1.0,   max_gwei: 20.0,  typical_gwei: 3.0   }, // BSC
         137     => GasPriceRange { min_gwei: 30.0,  max_gwei: 500.0, typical_gwei: 50.0  }, // Polygon
-        8453    => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.005 }, // Base
+        8453    => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.05  }, // Base
         42161   => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.01  }, // Arbitrum
         43114   => GasPriceRange { min_gwei: 25.0,  max_gwei: 100.0, typical_gwei: 30.0  }, // Avalanche
         59144   => GasPriceRange { min_gwei: 0.05,  max_gwei: 5.0,   typical_gwei: 0.1   }, // Linea
