@@ -389,12 +389,19 @@ impl LambdaController {
         let is_solana_src = intent.is_solana_source.unwrap_or(false)
             || intent.src_chain == 1_399_811_149;
 
-        // Mayan Solana-source: clean skip — EVM broadcast path doesn't apply.
-        if is_mayan && is_solana_src {
-            let reason = "mayan_solana_broadcast_not_yet_implemented".to_string();
-            info!("⏭️  Solana-source Mayan {} — {}", intent.id, reason);
-            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
-            return Ok(LambdaExecuteOutcome::Skipped { reason });
+        // Mayan: both Solana-src and EVM-dst are skipped until Wormhole VAA fetch
+        // is implemented. EVM-dst would reach the estimate gate with an empty VAA,
+        // revert on-chain, and surface as a confusing estimate_gate:reverted skip.
+        // Skip cleanly here with a clear reason instead.
+        if is_mayan {
+            let reason = if is_solana_src {
+                "mayan_solana_broadcast_not_yet_implemented"
+            } else {
+                "mayan_evm_vaa_not_yet_implemented"
+            };
+            info!("⏭️  Mayan {} — {}", intent.id, reason);
+            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+            return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
         }
 
         // Spread check for Across direct-fills (spinner bypassed on operator==0x0 chains).
