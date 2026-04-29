@@ -455,6 +455,24 @@ impl LambdaController {
             }
         }
 
+        // Pre-flight deadline check for Across fills. The SpokePool enforces fill_deadline
+        // on-chain and reverts when expired — catching it here avoids burning gas on the
+        // estimate call. Allow a 30s margin so we don't broadcast into a near-expiry window.
+        if (direct_fill || is_across_pre) && !is_debridge && !is_mayan {
+            if let Some(dl) = intent.fill_deadline {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as u32;
+                if dl < now.saturating_add(30) {
+                    let reason = format!("across_fill_deadline_expired:dl={dl}<now={now}");
+                    info!("⏭️  {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            }
+        }
+
         // ETH/WETH fill value — applies to Across direct fills and Mayan native-out.
         let eth_fill_value: Option<U256> = {
             let weth = weth_address_for_chain(wiring.chain_id);
