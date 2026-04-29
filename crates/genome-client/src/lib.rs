@@ -1047,7 +1047,19 @@ impl MayanPoller {
 
                 let from_token = order.get("fromTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
                 let to_token = order.get("toTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+                // Skip EVM-dest orders where toTokenAddress is a Solana base58 mint (not 0x-prefixed).
+                // These are cross-chain token swaps where the output token lives on Solana despite
+                // the destination chain being EVM — our fulfillOrder path can't handle them.
+                if !to_token.starts_with("0x") && !to_token.starts_with("0X") {
+                    tracing::debug!("MayanPoller skip non-EVM to_token {} on order {}", to_token, &order_hash[..20.min(order_hash.len())]);
+                    continue;
+                }
                 let dest_addr = order.get("destAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+                // Also skip if recipient is a Solana address (base58, not 0x-prefixed).
+                if !dest_addr.starts_with("0x") && !dest_addr.starts_with("0X") {
+                    tracing::debug!("MayanPoller skip non-EVM dest_addr on order {}", &order_hash[..20.min(order_hash.len())]);
+                    continue;
+                }
                 let trader = order.get("trader").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
                 let source_tx = order.get("sourceTxHash").and_then(|v| v.as_str()).unwrap_or("0x").to_string();
                 let state_addr = order.get("stateAddr").and_then(|v| v.as_str()).map(|s| s.to_string());
