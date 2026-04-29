@@ -10,13 +10,17 @@
 use tracing::{info, warn};
 
 const WORMHOLESCAN_API: &str = "https://api.wormholescan.io/api/v1/vaas";
-/// Max attempts before giving up (13s × 6 = ~78s total, covering typical finality).
-const MAX_ATTEMPTS: u32 = 6;
-const RETRY_DELAY_SECS: u64 = 13;
+/// Max attempts before giving up.
+/// Phase 1 (attempts 1-6): every 13s = 78s to catch fast VAAs.
+/// Phase 2 (attempts 7-24): every 30s = 540s additional = ~10 min total.
+/// Wormhole guardians typically finalize within 5-15 minutes for slower chains.
+const MAX_ATTEMPTS: u32 = 24;
+const RETRY_DELAY_FAST_SECS: u64 = 13;   // first 6 attempts
+const RETRY_DELAY_SLOW_SECS: u64 = 30;   // attempts 7+
 
 /// Fetch the first Wormhole VAA for the given source transaction hash.
 /// Returns the raw VAA bytes (hex-decoded from the base64 API response).
-/// Retries up to MAX_ATTEMPTS times with RETRY_DELAY_SECS between each.
+/// Retries up to MAX_ATTEMPTS times with fast then slow backoff.
 pub async fn fetch_vaa_for_tx(src_tx_hash: &str) -> Option<Vec<u8>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
@@ -31,7 +35,8 @@ pub async fn fetch_vaa_for_tx(src_tx_hash: &str) -> Option<Vec<u8>> {
                     Ok(b) => b,
                     Err(e) => {
                         warn!("wormhole parse error (attempt {}): {}", attempt, e);
-                        tokio::time::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
+                        let delay = if attempt <= 6 { RETRY_DELAY_FAST_SECS } else { RETRY_DELAY_SLOW_SECS };
+                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         continue;
                     }
                 };
@@ -66,7 +71,8 @@ pub async fn fetch_vaa_for_tx(src_tx_hash: &str) -> Option<Vec<u8>> {
             }
         }
         if attempt < MAX_ATTEMPTS {
-            tokio::time::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
+            let delay = if attempt <= 6 { RETRY_DELAY_FAST_SECS } else { RETRY_DELAY_SLOW_SECS };
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         }
     }
     warn!("wormhole VAA not available after {} attempts for {}", MAX_ATTEMPTS, src_tx_hash);
