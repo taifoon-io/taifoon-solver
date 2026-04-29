@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "/tmp/taifoon_solver_outcomes.sqlite".to_string());
     let mamba_lake_url = std::env::var("MAMBA_LAKE_URL").ok();
     let protocol_filter = std::env::var("PROTOCOL_FILTER")
-        .unwrap_or_else(|_| "across".to_string())
+        .unwrap_or_else(|_| "all".to_string())
         .to_lowercase();
 
     info!("🚀 Taifoon Solver Starting...");
@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
 
     // ── Lambda controller (col-p4) — replaces the standalone Across executor.
     // Built only when SOLVER_PRIVATE_KEY is set and at least one chain is wired.
-    let lambda_controller = match build_lambda_controller_from_env(
+    let lambda_controller: Option<Arc<executor::LambdaController>> = match build_lambda_controller_from_env(
         &spinner_base,
         &outcome_db_path,
         mamba_lake_url.clone(),
@@ -173,7 +173,7 @@ async fn main() -> Result<()> {
                 "✅ Lambda controller live — solver={:?}",
                 ctrl.signer.address()
             );
-            Some(ctrl)
+            Some(Arc::new(ctrl))
         }
         Ok(None) => {
             warn!(
@@ -413,55 +413,62 @@ async fn main() -> Result<()> {
                 info!("⏭️  Lambda controller disabled, skipping {}", intent_ref.id);
                 continue;
             };
-            match ctrl.lambda_execute(intent_ref).await {
-                Ok(LambdaExecuteOutcome::Confirmed { tx_hash, gas_used }) => {
-                    let proto_tag = if effective_is_debridge { "deBridge" } else if effective_is_mayan { "Mayan" } else if is_lifi { "LiFi" } else { "Across" };
-                    info!("🎉 {} fill confirmed: {}", proto_tag, tx_hash);
-                    solver_api.emit_event(SolverEvent::IntentSolved(SolvedData {
-                        id: intent.id.clone(),
-                        tx_hash,
-                        actual_profit_usd: 0.0,
-                        gas_used,
-                    }));
-                    // deBridge requires a follow-up claimUnlock on the source chain
-                    // to collect the locked giveTokens.
-                    if effective_is_debridge {
-                        match ctrl.lambda_claim_debridge(intent_ref).await {
-                            Ok(LambdaClaimOutcome::Claimed { tx_hash: claim_tx, fee_usd }) => {
-                                info!("💰 deBridge claimUnlock confirmed: {} (fee ~${:.4})", claim_tx, fee_usd);
+            // Spawn each intent execution concurrently so the main loop stays free
+            // to receive new intents (critical for short-lived Mayan Swift orders).
+            let ctrl = Arc::clone(ctrl);
+            let api = solver_api.clone();
+            let intent_owned = intent_ref.to_owned();
+            let intent_id = intent.id.clone();
+            let is_debridge_spawn = effective_is_debridge;
+            let is_mayan_spawn = effective_is_mayan;
+            let is_lifi_spawn = is_lifi;
+            tokio::spawn(async move {
+                match ctrl.lambda_execute(&intent_owned).await {
+                    Ok(LambdaExecuteOutcome::Confirmed { tx_hash, gas_used }) => {
+                        let proto_tag = if is_debridge_spawn { "deBridge" } else if is_mayan_spawn { "Mayan" } else if is_lifi_spawn { "LiFi" } else { "Across" };
+                        info!("🎉 {} fill confirmed: {}", proto_tag, tx_hash);
+                        api.emit_event(SolverEvent::IntentSolved(SolvedData {
+                            id: intent_id.clone(),
+                            tx_hash,
+                            actual_profit_usd: 0.0,
+                            gas_used,
+                        }));
+                        if is_debridge_spawn {
+                            match ctrl.lambda_claim_debridge(&intent_owned).await {
+                                Ok(LambdaClaimOutcome::Claimed { tx_hash: claim_tx, fee_usd }) => {
+                                    info!("💰 deBridge claimUnlock confirmed: {} (fee ~${:.4})", claim_tx, fee_usd);
+                                }
+                                Ok(LambdaClaimOutcome::NotEligible { reason }) => {
+                                    warn!("⚠️  deBridge claim not eligible: {}", reason);
+                                }
+                                Ok(LambdaClaimOutcome::Failed { error: e }) => {
+                                    error!("❌ deBridge claimUnlock failed: {}", e);
+                                }
+                                Err(e) => error!("❌ deBridge lambda_claim_debridge fatal: {}", e),
                             }
-                            Ok(LambdaClaimOutcome::NotEligible { reason }) => {
-                                warn!("⚠️  deBridge claim not eligible: {}", reason);
-                            }
-                            Ok(LambdaClaimOutcome::Failed { error: e }) => {
-                                error!("❌ deBridge claimUnlock failed: {}", e);
-                            }
-                            Err(e) => error!("❌ deBridge lambda_claim_debridge fatal: {}", e),
                         }
                     }
+                    Ok(LambdaExecuteOutcome::Skipped { reason }) => {
+                        info!("⏭️  Skipped {}: {}", intent_owned.id, reason);
+                        let is_dry_run_skip = reason == "dry_run";
+                        api.emit_event(SolverEvent::IntentAttempted(AttemptData {
+                            id: intent_id,
+                            profitable: is_dry_run_skip,
+                            profit_usd: 0.0,
+                            protocol_fee_usd: 0.0,
+                            gas_cost_usd: 0.0,
+                            decision: if is_dry_run_skip { "dry_run".into() } else { "skip".into() },
+                        }));
+                    }
+                    Ok(LambdaExecuteOutcome::Reverted { tx_hash, error: e }) => {
+                        error!("❌ fill reverted (tx {}): {}", tx_hash, e);
+                    }
+                    Ok(LambdaExecuteOutcome::Failed { stage, error: e }) => {
+                        error!("❌ lambda_execute failed at {}: {}", stage, e);
+                    }
+                    Err(e) => error!("❌ lambda_execute fatal: {}", e),
                 }
-                Ok(LambdaExecuteOutcome::Skipped { reason }) => {
-                    info!("⏭️  Skipped {}: {}", intent_ref.id, reason);
-                    // dry_run means calldata was built and broadcast was reached — treat as
-                    // profitable attempt for dashboard visibility (no tx actually sent).
-                    let is_dry_run_skip = reason == "dry_run";
-                    solver_api.emit_event(SolverEvent::IntentAttempted(AttemptData {
-                        id: intent.id.clone(),
-                        profitable: is_dry_run_skip,
-                        profit_usd: 0.0,
-                        protocol_fee_usd: 0.0,
-                        gas_cost_usd: 0.0,
-                        decision: if is_dry_run_skip { "dry_run".into() } else { "skip".into() },
-                    }));
-                }
-                Ok(LambdaExecuteOutcome::Reverted { tx_hash, error: e }) => {
-                    error!("❌ fill reverted (tx {}): {}", tx_hash, e);
-                }
-                Ok(LambdaExecuteOutcome::Failed { stage, error: e }) => {
-                    error!("❌ lambda_execute failed at {}: {}", stage, e);
-                }
-                Err(e) => error!("❌ lambda_execute fatal: {}", e),
-            }
+            });
             continue;
         }
 

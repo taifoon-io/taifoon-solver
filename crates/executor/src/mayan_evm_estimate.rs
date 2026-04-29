@@ -113,9 +113,15 @@ impl MayanEvmEstimateAdapter {
         })?;
         let order_hash = parse_bytes32(order_id)?;
 
-        let fulfill_amount = match intent.output_amount.as_deref() {
-            Some(s) => U256::from_str_radix(s, 10)?,
-            None => U256::from_str_radix(&intent.amount, 10)?,
+        let fulfill_amount = {
+            let s = intent.output_amount.as_deref().unwrap_or(&intent.amount);
+            let s = if s.contains('.') {
+                let f: f64 = s.parse().map_err(|e| anyhow::anyhow!("invalid fulfill_amount decimal: {}", e))?;
+                format!("{}", (f * 1e18) as u128)
+            } else {
+                s.to_string()
+            };
+            U256::from_str_radix(&s, 10)?
         };
 
         // The trader address is the depositor on the src chain. Falls back to

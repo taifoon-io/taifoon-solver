@@ -141,6 +141,7 @@ pub struct ApiState {
 }
 
 /// Main solver API
+#[derive(Clone)]
 pub struct SolverApi {
     state: Arc<ApiState>,
 }
