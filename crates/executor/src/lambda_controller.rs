@@ -373,6 +373,22 @@ impl LambdaController {
             return Ok(LambdaExecuteOutcome::Skipped { reason });
         }
 
+        // Across intents (both direct-fill and operator paths) require a depositId to build
+        // fillV3Relay calldata. Skip cleanly when enrichment couldn't resolve one — avoids
+        // a hard 'cannot resolve depositId' error from the calldata builder.
+        let is_across_pre = proto_lower.contains("across");
+        if is_across_pre && !is_mayan && !is_debridge {
+            let has_id = intent.deposit_id.is_some()
+                || intent.id.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()).is_some()
+                || intent.tx_hash.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()).is_some();
+            if !has_id {
+                let reason = format!("across_no_deposit_id:{}", intent.id);
+                info!("⏭️  Skipping {} — deposit_id unavailable after enrichment", intent.id);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
+        }
+
         // ETH/WETH fill value — applies to Across direct fills and Mayan native-out.
         let eth_fill_value: Option<U256> = {
             let weth = weth_address_for_chain(wiring.chain_id);
@@ -449,18 +465,6 @@ impl LambdaController {
                 eth_fill_value.map(|v| format!(", value={v}wei")).unwrap_or_default());
             (wiring.across_adapter, calldata)
         } else {
-            // Operator-wrapped Across fill: requires depositId. Skip cleanly when
-            // enrichment couldn't resolve it (genome event missing depositId + tx decode failed).
-            if intent.deposit_id.is_none() {
-                let has_in_id = intent.id.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()).is_some();
-                let has_in_tx = intent.tx_hash.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()).is_some();
-                if !has_in_id && !has_in_tx {
-                    let reason = format!("across_no_deposit_id:{}", intent.id);
-                    info!("⏭️  Skipping {} — deposit_id unavailable after enrichment", intent.id);
-                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
-                    return Ok(LambdaExecuteOutcome::Skipped { reason });
-                }
-            }
             let adapter_calldata = match build_across_adapter_calldata(intent) {
                 Ok(c) => c,
                 Err(e) => {
