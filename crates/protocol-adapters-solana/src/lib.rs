@@ -21,11 +21,13 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod mayan_solana;
+pub mod send;
 pub mod simulate;
 
 pub use mayan_solana::{
-    DEFAULT_MAYAN_SWIFT_PROGRAM, MayanSolanaIntent, MayanSolanaSimulator,
+    DEFAULT_MAYAN_SWIFT_PROGRAM, MayanSolanaIntent, MayanSolanaSimulator, derive_mayan_vault_pda,
 };
+pub use send::{SolanaBroadcaster, SolanaSendResult, SOLANA_PRIVATE_KEY_ENV};
 pub use simulate::{
     SolanaEstimateOutcome, SolanaSimulator, classify_solana_simulate_result,
 };

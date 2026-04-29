@@ -20,27 +20,30 @@ use genome_client::Intent;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
-use crate::across_executor::build_across_adapter_calldata;
+use crate::across_executor::build_across_spoke_pool_calldata_with_relayer;
 use crate::estimate::{
     classify_evm_error, write_attempt_bundle, AttemptBundle, EstimateAdapter, EstimateOutcome,
 };
 
-use protocol_adapters::across::SpokePoolV3;
 use protocol_adapters::{DeBridgeAdapter, SpinnerClient};
-
-use alloy::sol_types::SolCall;
 
 /// Default deBridge DLN destination address (same on every supported chain).
 pub const DEBRIDGE_DLN_DESTINATION: &str = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66";
 
 /// Default Across SpokePool addresses, keyed by destination chain id.
+/// Must stay in sync with chain_wiring.json across_adapter entries.
 pub fn default_across_spoke_pools() -> HashMap<u64, Address> {
     let mut m = HashMap::new();
-    m.insert(1u64, "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5".parse::<Address>().unwrap());
-    m.insert(10, "0x6f26Bf09B1C792e3228e5467807a900A503c0281".parse().unwrap());
-    m.insert(42161, "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A".parse().unwrap());
-    m.insert(8453, "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap());
-    m.insert(137, "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096".parse().unwrap());
+    m.insert(1u64,  "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5".parse::<Address>().unwrap()); // Ethereum
+    m.insert(10,    "0x6f26Bf09B1C792e3228e5467807a900A503c0281".parse().unwrap()); // Optimism
+    m.insert(137,   "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096".parse().unwrap()); // Polygon
+    m.insert(324,   "0xe0B015E54d54fc84a6cB9B666099c46adE9335FF".parse().unwrap()); // zkSync Era
+    m.insert(8453,  "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap()); // Base
+    m.insert(34443, "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96".parse().unwrap()); // Mode
+    m.insert(42161, "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A".parse().unwrap()); // Arbitrum
+    m.insert(57073, "0xeF684C38F94F48775959ECf2012D7E864ffb9dd4".parse().unwrap()); // Ink
+    m.insert(59144, "0x7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75".parse().unwrap()); // Linea
+    m.insert(534352,"0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96".parse().unwrap()); // Scroll
     m
 }
 
@@ -60,8 +63,8 @@ pub fn default_debridge_dln_addresses() -> HashMap<u64, Address> {
 pub fn default_rpc_for_chain(chain_id: u64) -> Option<&'static str> {
     match chain_id {
         1 => Some("https://mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
-        10 => Some("https://optimism-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
-        42161 => Some("https://arbitrum-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
+        10 => Some("https://mainnet.optimism.io"),
+        42161 => Some("https://arb1.arbitrum.io/rpc"),
         8453 => Some("https://base-mainnet.infura.io/v3/753cc78f52604510b0dc93c72f623740"),
         137 => Some("https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
         56 => Some("https://bsc-mainnet.infura.io/v3/2aa61415c8df44278215d749d6ccd221"),
@@ -117,58 +120,20 @@ impl AcrossEstimateAdapter {
         }
     }
 
-    /// Build the destination calldata that would land on-chain. For the estimate
-    /// path we do NOT wrap in `executeWithProof` (that requires a real V5 proof
-    /// blob, which the spinner is unreachable from this host). Instead we
-    /// estimate against the SpokePool's `fillV3Relay` directly — the same
-    /// selector + tuple the AcrossAdapter would forward. That gives us a clean
-    /// answer to "is the calldata + ABI right?" without needing the operator.
+    /// Build the destination calldata for gas estimation.
+    /// Uses the same `fillRelay(bytes32-RelayData, repaymentChainId, repaymentAddress)` calldata
+    /// as the actual broadcast path so selector and ABI encoding are identical.
+    /// The messiah address stands in as the relayer for the estimate.
     fn build_estimate_call(&self, intent: &Intent) -> Result<(Address, Vec<u8>)> {
         let spoke_pool = *self
             .spoke_pools
             .get(&intent.dst_chain)
             .ok_or_else(|| anyhow::anyhow!("no Across SpokePool for chain {}", intent.dst_chain))?;
 
-        // Reuse the executor's int64-correct V3RelayData encoder to produce the
-        // exact tuple the adapter would forward, then re-wrap it for the
-        // SpokePool's own `fillV3Relay(V3RelayData,uint256)` selector.
-        let _adapter_calldata = build_across_adapter_calldata(intent)?;
-
-        // Build the SpokePool-direct call (same tuple, different outer selector).
-        let input_amount = U256::from_str_radix(&intent.amount, 10)?;
-        let output_amount = match intent.output_amount.as_deref() {
-            Some(s) => U256::from_str_radix(s, 10)?,
-            None => input_amount,
-        };
-        let deposit_id = intent.deposit_id.ok_or_else(|| {
-            anyhow::anyhow!("Across estimate requires intent.deposit_id (not present)")
-        })?;
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let relay = SpokePoolV3::V3RelayData {
-            depositor: intent.depositor.parse()?,
-            recipient: intent.recipient.parse()?,
-            exclusiveRelayer: Address::ZERO,
-            inputToken: intent.src_token.parse()?,
-            outputToken: intent.dst_token.parse()?,
-            inputAmount: input_amount,
-            outputAmount: output_amount,
-            originChainId: U256::from(intent.src_chain),
-            depositId: deposit_id,
-            fillDeadline: (now + 3600) as u32,
-            exclusivityDeadline: 0,
-            message: Bytes::new(),
-        };
-
-        let call = SpokePoolV3::fillV3RelayCall {
-            relayData: relay,
-            repaymentChainId: U256::from(intent.src_chain),
-        };
-        Ok((spoke_pool, call.abi_encode()))
+        // Delegate to the broadcast calldata builder with messiah as the repaymentAddress.
+        // This ensures estimate and broadcast use the same selector (0xdeff4b24) and tuple layout.
+        let calldata = build_across_spoke_pool_calldata_with_relayer(intent, Some(self.messiah_address))?;
+        Ok((spoke_pool, calldata))
     }
 }
 
@@ -278,6 +243,11 @@ pub fn gas_price_range_for_chain(chain_id: u64) -> GasPriceRange {
         42161   => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.01  }, // Arbitrum
         43114   => GasPriceRange { min_gwei: 25.0,  max_gwei: 100.0, typical_gwei: 30.0  }, // Avalanche
         59144   => GasPriceRange { min_gwei: 0.05,  max_gwei: 5.0,   typical_gwei: 0.1   }, // Linea
+        324     => GasPriceRange { min_gwei: 0.05,  max_gwei: 5.0,   typical_gwei: 0.25  }, // zkSync Era
+        534352  => GasPriceRange { min_gwei: 0.001, max_gwei: 1.0,   typical_gwei: 0.005 }, // Scroll
+        34443   => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.001 }, // Mode
+        57073   => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.001 }, // Ink
+        100     => GasPriceRange { min_gwei: 1.0,   max_gwei: 20.0,  typical_gwei: 2.0   }, // Gnosis
         _       => GasPriceRange { min_gwei: 0.001, max_gwei: 200.0, typical_gwei: 1.0   },
     }
 }

@@ -16,6 +16,67 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use wallet_manager::WalletManager;
 
+struct LifiResolution {
+    bridge: String,
+    sending_tx_hash: Option<String>,
+    sending_chain_id: Option<u64>,
+}
+
+enum LifiBridgeResult {
+    Resolved(LifiResolution),
+    NotRoutable,
+    Pending,
+}
+
+async fn resolve_lifi_bridge(tx_hash: &str) -> LifiBridgeResult {
+    let url = format!("https://li.quest/v1/status?txHash={}", tx_hash);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return LifiBridgeResult::Pending,
+    };
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(_) => return LifiBridgeResult::Pending,
+    };
+    if !resp.status().is_success() {
+        return LifiBridgeResult::Pending;
+    }
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return LifiBridgeResult::Pending,
+    };
+    let raw = match body.get("tool")
+        .or_else(|| body.get("bridge"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase())
+    {
+        Some(r) => r,
+        None => return LifiBridgeResult::Pending,
+    };
+    let bridge = match raw.as_str() {
+        "across" | "across_v3" => "across".to_string(),
+        "debridge" | "dln" | "debridge_dln" => "debridge".to_string(),
+        "mayan" | "mayan_swift" | "mayanswift" => "mayan".to_string(),
+        _ => {
+            info!("⏭️  LiFi bridge '{}' not routable", raw);
+            return LifiBridgeResult::NotRoutable;
+        }
+    };
+    let sending = body.get("sending");
+    let sending_tx_hash = sending
+        .and_then(|s| s.get("txHash"))
+        .and_then(|v| v.as_str())
+        .filter(|s| s.starts_with("0x") && s.len() == 66)
+        .map(String::from);
+    let sending_chain_id = sending
+        .and_then(|s| s.get("chainId"))
+        .and_then(|v| v.as_u64());
+    LifiBridgeResult::Resolved(LifiResolution { bridge, sending_tx_hash, sending_chain_id })
+}
+
 const DEFAULT_WALLET_DB: &str = "/tmp/taifoon_cli_wallet.sqlite";
 const DEFAULT_OUTCOME_DB: &str = "/tmp/taifoon_cli_outcomes.sqlite";
 const DEFAULT_WALLET_BUDGET: f64 = 10_000.0;
@@ -110,16 +171,69 @@ pub async fn participate(
             continue;
         }
 
-        // LiFi projection
+        // Preliminary dedup key (from original intent; used for retry-removal in LiFi path).
+        let pre_dedup_key = intent.id.clone();
+
+        // LiFi projection with li.quest resolution
         let effective_intent;
         let intent_ref: &Intent = if proto_lower.contains("lifi") || proto_lower.contains("li.fi") {
-            let bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
+            let mut bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
+            let mut api_sending_tx: Option<String> = None;
+            let mut api_sending_chain: Option<u64> = None;
+            // LiFi genome tx_hash is the Diamond tx — always fetch the underlying deposit tx
+            // from li.quest so enrichment can decode V3FundsDeposited from the right tx.
+            let need_deposit_tx = intent.deposit_id.is_none();
+            if bridge.is_empty() || need_deposit_tx {
+                let lookup_hash = if intent.tx_hash.starts_with("0x") && intent.tx_hash.len() == 66 {
+                    Some(intent.tx_hash.clone())
+                } else if intent.id.contains("lifi_0x") {
+                    intent.id.split("lifi_0x").nth(1).map(|s| format!("0x{}", s))
+                } else {
+                    None
+                };
+                if let Some(ref hash) = lookup_hash {
+                    match resolve_lifi_bridge(hash).await {
+                        LifiBridgeResult::Resolved(res) => {
+                            info!("🔍 LiFi bridge resolved: {} → {} (deposit_tx={:?})",
+                                hash, res.bridge, res.sending_tx_hash);
+                            if bridge.is_empty() { bridge = res.bridge; }
+                            api_sending_tx = res.sending_tx_hash;
+                            api_sending_chain = res.sending_chain_id;
+                        }
+                        LifiBridgeResult::NotRoutable => {
+                            info!("⏭️  lifi skip (not routable): {}", intent.id);
+                            continue;
+                        }
+                        LifiBridgeResult::Pending => {
+                            if bridge.is_empty() {
+                                dispatched.remove(&pre_dedup_key);
+                                info!("⏭️  lifi retry-on-next (li.quest pending): {}", intent.id);
+                                continue;
+                            }
+                        }
+                    }
+                } else if bridge.is_empty() {
+                    info!("⏭️  lifi skip (no tx_hash for bridge lookup): {}", intent.id);
+                    continue;
+                }
+            }
             if bridge.is_empty() {
-                info!("⏭️  lifi skip (missing bridge/tool): {}", intent.id);
                 continue;
             }
-            effective_intent = LiFiMetaRouter::project_to_child(&intent, &bridge);
-            info!("🔀 LiFi→{} projection: {}", bridge, intent.id);
+            let mut child = LiFiMetaRouter::project_to_child(&intent, &bridge);
+            // Patch child with the actual underlying deposit tx (not the Diamond tx).
+            if let Some(stx) = api_sending_tx {
+                child.tx_hash = stx;
+            } else if child.deposit_id.is_none() {
+                dispatched.remove(&pre_dedup_key);
+                info!("⏭️  lifi retry-on-next (sending_tx pending): {}", intent.id);
+                continue;
+            }
+            if let Some(sc) = api_sending_chain {
+                child.src_chain = sc;
+            }
+            info!("🔀 LiFi→{} projection: {} tx={}", bridge, intent.id, &child.tx_hash[..child.tx_hash.len().min(18)]);
+            effective_intent = child;
             &effective_intent
         } else {
             &intent
@@ -144,7 +258,7 @@ pub async fn participate(
             continue;
         }
 
-        // Dedup
+        // Dedup (keyed on projected child intent, not original LiFi wrapper)
         let dedup_key = if let Some(dep_id) = intent_ref.deposit_id {
             format!("{}:dep:{}", intent_ref.protocol, dep_id)
         } else {

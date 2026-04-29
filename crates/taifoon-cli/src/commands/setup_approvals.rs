@@ -90,6 +90,39 @@ fn approval_plan() -> Vec<ChainApproval> {
                 address!("7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"), // WETH
             ],
         },
+        ChainApproval {
+            chain_id: 59144, name: "Linea (Across)", rpc_url: "https://rpc.linea.build",
+            spender: address!("7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75"),
+            tokens: vec![
+                address!("176211869cA2b568f2A7D4EE941E073a821EE1ff"), // USDC
+                address!("e5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"), // WETH
+            ],
+        },
+        ChainApproval {
+            chain_id: 534352, name: "Scroll (Across)", rpc_url: "https://rpc.scroll.io",
+            spender: address!("3baD7AD0728f9917d1Bf08af5782dCbD516cDd96"),
+            tokens: vec![
+                address!("06eFDBff2a14a7c8E15944D1F4A48F9F95F663A4"), // USDC
+                address!("5300000000000000000000000000000000000004"), // WETH
+            ],
+        },
+        ChainApproval {
+            chain_id: 34443, name: "Mode (Across)", rpc_url: "https://mainnet.mode.network",
+            spender: address!("3baD7AD0728f9917d1Bf08af5782dCbD516cDd96"),
+            tokens: vec![
+                address!("d988097fb8612cc24eeC14542bc03424c656005f"), // USDC.e
+                address!("4200000000000000000000000000000000000006"), // WETH
+            ],
+        },
+        ChainApproval {
+            chain_id: 57073, name: "Ink (Across)", rpc_url: "https://rpc-gel.inkonchain.com",
+            spender: address!("eF684C38F94F48775959ECf2012D7E864ffb9dd4"),
+            tokens: vec![
+                address!("2d270e6886d130d724215a266106e6832161eaed"), // USDC
+                address!("0200c29006150606b650577bbe7b6248f58470c1"), // USDT
+                address!("4200000000000000000000000000000000000006"), // WETH
+            ],
+        },
         // ── deBridge DlnDestination (same address all chains) ─────────────
         ChainApproval {
             chain_id: 42161, name: "Arbitrum (deBridge)", rpc_url: "https://arb1.arbitrum.io/rpc",
@@ -124,6 +157,14 @@ fn approval_plan() -> Vec<ChainApproval> {
                 address!("06eFDBff2a14a7c8E15944D1F4A48F9F95F663A4"), // USDC
                 address!("f55BEC9cafdBE8730f096Aa55dad6D22d44099Df"), // USDT
                 address!("5300000000000000000000000000000000000004"), // WETH
+            ],
+        },
+        ChainApproval {
+            chain_id: 59144, name: "Linea (deBridge)", rpc_url: "https://rpc.linea.build",
+            spender: DLN_DESTINATION,
+            tokens: vec![
+                address!("176211869cA2b568f2A7D4EE941E073a821EE1ff"), // USDC
+                address!("e5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"), // WETH
             ],
         },
     ]

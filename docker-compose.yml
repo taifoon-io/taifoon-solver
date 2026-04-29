@@ -21,6 +21,14 @@ services:
       # Dummy key initializes the Lambda controller in dry-run mode (no real broadcasts).
       # Replace with a funded key to enable live fills.
       - SOLVER_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001
+      # Override deBridge poller RPCs (optional — falls back to bundled Infura keys).
+      # Recommended for production to avoid shared rate limits.
+      # - DEBRIDGE_RPC_42161=https://arbitrum-mainnet.infura.io/v3/YOUR_KEY
+      # - DEBRIDGE_RPC_8453=https://base-mainnet.infura.io/v3/YOUR_KEY
+      # - DEBRIDGE_RPC_10=https://optimism-mainnet.infura.io/v3/YOUR_KEY
+      # - DEBRIDGE_RPC_137=https://polygon-mainnet.infura.io/v3/YOUR_KEY
+      # - DEBRIDGE_RPC_56=https://bsc-mainnet.infura.io/v3/YOUR_KEY
+      # - DEBRIDGE_RPC_1=https://mainnet.infura.io/v3/YOUR_KEY
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8099/api/solver/stats"]
       interval: 30s

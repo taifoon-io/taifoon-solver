@@ -25,6 +25,11 @@ sha2 = "0.10"
 base64 = "0.22"
 hex = { workspace = true }
 
+# Ed25519 signing for Solana sendTransaction.
+# We use dalek directly to avoid pulling solana-sdk.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+
 # Errors / logging
 anyhow = { workspace = true }
 thiserror = { workspace = true }

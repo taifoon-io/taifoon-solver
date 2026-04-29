@@ -16,6 +16,7 @@ pub mod mayan_solana_estimate;
 pub mod outcome_log;
 pub mod skip_rules;
 pub mod spinner_solver;
+pub mod wormhole;
 
 pub use across_executor::{AcrossExecutor, AcrossExecutorConfig, ChainWiring, ChainWiringConfig};
 pub use estimate::{

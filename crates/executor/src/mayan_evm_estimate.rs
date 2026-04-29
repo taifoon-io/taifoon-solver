@@ -103,6 +103,13 @@ impl MayanEvmEstimateAdapter {
     /// Build the `fulfillOrder` calldata for a Mayan EVM intent. Returns
     /// `(swift_address, calldata)` ready to feed to `eth_estimateGas`.
     pub fn build_estimate_call(&self, intent: &Intent) -> Result<(Address, Vec<u8>)> {
+        self.build_estimate_call_with_vaa(intent, None)
+    }
+
+    /// Like `build_estimate_call` but accepts an optional Wormhole VAA.
+    /// When `vaa` is `Some`, the real guardian-signed bytes are used.
+    /// When `None`, an empty bytes payload is used (synthetic estimate only).
+    pub fn build_estimate_call_with_vaa(&self, intent: &Intent, vaa: Option<&[u8]>) -> Result<(Address, Vec<u8>)> {
         let swift = *self
             .swift_addresses
             .get(&intent.dst_chain)
@@ -195,11 +202,14 @@ impl MayanEvmEstimateAdapter {
             random: FixedBytes::ZERO,
         };
 
-        // The encoded Wormhole VAA — for synthetic estimates we pass an empty
-        // bytes payload. The real solver populates this from the Wormhole
-        // guardian quorum signature; the contract reverts on bad VAA, which
-        // surfaces here as a synthetic-fixture revert with empty data.
-        let encoded_vm = Bytes::new();
+        // The encoded Wormhole VAA. When a real VAA is available (live fills),
+        // pass it as `vaa`. For synthetic estimates, None → empty bytes → the
+        // contract reverts at VAA verification, surfaces as a synthetic-fixture
+        // revert with empty data (acceptable for calldata-shape validation).
+        let encoded_vm = match vaa {
+            Some(bytes) => Bytes::from(bytes.to_vec()),
+            None => Bytes::new(),
+        };
 
         let call = MayanSwift::fulfillOrderCall {
             orderHash: order_hash,

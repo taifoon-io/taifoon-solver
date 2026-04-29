@@ -26,6 +26,63 @@ use std::time::Duration;
 
 use crate::simulate::{SolanaEstimateOutcome, SolanaSimulator};
 
+/// Derive the Mayan Swift vault PDA for a given order hash.
+///
+/// Mayan Swift uses Anchor PDA seeds `[b"vault", order_hash_bytes[..]]` under
+/// the Swift program. We re-implement `find_program_address` (iterate bump
+/// 255..=0, check point is off the ed25519 curve) without pulling solana-sdk.
+///
+/// Returns `None` if all 256 bumps produce on-curve points (extremely unlikely).
+pub fn derive_mayan_vault_pda(order_hash_hex: &str, program_id_b58: &str) -> Option<String> {
+    let order_bytes = {
+        let clean = order_hash_hex.trim_start_matches("0x");
+        hex::decode(clean).ok().filter(|b| b.len() == 32)?
+    };
+    let program_bytes = bs58::decode(program_id_b58).into_vec().ok()
+        .filter(|b| b.len() == 32)?;
+
+    for bump in (0u8..=255).rev() {
+        // sha256(b"vault" || order_hash || bump || program_id || b"ProgramDerivedAddress")
+        let mut h = Sha256::new();
+        h.update(b"\x05vault");       // compact-u16(5) length prefix + seed bytes
+        h.update(&order_bytes);       // second seed (32 bytes, no length prefix needed — we encode raw)
+        h.update([bump]);
+        h.update(&program_bytes);
+        h.update(b"ProgramDerivedAddress");
+        // NOTE: the canonical Solana PDA hash is:
+        //   sha256(seeds[0], seeds[1], ..., bump, program_id, "ProgramDerivedAddress")
+        // where each seed is written as its raw bytes (no length prefix) and
+        // bump is a single byte appended after the last seed.
+        // Re-derive with the correct flat layout:
+        let mut h2 = Sha256::new();
+        h2.update(b"vault");          // seed 1 raw bytes
+        h2.update(&order_bytes);      // seed 2 raw bytes
+        h2.update([bump]);            // nonce byte
+        h2.update(&program_bytes);    // program id
+        h2.update(b"ProgramDerivedAddress");
+        let digest: [u8; 32] = h2.finalize().into();
+        if !is_on_curve(&digest) {
+            return Some(bs58::encode(digest).into_string());
+        }
+    }
+    None
+}
+
+/// Check if a 32-byte array represents a point on the ed25519 curve.
+/// Used by `find_program_address` to reject on-curve points.
+/// Uses the curve25519-dalek compressed-point decompression check via
+/// a simple field-arithmetic primality test (without importing dalek).
+/// We approximate this with the "valid compressed point" byte check:
+/// a byte array is on ed25519 if the 255-bit decompression succeeds.
+/// Since we don't have dalek in this crate, we use the Solana convention:
+/// a PDA is valid when it is NOT a valid ed25519 compressed point.
+/// Simple approximation: check if the compressed y-coordinate decodes
+/// to a valid x via x^2 = (y^2 - 1) / (d*y^2 + 1) mod p.
+/// For production we use the ed25519-dalek CompressedEdwardsY check.
+fn is_on_curve(bytes: &[u8; 32]) -> bool {
+    ed25519_dalek::VerifyingKey::from_bytes(bytes).is_ok()
+}
+
 /// Deployed Mayan Swift Solana program.
 /// Source: https://docs.mayan.finance/architecture/swift  (constant across
 /// mainnet — the protocol does not run on devnet/testnet).
@@ -76,14 +133,21 @@ impl MayanSolanaIntent {
             .state_account
             .as_deref()
             .ok_or_else(|| anyhow!("Mayan Solana estimate requires intent.state_account"))?;
-        let vault = intent
-            .vault_account
-            .as_deref()
-            .ok_or_else(|| anyhow!("Mayan Solana estimate requires intent.vault_account"))?;
         let program = intent
             .swift_program_id
             .as_deref()
             .unwrap_or(DEFAULT_MAYAN_SWIFT_PROGRAM);
+        // vault_account: use directly from intent if present; otherwise derive from order hash.
+        // Mayan Swift PDA seeds: ["vault", order_hash_bytes] under the Swift program.
+        let vault_owned;
+        let vault = match intent.vault_account.as_deref() {
+            Some(v) => v,
+            None => {
+                vault_owned = derive_mayan_vault_pda(mayan_order_id, program)
+                    .ok_or_else(|| anyhow!("failed to derive vault PDA for order {}", mayan_order_id))?;
+                &vault_owned
+            }
+        };
 
         let min_amount_out = match intent
             .output_amount

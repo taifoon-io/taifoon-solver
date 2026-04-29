@@ -467,8 +467,10 @@ impl AcrossPoller {
     pub fn default_mainnet() -> Self {
         Self {
             // All chains with an Across V3 SpokePool (no BSC — no SpokePool there).
-            dst_chains: vec![8453, 10, 42161, 1, 137, 59144],
-            poll_interval_secs: 60,
+            dst_chains: vec![8453, 10, 42161, 1, 137, 59144, 534352, 34443, 57073, 324],
+            // 10 chains × ~5s inter-chain = ~50s for the full loop; poll_interval_secs adds
+            // a rest between full sweeps. Total cycle ≈ 50s + 10s = ~60s end-to-end.
+            poll_interval_secs: 10,
             limit: 20,
         }
     }
@@ -486,7 +488,7 @@ impl AcrossPoller {
 
         loop {
             for &dst_chain in &self.dst_chains {
-                // 5s inter-chain sleep spreads 6 chains over 30s instead of bursting
+                // 5s inter-chain sleep spreads 10 chains over ~50s instead of bursting
                 // all at once, reducing Cloudflare 429 rate-limiting on app.across.to.
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 let url = format!(
@@ -825,6 +827,9 @@ fn is_supported_fill_token(addr: &str) -> bool {
         "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a", // Avax USDC.e (old)
         "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // Avax native USDC
         "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", // already there (dup ok, filtered)
+        // zkSync Era
+        "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4", // USDC zkSync Era
+        "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91", // WETH zkSync Era
         // USDT new chains
         "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // Scroll USDT
         "0x0200c29006150606b650577bbe7b6248f58470c1", // Ink USDT
@@ -1000,7 +1005,7 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
         give_amount: Some(give_amount),
         take_amount: Some(take_amount),
         order_id: Some(order_id_hex),
-        maker_order_nonce: if maker_nonce > 0 { Some(maker_nonce) } else { None },
+        maker_order_nonce: Some(maker_nonce),
         dln_give_patch_authority_src: give_patch_authority_src,
         dln_order_authority_address_dst: order_authority_address_dst,
         dln_allowed_taker_dst: allowed_taker_dst,
@@ -1172,7 +1177,8 @@ impl MayanPoller {
                     mayan_order_id: Some(order_hash),
                     trader: Some(trader),
                     is_solana_source: Some(is_solana_src),
-                    // stateAddr is the Solana PDA holding the order — useful for VAA lookup
+                    // stateAddr is the Solana order PDA — required for Mayan Solana fulfill.
+                    state_account: state_addr,
                     batch_id: None,
                     detected_at: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

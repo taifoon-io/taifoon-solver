@@ -645,6 +645,19 @@ pub async fn fetch_relay_data_from_tx(
             let s = s.trim_start_matches("0x");
             i64::from_str_radix(s, 16).ok()
         });
+        // message: ABI dynamic bytes at slot[9] (offset pointer at byte 288).
+        // Slot[9] contains the byte-offset from start of data to the length word.
+        // Length at that offset, followed by the bytes themselves.
+        let message: Option<String> = (|| -> Option<String> {
+            let msg_offset = read_u256(288)?.to::<usize>();
+            let len_offset = msg_offset;
+            if len_offset + 32 > data.len() { return None; }
+            let msg_len = U256::from_be_slice(&data[len_offset..len_offset + 32]).to::<usize>();
+            if msg_len == 0 { return None; }
+            let msg_start = len_offset + 32;
+            if msg_start + msg_len > data.len() { return None; }
+            Some(format!("0x{}", hex::encode(&data[msg_start..msg_start + msg_len])))
+        })();
 
         tracing::info!("🔍 On-chain relay data for {}: depositId={:?} outputAmount={} fillDeadline={} recipient={} exclRelayer={}",
             tx_hash, deposit_id, output_amount, fill_deadline, recipient, exclusive_relayer);
@@ -659,7 +672,7 @@ pub async fn fetch_relay_data_from_tx(
             output_amount: Some(output_amount),
             fill_deadline: Some(fill_deadline),
             exclusivity_deadline: Some(exclusivity_deadline),
-            message: None,
+            message,
             deposit_id,
         });
     }

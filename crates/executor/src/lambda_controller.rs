@@ -42,10 +42,13 @@ use crate::across_executor::{build_across_adapter_calldata, build_across_spoke_p
 use crate::evm_estimate::{optimal_gas_price_wei, run_evm_estimate_with_value};
 use crate::estimate::EstimateOutcome;
 use crate::mayan_evm_estimate::MayanEvmEstimateAdapter;
+use crate::mayan_solana_estimate::DEFAULT_SOLANA_RPC;
 use crate::outcome_log::{OutcomeLog, OutcomeRecord};
 use crate::spinner_solver::SpinnerSolverClient;
+use crate::wormhole::fetch_vaa_for_tx;
 use protocol_adapters::debridge::DeBridgeAdapter;
 use protocol_adapters::{ProtocolAdapter, SpinnerClient};
+use protocol_adapters_solana::{MayanSolanaIntent, SolanaBroadcaster};
 
 /// Outcome of a `lambda_execute` run, mirrored back to the solver event API.
 #[derive(Debug, Clone)]
@@ -337,6 +340,10 @@ impl LambdaController {
                     if patched.deposit_id.is_none() {
                         patched.deposit_id = relay.deposit_id;
                     }
+                    // Patch message from on-chain decode (non-empty for cross-chain execution hooks).
+                    if patched.message.is_none() {
+                        patched.message = relay.message;
+                    }
                     enriched_intent = Some(patched);
                     enriched_intent.as_ref().unwrap()
                 } else {
@@ -389,20 +396,72 @@ impl LambdaController {
         let is_solana_src = intent.is_solana_source.unwrap_or(false)
             || intent.src_chain == 1_399_811_149;
 
-        // Mayan: both Solana-src and EVM-dst are skipped until Wormhole VAA fetch
-        // is implemented. EVM-dst would reach the estimate gate with an empty VAA,
-        // revert on-chain, and surface as a confusing estimate_gate:reverted skip.
-        // Skip cleanly here with a clear reason instead.
-        if is_mayan {
-            let reason = if is_solana_src {
-                "mayan_solana_broadcast_not_yet_implemented"
-            } else {
-                "mayan_evm_vaa_not_yet_implemented"
+        // Mayan Solana source: broadcast via ed25519-signed sendTransaction.
+        // This path returns early — Solana intents never reach the EVM wiring section below.
+        if is_mayan && is_solana_src {
+            let solana_intent = match MayanSolanaIntent::from_intent(intent) {
+                Ok(s) => s,
+                Err(e) => {
+                    let err = format!("mayan_solana_intent_build:{e}");
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
             };
-            info!("⏭️  Mayan {} — {}", intent.id, reason);
-            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-            return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+
+            if self.dry_run {
+                info!("🧪 DRY_RUN: would broadcast Mayan Solana fulfill for {}", intent.id);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some("dry_run"));
+                return Ok(LambdaExecuteOutcome::Skipped { reason: "dry_run".into() });
+            }
+
+            let rpc_url = std::env::var("SOLANA_RPC_URL")
+                .unwrap_or_else(|_| DEFAULT_SOLANA_RPC.to_string());
+            let broadcaster = match SolanaBroadcaster::from_env(&rpc_url) {
+                Ok(b) => b,
+                Err(e) => {
+                    let reason = format!("solana_key_not_configured:{e}");
+                    warn!("⚠️  Mayan Solana {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            };
+
+            self.transition(&intent.id, IntentState::Broadcast, None, None);
+            match broadcaster.send_fulfill(&solana_intent).await {
+                Ok(result) => {
+                    info!("🎉 Mayan Solana confirmed: {} sig={}", intent.id, result.signature);
+                    self.transition(&intent.id, IntentState::Confirmed, Some(&result.signature), None);
+                    if let Err(e) = self.wallet.release(&intent.id) {
+                        warn!("wallet release failed for {}: {e}", intent.id);
+                    }
+                    return Ok(LambdaExecuteOutcome::Confirmed {
+                        tx_hash: result.signature,
+                        gas_used: solana_intent.compute_units_estimate,
+                    });
+                }
+                Err(e) => {
+                    let err = format!("solana_send_transaction:{e}");
+                    self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "broadcast", error: err });
+                }
+            }
         }
+        // Mayan EVM: fetch Wormhole VAA before calldata build. The VAA is required by
+        // fulfillOrder() on the Swift contract — without it the call reverts unconditionally.
+        let mayan_vaa: Option<Vec<u8>> = if is_mayan && !is_solana_src {
+            let src_tx = &intent.tx_hash;
+            info!("🌀 Fetching Wormhole VAA for Mayan EVM intent {} (src_tx={})", intent.id, src_tx);
+            let vaa = fetch_vaa_for_tx(src_tx).await;
+            if vaa.is_none() {
+                let reason = "mayan_evm_vaa_unavailable";
+                warn!("⚠️  {} — VAA not available after retries, skipping", intent.id);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+                return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+            }
+            vaa
+        } else {
+            None
+        };
 
         // Spread check for Across direct-fills (spinner bypassed on operator==0x0 chains).
         // Require output_amount ≤ 99.7% of input_amount (at least 0.3% spread covers gas).
@@ -505,7 +564,7 @@ impl LambdaController {
         let (tx_target, tx_calldata) = if is_mayan {
             // Mayan Swift EVM: fulfillOrder(orderHash, fulfillAmount, encodedVm, OrderParams, recipient)
             let adapter = MayanEvmEstimateAdapter::new(self.signer.address(), self.spinner.base_url());
-            let (swift_addr, calldata) = match adapter.build_estimate_call(intent) {
+            let (swift_addr, calldata) = match adapter.build_estimate_call_with_vaa(intent, mayan_vaa.as_deref()) {
                 Ok(v) => v,
                 Err(e) => {
                     let err = format!("calldata_build:{e}");
@@ -1089,6 +1148,7 @@ fn weth_address_for_chain(chain_id: u64) -> Option<&'static str> {
         137    => Some("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"), // Polygon WETH
         56     => Some("0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"), // BSC WBNB
         43114  => Some("0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"), // Avalanche WETH.e
+        324    => Some("0x5aea5775959fbc2557cc8789bc1bf90a239d9a91"), // zkSync Era WETH
         _ => None,
     }
 }
@@ -1106,6 +1166,7 @@ fn token_price_heuristic(token: &str) -> f64 {
         "0x5300000000000000000000000000000000000004",  // WETH Scroll
         "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",  // WETH Polygon
         "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",  // WETH.e Avalanche
+        "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91",  // WETH zkSync Era
     ];
     if ETH_LIKE.iter().any(|&s| lower == s) {
         return 3000.0;
