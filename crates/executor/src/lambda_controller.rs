@@ -449,6 +449,18 @@ impl LambdaController {
                 eth_fill_value.map(|v| format!(", value={v}wei")).unwrap_or_default());
             (wiring.across_adapter, calldata)
         } else {
+            // Operator-wrapped Across fill: requires depositId. Skip cleanly when
+            // enrichment couldn't resolve it (genome event missing depositId + tx decode failed).
+            if intent.deposit_id.is_none() {
+                let has_in_id = intent.id.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()).is_some();
+                let has_in_tx = intent.tx_hash.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()).is_some();
+                if !has_in_id && !has_in_tx {
+                    let reason = format!("across_no_deposit_id:{}", intent.id);
+                    info!("⏭️  Skipping {} — deposit_id unavailable after enrichment", intent.id);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            }
             let adapter_calldata = match build_across_adapter_calldata(intent) {
                 Ok(c) => c,
                 Err(e) => {

@@ -1047,17 +1047,13 @@ impl MayanPoller {
 
                 let from_token = order.get("fromTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
                 let to_token = order.get("toTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
-                // Skip EVM-dest orders where toTokenAddress is a Solana base58 mint (not 0x-prefixed).
-                // These are cross-chain token swaps where the output token lives on Solana despite
-                // the destination chain being EVM — our fulfillOrder path can't handle them.
-                if !to_token.starts_with("0x") && !to_token.starts_with("0X") {
-                    tracing::debug!("MayanPoller skip non-EVM to_token {} on order {}", to_token, &order_hash[..20.min(order_hash.len())]);
-                    continue;
-                }
                 let dest_addr = order.get("destAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
-                // Also skip if recipient is a Solana address (base58, not 0x-prefixed).
-                if !dest_addr.starts_with("0x") && !dest_addr.starts_with("0X") {
-                    tracing::debug!("MayanPoller skip non-EVM dest_addr on order {}", &order_hash[..20.min(order_hash.len())]);
+                // Skip any order where token addresses or recipient are Solana base58 (not 0x-prefixed).
+                // Covers: Solana-source orders (fromTokenAddress = Solana mint), EVM→Solana-token
+                // orders (toTokenAddress = Solana mint), and orders with Solana recipient wallet.
+                let is_evm_addr = |s: &str| s.starts_with("0x") || s.starts_with("0X");
+                if !is_evm_addr(&from_token) || !is_evm_addr(&to_token) || !is_evm_addr(&dest_addr) {
+                    tracing::debug!("MayanPoller skip non-EVM addresses on order {}", &order_hash[..20.min(order_hash.len())]);
                     continue;
                 }
                 let trader = order.get("trader").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
