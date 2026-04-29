@@ -218,6 +218,21 @@ pub struct Intent {
     /// Order ID (deBridge orderId, Mayan order_id, etc.) preserved alongside `id`.
     #[serde(default)]
     pub order_id: Option<String>,
+    /// deBridge Order.givePatchAuthoritySrc (hex bytes, usually empty).
+    #[serde(default)]
+    pub dln_give_patch_authority_src: Option<String>,
+    /// deBridge Order.orderAuthorityAddressDst (hex bytes, usually empty).
+    #[serde(default)]
+    pub dln_order_authority_address_dst: Option<String>,
+    /// deBridge Order.allowedTakerDst (hex bytes, empty = any taker allowed).
+    #[serde(default)]
+    pub dln_allowed_taker_dst: Option<String>,
+    /// deBridge Order.allowedCancelBeneficiarySrc (hex bytes, usually empty).
+    #[serde(default)]
+    pub dln_allowed_cancel_beneficiary_src: Option<String>,
+    /// deBridge Order.externalCall (hex bytes, usually empty).
+    #[serde(default)]
+    pub dln_external_call: Option<String>,
 
     // ── Protocol-specific fields plumbed through to executor (B.2) ────────────
     /// Mayan Swift order hash (32-byte hex).
@@ -388,6 +403,11 @@ impl Intent {
             give_amount: event.give_amount,
             take_amount: event.take_amount,
             order_id: event.order_id,
+            dln_give_patch_authority_src: None,
+            dln_order_authority_address_dst: None,
+            dln_allowed_taker_dst: None,
+            dln_allowed_cancel_beneficiary_src: None,
+            dln_external_call: None,
             mayan_order_id: event.mayan_order_id,
             swift_dest_chain_wormhole_id: event.swift_dest_chain_wormhole_id,
             trader: event.trader,
@@ -892,10 +912,16 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
     let maker_nonce = u64_at(&slots[os]);
     // offsets: [os+1]=makerSrc, [os+2]=giveChainId, [os+3]=giveToken, [os+4]=giveAmount
     //          [os+5]=takeChainId, [os+6]=takeToken, [os+7]=takeAmount, [os+8]=receiverDst
+    //          [os+9]=givePatchAuthoritySrc, [os+10]=orderAuthorityAddressDst,
+    //          [os+11]=allowedTakerDst, [os+12]=allowedCancelBeneficiarySrc, [os+13]=externalCall
     let give_chain_id = u64_at(&slots[os + 2]);
     let give_amount   = u128_str(&slots[os + 4]);
     let take_chain_id = u64_at(&slots[os + 5]);
     let take_amount   = u128_str(&slots[os + 7]);
+
+    let bytes_to_hex = |b: Vec<u8>| -> Option<String> {
+        if b.is_empty() { None } else { Some(format!("0x{}", hex::encode(&b))) }
+    };
 
     let maker_src   = read_bytes_relative(&slots[os + 1])
         .map(|b| format!("0x{}", hex::encode(&b)))
@@ -909,6 +935,23 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
     let receiver    = read_bytes_relative(&slots[os + 8])
         .map(|b| format!("0x{}", hex::encode(&b)))
         .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
+
+    // Optional authority/allowlist fields — must be decoded to reconstruct the correct orderId hash.
+    let give_patch_authority_src = slots.get(os + 9)
+        .and_then(|s| read_bytes_relative(s))
+        .and_then(bytes_to_hex);
+    let order_authority_address_dst = slots.get(os + 10)
+        .and_then(|s| read_bytes_relative(s))
+        .and_then(bytes_to_hex);
+    let allowed_taker_dst = slots.get(os + 11)
+        .and_then(|s| read_bytes_relative(s))
+        .and_then(bytes_to_hex);
+    let allowed_cancel_beneficiary_src = slots.get(os + 12)
+        .and_then(|s| read_bytes_relative(s))
+        .and_then(bytes_to_hex);
+    let external_call = slots.get(os + 13)
+        .and_then(|s| read_bytes_relative(s))
+        .and_then(bytes_to_hex);
 
     let tx_hash = log["transactionHash"].as_str().unwrap_or("0x").to_string();
 
@@ -931,6 +974,11 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
         take_amount: Some(take_amount),
         order_id: Some(order_id_hex),
         maker_order_nonce: if maker_nonce > 0 { Some(maker_nonce) } else { None },
+        dln_give_patch_authority_src: give_patch_authority_src,
+        dln_order_authority_address_dst: order_authority_address_dst,
+        dln_allowed_taker_dst: allowed_taker_dst,
+        dln_allowed_cancel_beneficiary_src: allowed_cancel_beneficiary_src,
+        dln_external_call: external_call,
         detected_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

@@ -146,6 +146,11 @@ impl DeBridgeAdapter {
             None => give_amount,
         };
 
+        let hex_to_bytes = |s: &str| -> Bytes {
+            let clean = s.trim_start_matches("0x");
+            hex::decode(clean).map(Bytes::from).unwrap_or_default()
+        };
+
         Ok(DlnDestination::Order {
             makerOrderNonce: self.extract_order_nonce(intent)?,
             makerSrc: self.address_to_bytes(&intent.depositor)?,
@@ -155,11 +160,16 @@ impl DeBridgeAdapter {
             takeTokenAddress: self.address_to_bytes(&intent.dst_token)?,
             takeAmount: take_amount,
             receiverDst: self.address_to_bytes(&intent.recipient)?,
-            givePatchAuthoritySrc: Bytes::new(),
-            orderAuthorityAddressDst: Bytes::new(),
-            allowedTakerDst: Bytes::new(),
-            allowedCancelBeneficiarySrc: Bytes::new(),
-            externalCall: Bytes::new(),
+            givePatchAuthoritySrc: intent.dln_give_patch_authority_src.as_deref()
+                .map(hex_to_bytes).unwrap_or_default(),
+            orderAuthorityAddressDst: intent.dln_order_authority_address_dst.as_deref()
+                .map(hex_to_bytes).unwrap_or_default(),
+            allowedTakerDst: intent.dln_allowed_taker_dst.as_deref()
+                .map(hex_to_bytes).unwrap_or_default(),
+            allowedCancelBeneficiarySrc: intent.dln_allowed_cancel_beneficiary_src.as_deref()
+                .map(hex_to_bytes).unwrap_or_default(),
+            externalCall: intent.dln_external_call.as_deref()
+                .map(hex_to_bytes).unwrap_or_default(),
         })
     }
 
