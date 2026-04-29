@@ -363,16 +363,23 @@ async fn main() -> Result<()> {
                 };
                 if let Some(ref hash) = lookup_hash {
                     match resolve_lifi_bridge(hash).await {
-                        Some(res) => {
+                        LifiBridgeResult::Resolved(res) => {
                             info!("🔍 LiFi bridge resolved via API: {} → {} (deposit_tx={:?} src_chain={:?})",
                                 hash, res.bridge, res.sending_tx_hash, res.sending_chain_id);
                             if bridge.is_empty() { bridge = res.bridge; }
                             api_sending_tx = res.sending_tx_hash;
                             api_sending_chain = res.sending_chain_id;
                         }
-                        None => {
+                        LifiBridgeResult::NotRoutable => {
+                            info!("⏭️  lifi skip (bridge not routable, permanent): {}", intent.id);
+                            // Keep in dispatched — this intent will never be routable.
+                        }
+                        LifiBridgeResult::Pending => {
                             if bridge.is_empty() {
-                                info!("⏭️  lifi skip (bridge not routable): {}", intent.id);
+                                // li.quest hasn't indexed the tx yet — retry on next genome event.
+                                dispatched.remove(&dedup_key);
+                                info!("⏭️  lifi retry-on-next (li.quest pending): {}", intent.id);
+                                continue;
                             }
                         }
                     }
@@ -381,9 +388,7 @@ async fn main() -> Result<()> {
                 }
             }
             if bridge.is_empty() {
-                // Bridge not yet indexed by li.quest (tx in-flight) or not routable.
-                // Remove from dispatched so the next genome event can retry.
-                dispatched.remove(&dedup_key);
+                // bridge wasn't resolved — already handled above (retry or permanent skip).
                 continue;
             } else {
                 let mut child = LiFiMetaRouter::project_to_child(&intent, &bridge);
@@ -556,34 +561,54 @@ struct LifiResolution {
     sending_chain_id: Option<u64>,
 }
 
+enum LifiBridgeResult {
+    /// Bridge resolved and is fillable.
+    Resolved(LifiResolution),
+    /// li.quest returned a known bridge slug we don't handle — skip permanently.
+    NotRoutable,
+    /// API unavailable or tx not yet indexed — retry on next genome event.
+    Pending,
+}
+
 /// Resolve the underlying bridge for a LiFi intent via the LiFi status API.
-/// Returns a `LifiResolution` with bridge slug + deposit tx details, or None
-/// if the underlying bridge is not something we can fill.
-async fn resolve_lifi_bridge(tx_hash: &str) -> Option<LifiResolution> {
+async fn resolve_lifi_bridge(tx_hash: &str) -> LifiBridgeResult {
     let url = format!("https://li.quest/v1/status?txHash={}", tx_hash);
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .build()
-        .ok()?;
-    let resp = client.get(&url).send().await.ok()?;
-    if !resp.status().is_success() { return None; }
-    let body: serde_json::Value = resp.json().await.ok()?;
-    let raw = body.get("tool")
+    {
+        Ok(c) => c,
+        Err(_) => return LifiBridgeResult::Pending,
+    };
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(_) => return LifiBridgeResult::Pending,
+    };
+    if !resp.status().is_success() {
+        return LifiBridgeResult::Pending;
+    }
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return LifiBridgeResult::Pending,
+    };
+    let raw = match body.get("tool")
         .or_else(|| body.get("bridge"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_lowercase())?;
+        .map(|s| s.to_lowercase())
+    {
+        Some(r) => r,
+        // Response parsed but no tool/bridge field — tx not yet indexed.
+        None => return LifiBridgeResult::Pending,
+    };
     let bridge = match raw.as_str() {
         "across" | "across_v3" => "across".to_string(),
         "debridge" | "dln" | "debridge_dln" => "debridge".to_string(),
         "mayan" | "mayan_swift" | "mayanswift" => "mayan".to_string(),
         _ => {
             tracing::debug!("LiFi bridge '{}' not routable (not Across/deBridge/Mayan)", raw);
-            return None;
+            return LifiBridgeResult::NotRoutable;
         }
     };
-    // Extract the actual deposit-side tx so lambda_controller can decode it
-    // directly (e.g. V3FundsDeposited log for Across) without relying on the
-    // LiFi Diamond tx, which may be on an unwired or archive-pruned chain.
     let sending = body.get("sending");
     let sending_tx_hash = sending
         .and_then(|s| s.get("txHash"))
@@ -593,6 +618,6 @@ async fn resolve_lifi_bridge(tx_hash: &str) -> Option<LifiResolution> {
     let sending_chain_id = sending
         .and_then(|s| s.get("chainId"))
         .and_then(|v| v.as_u64());
-    Some(LifiResolution { bridge, sending_tx_hash, sending_chain_id })
+    LifiBridgeResult::Resolved(LifiResolution { bridge, sending_tx_hash, sending_chain_id })
 }
 
