@@ -343,8 +343,15 @@ async fn main() -> Result<()> {
             let mut bridge = LiFiMetaRouter::resolve_bridge(&intent).unwrap_or_default();
             let mut api_sending_tx: Option<String> = None;
             let mut api_sending_chain: Option<u64> = None;
-            if bridge.is_empty() {
-                // Attempt to resolve bridge from LiFi status API using tx_hash in intent id.
+            // Always attempt li.quest lookup when we don't yet have a real deposit tx.
+            // Even when genome provides bridge/tool, the intent.tx_hash is the LiFi Diamond
+            // tx — not the underlying deposit tx. We need sending.txHash + sending.chainId
+            // from the status API so lambda_controller can decode V3FundsDeposited.
+            let need_deposit_tx = intent.deposit_id.is_none()
+                && !(intent.tx_hash.starts_with("0x") && intent.tx_hash.len() == 66
+                     && !intent.tx_hash.starts_with("synthetic_"));
+            if bridge.is_empty() || need_deposit_tx {
+                // Attempt to resolve bridge + deposit tx from LiFi status API.
                 // Intent IDs look like: lifi_v2::lifi_0x<txhash> or lifi_v2:0x<txhash>
                 let tx_hash_from_id = if intent.id.contains("lifi_0x") {
                     intent.id.split("lifi_0x").nth(1).map(|s| format!("0x{}", s))
@@ -361,15 +368,17 @@ async fn main() -> Result<()> {
                         Some(res) => {
                             info!("🔍 LiFi bridge resolved via API: {} → {} (deposit_tx={:?} src_chain={:?})",
                                 hash, res.bridge, res.sending_tx_hash, res.sending_chain_id);
-                            bridge = res.bridge;
+                            if bridge.is_empty() { bridge = res.bridge; }
                             api_sending_tx = res.sending_tx_hash;
                             api_sending_chain = res.sending_chain_id;
                         }
                         None => {
-                            info!("⏭️  lifi skip (bridge not routable): {}", intent.id);
+                            if bridge.is_empty() {
+                                info!("⏭️  lifi skip (bridge not routable): {}", intent.id);
+                            }
                         }
                     }
-                } else {
+                } else if bridge.is_empty() {
                     info!("⏭️  lifi skip (no tx_hash for bridge lookup): {}", intent.id);
                 }
             }
