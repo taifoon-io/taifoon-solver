@@ -534,7 +534,7 @@ impl LambdaController {
             (dln_addr, calldata)
         } else if direct_fill {
             // Direct Across SpokePool fill — no proof wrapper.
-            // repaymentChainId = dst_chain so repayment lands where we have liquidity.
+            // repaymentChainId = src_chain: solver is reimbursed on the source (deposit) chain.
             let solver_addr = self.signer.address();
             let calldata = match build_across_spoke_pool_calldata_with_relayer(intent, Some(solver_addr)) {
                 Ok(c) => c,
