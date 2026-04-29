@@ -438,7 +438,7 @@ impl AcrossPoller {
         Self {
             // All chains with an Across V3 SpokePool (no BSC — no SpokePool there).
             dst_chains: vec![8453, 10, 42161, 1, 137, 59144],
-            poll_interval_secs: 30,
+            poll_interval_secs: 60,
             limit: 20,
         }
     }
@@ -456,6 +456,9 @@ impl AcrossPoller {
 
         loop {
             for &dst_chain in &self.dst_chains {
+                // 5s inter-chain sleep spreads 6 chains over 30s instead of bursting
+                // all at once, reducing Cloudflare 429 rate-limiting on app.across.to.
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 let url = format!(
                     "https://app.across.to/api/deposits?status=unfilled&destinationChainId={}&limit={}",
                     dst_chain, self.limit
