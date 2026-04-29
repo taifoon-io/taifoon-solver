@@ -397,6 +397,32 @@ impl LambdaController {
             return Ok(LambdaExecuteOutcome::Skipped { reason });
         }
 
+        // Spread check for Across direct-fills (spinner bypassed on operator==0x0 chains).
+        // Require output_amount ≤ 99.7% of input_amount (at least 0.3% spread covers gas).
+        // This prevents fills where the relayer pays out nearly the full input with no margin.
+        if direct_fill && !is_debridge && !is_mayan {
+            let input = intent.amount.parse::<u128>().ok();
+            let output = intent.output_amount.as_deref().and_then(|s| s.parse::<u128>().ok());
+            if let (Some(inp), Some(out)) = (input, output) {
+                if inp > 0 && out > inp {
+                    let reason = format!("across_output_exceeds_input:out={out}>in={inp}");
+                    info!("⏭️  {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+                // Require at least 0.3% spread.
+                if inp > 0 {
+                    let spread_pct = (inp.saturating_sub(out)) as f64 / inp as f64 * 100.0;
+                    if spread_pct < 0.3 {
+                        let reason = format!("across_spread_too_thin:{spread_pct:.4}pct");
+                        info!("⏭️  {} — {}", intent.id, reason);
+                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                        return Ok(LambdaExecuteOutcome::Skipped { reason });
+                    }
+                }
+            }
+        }
+
         // Across intents (both direct-fill and operator paths) require a depositId to build
         // fillV3Relay calldata. Skip cleanly when enrichment couldn't resolve one — avoids
         // a hard 'cannot resolve depositId' error from the calldata builder.
