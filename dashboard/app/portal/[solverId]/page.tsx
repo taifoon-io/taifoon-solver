@@ -15,6 +15,7 @@ import {
   LiveEvent,
 } from '@/hooks/useSolverEvents'
 import { NavBar, Footer, Card, CardHeader, Badge, StatTile, Button, Tag } from '@/components/ui'
+import LivePnL from '@/components/LivePnL'
 
 // ── Chain badge ──────────────────────────────────────────────────────────────
 function Chain({ id }: { id: number }) {
@@ -316,6 +317,11 @@ export default function SolverMonitorPage({ params }: PageProps) {
           />
           <StatTile label="LATENCY" value={`${stats?.latency_ms ?? 0}`} unit="ms" tone="blue" />
         </div>
+
+        {/* Realized P&L from outcome log (solver-api /api/solver/pnl + /outcomes) */}
+        <section className="max-w-[1400px] mx-auto px-6 py-6">
+          <LivePnL />
+        </section>
 
         {/* Main content */}
         <div className="max-w-[1400px] mx-auto grid grid-cols-1 lg:grid-cols-3 gap-3 px-6 pb-12">

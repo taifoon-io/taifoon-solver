@@ -73,11 +73,32 @@ impl EstimateAdapter for LiFiMetaRouter {
         let bridge = match Self::resolve_bridge(intent) {
             Some(b) => b,
             None => {
+                tracing::debug!(
+                    target: "lifi_meta_router::resolution",
+                    intent_id = %intent.id,
+                    tx_hash = %intent.tx_hash,
+                    bridge = "none",
+                    resolved = false,
+                    "lifi intent missing bridge/tool field"
+                );
                 return EstimateOutcome::RouteNotImplemented(
                     "lifi intent missing bridge/tool field".into(),
                 );
             }
         };
+
+        let routable = matches!(
+            bridge.as_str(),
+            "across" | "across_v3" | "debridge" | "dln" | "mayan" | "mayan_swift"
+        );
+        tracing::debug!(
+            target: "lifi_meta_router::resolution",
+            intent_id = %intent.id,
+            tx_hash = %intent.tx_hash,
+            bridge = %bridge,
+            resolved = routable,
+            "lifi underlying bridge resolved"
+        );
 
         let child = Self::project_to_child(intent, &bridge);
 
