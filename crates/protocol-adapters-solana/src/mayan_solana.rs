@@ -149,13 +149,21 @@ impl MayanSolanaIntent {
             }
         };
 
-        let min_amount_out = match intent
-            .output_amount
-            .as_deref()
-            .or(Some(intent.amount.as_str()))
-        {
-            Some(s) => s.parse::<u64>().context("min_amount_out parse")?,
-            None => return Err(anyhow!("Mayan Solana requires output_amount or amount")),
+        let min_amount_out = {
+            let raw = intent
+                .output_amount
+                .as_deref()
+                .or(Some(intent.amount.as_str()))
+                .ok_or_else(|| anyhow!("Mayan Solana requires output_amount or amount"))?;
+            // Amounts from the Mayan poller arrive as either integer strings ("1000000")
+            // or float strings ("0.0005" for small ETH). Parse as f64 and truncate.
+            // Mayan Swift amounts on Solana are already in the token's native units
+            // (lamports for SOL, raw USDC units for USDC), so truncation is safe.
+            raw.parse::<u64>().or_else(|_| {
+                raw.parse::<f64>()
+                    .context("min_amount_out parse")
+                    .map(|f| f as u64)
+            })?
         };
         let deadline = intent.deadline.unwrap_or_else(|| {
             std::time::SystemTime::now()

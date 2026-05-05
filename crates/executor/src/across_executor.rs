@@ -329,8 +329,17 @@ pub fn build_across_adapter_calldata(intent: &Intent) -> Result<Vec<u8>> {
         .with_context(|| format!("invalid recipient '{}'", intent.recipient))?;
     let input_token: Address = intent.src_token.parse()
         .with_context(|| format!("invalid src_token '{}'", intent.src_token))?;
-    let output_token: Address = intent.dst_token.parse()
-        .with_context(|| format!("invalid dst_token '{}'", intent.dst_token))?;
+    // "native" and the 0xeeee sentinel both map to Address::ZERO — Across uses
+    // zero as the on-chain sentinel for native ETH output in fillV3Relay.
+    let output_token: Address = {
+        let t = intent.dst_token.trim().to_lowercase();
+        if t == "native" || t == "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
+            Address::ZERO
+        } else {
+            intent.dst_token.parse()
+                .with_context(|| format!("invalid dst_token '{}'", intent.dst_token))?
+        }
+    };
     let input_amount = U256::from_str_radix(&intent.amount, 10)
         .context("invalid input amount")?;
 
@@ -428,8 +437,15 @@ pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_ad
         .with_context(|| format!("invalid recipient '{}'", intent.recipient))?;
     let input_token: Address = intent.src_token.parse()
         .with_context(|| format!("invalid src_token '{}'", intent.src_token))?;
-    let output_token: Address = intent.dst_token.parse()
-        .with_context(|| format!("invalid dst_token '{}'", intent.dst_token))?;
+    let output_token: Address = {
+        let t = intent.dst_token.trim().to_lowercase();
+        if t == "native" || t == "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
+            Address::ZERO
+        } else {
+            intent.dst_token.parse()
+                .with_context(|| format!("invalid dst_token '{}'", intent.dst_token))?
+        }
+    };
     let input_amount = U256::from_str_radix(&intent.amount, 10).context("invalid input amount")?;
 
     let output_amount = match intent.output_amount.as_deref() {

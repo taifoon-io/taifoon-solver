@@ -45,7 +45,6 @@ use crate::mayan_evm_estimate::MayanEvmEstimateAdapter;
 use crate::mayan_solana_estimate::DEFAULT_SOLANA_RPC;
 use crate::outcome_log::{OutcomeLog, OutcomeRecord};
 use crate::spinner_solver::SpinnerSolverClient;
-use crate::wormhole::fetch_vaa_for_tx;
 use protocol_adapters::debridge::DeBridgeAdapter;
 use protocol_adapters::{ProtocolAdapter, SpinnerClient};
 use protocol_adapters_solana::{MayanSolanaIntent, SolanaBroadcaster};
@@ -94,6 +93,41 @@ impl LambdaController {
     pub async fn lambda_execute(&self, intent: &Intent) -> Result<LambdaExecuteOutcome> {
         let amount_usd = intent_amount_usd(intent);
 
+        // 0. Hackathon demo safety belt — hard cap on per-fill notional.
+        // `MAX_NOTIONAL_USD` (default $200) prevents an accidental large fill while
+        // we're broadcasting from a live mainnet wallet. Skipped intents are logged
+        // and recorded; they don't touch the wallet manager. Dry-run still applies
+        // the cap so operators see what would be skipped before going live.
+        let max_notional = std::env::var("MAX_NOTIONAL_USD")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(200.0);
+        if amount_usd > max_notional {
+            let reason = format!(
+                "notional_cap_exceeded:amount=${:.2}>cap=${:.2}",
+                amount_usd, max_notional
+            );
+            info!("⏭️  {} — {}", intent.id, reason);
+            // Best-effort outcome record so the dashboard shows the skip.
+            self.append_outcome(OutcomeRecord {
+                ts: chrono::Utc::now(),
+                intent_id: intent.id.clone(),
+                protocol: intent.protocol.clone(),
+                src_chain: intent.src_chain,
+                dst_chain: intent.dst_chain,
+                decision: "skip_notional_cap".into(),
+                tx_hash: None,
+                predicted_gas: None,
+                gas_used: None,
+                effective_gas_price_wei: None,
+                predicted_profit_usd: None,
+                actual_profit_usd: None,
+                skip_reason: Some(reason.clone()),
+                error: None,
+            });
+            return Ok(LambdaExecuteOutcome::Skipped { reason });
+        }
+
         // 1. Persist + reserve (idempotent for both).
         self.wallet
             .record_detected(NewIntent {
@@ -128,6 +162,7 @@ impl LambdaController {
             None => {
                 let reason = format!("no chain wiring for dst {}", intent.dst_chain);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
         };
@@ -143,6 +178,7 @@ impl LambdaController {
         if is_across_pre && wiring.across_adapter == Address::ZERO {
             let reason = format!("no Across SpokePool on chain {}", intent.dst_chain);
             self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+            let _ = self.wallet.release(&intent.id);
             return Ok(LambdaExecuteOutcome::Skipped { reason });
         }
         // deBridge and Mayan submit directly to their own contracts (DlnDestination / Swift).
@@ -169,6 +205,7 @@ impl LambdaController {
                 Err(e) => {
                     let err = format!("spinner_test_run:{e}");
                     self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed {
                         stage: "spinner_test_run",
                         error: err,
@@ -231,7 +268,7 @@ impl LambdaController {
                         return Ok(LambdaExecuteOutcome::Skipped { reason });
                     }
                     let spread_pct = (g - t) as f64 / g as f64 * 100.0;
-                    if spread_pct < 0.5 {
+                    if spread_pct < 0.01 {
                         let reason = format!("debridge_spread_too_thin:{spread_pct:.3}pct");
                         info!("⏭️  {} — {}", intent.id, reason);
                         self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
@@ -354,9 +391,11 @@ impl LambdaController {
                     enriched_intent = Some(patched);
                     enriched_intent.as_ref().unwrap()
                 } else {
-                    warn!("⚠️  Could not fetch relay data for {} from src chain {} — fill may revert", intent.id, intent.src_chain);
-                    enriched_intent = None;
-                    intent
+                    warn!("⚠️  Could not fetch relay data for {} from src chain {} — skipping to avoid revert", intent.id, intent.src_chain);
+                    let reason = format!("across_enrichment_failed:{}", intent.id);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
                 }
             } else {
                 enriched_intent = None;
@@ -384,6 +423,7 @@ impl LambdaController {
                 let reason = format!("exclusive_window_active:deadline={excl_deadline}>now={now},relayer={excl_relayer}");
                 info!("⏭️  Skipping {} — {}", intent.id, reason);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
         }
@@ -411,6 +451,7 @@ impl LambdaController {
                 Err(e) => {
                     let err = format!("mayan_solana_intent_build:{e}");
                     self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
@@ -453,19 +494,17 @@ impl LambdaController {
                 }
             }
         }
-        // Mayan EVM: fetch Wormhole VAA before calldata build. The VAA is required by
-        // fulfillOrder() on the Swift contract — without it the call reverts unconditionally.
+        // Mayan EVM fills require a fulfill-VAA signed by Mayan's private auction chain
+        // (wormhole chain 42069, emitter 0x4155). These VAAs are NOT on wormholescan.
+        // Solvers must register with Mayan at https://discord.gg/mayan-finance to obtain
+        // an API key and subscribe to the fulfill-VAA stream. Until registered, skip all
+        // Mayan EVM orders immediately rather than burning 10 minutes per order on retries.
         let mayan_vaa: Option<Vec<u8>> = if is_mayan && !is_solana_src {
-            let src_tx = &intent.tx_hash;
-            info!("🌀 Fetching Wormhole VAA for Mayan EVM intent {} (src_tx={})", intent.id, src_tx);
-            let vaa = fetch_vaa_for_tx(src_tx).await;
-            if vaa.is_none() {
-                let reason = "mayan_evm_vaa_unavailable";
-                warn!("⚠️  {} — VAA not available after retries, skipping", intent.id);
-                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-                return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
-            }
-            vaa
+            let reason = "mayan_evm_solver_not_registered";
+            info!("⏭️  {} — {}", intent.id, reason);
+            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+            let _ = self.wallet.release(&intent.id);
+            return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
         } else {
             None
         };
@@ -483,13 +522,17 @@ impl LambdaController {
                     self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
                     return Ok(LambdaExecuteOutcome::Skipped { reason });
                 }
-                // Require at least 0.3% spread.
+                // Require at least 0.01% spread — only rejects exact-par fills (output==input)
+                // and near-zero rounding-error cases. Across relayer fees are always ≥0.01%
+                // on any deposit with real economic value, so this filter has no false negatives
+                // for profitable fills while still rejecting dust/test deposits.
                 if inp > 0 {
                     let spread_pct = (inp.saturating_sub(out)) as f64 / inp as f64 * 100.0;
-                    if spread_pct < 0.3 {
+                    if spread_pct < 0.01 {
                         let reason = format!("across_spread_too_thin:{spread_pct:.4}pct");
                         info!("⏭️  {} — {}", intent.id, reason);
                         self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                        let _ = self.wallet.release(&intent.id);
                         return Ok(LambdaExecuteOutcome::Skipped { reason });
                     }
                 }
@@ -508,6 +551,7 @@ impl LambdaController {
                 let reason = "across_message_hook_unsupported".to_string();
                 info!("⏭️  {} — {}", intent.id, reason);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
         }
@@ -516,6 +560,19 @@ impl LambdaController {
         // fillV3Relay calldata. Skip cleanly when enrichment couldn't resolve one — avoids
         // a hard 'cannot resolve depositId' error from the calldata builder.
         let is_across_pre = proto_lower.contains("across");
+        // Skip Across deposits with a Solana (base58) depositor — these originate on Solana
+        // and the calldata builder expects an EVM address. Detect: starts with a non-'0x' prefix
+        // and is not parseable as an EVM address.
+        if is_across_pre && !is_mayan && !is_debridge {
+            let dep = &intent.depositor;
+            let is_evm_addr = dep.starts_with("0x") || dep.starts_with("0X");
+            if !is_evm_addr && dep.len() > 10 {
+                let reason = format!("across_solana_src_unsupported:depositor={}", &dep[..dep.len().min(12)]);
+                info!("⏭️  {} — {}", intent.id, reason);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
+        }
         if is_across_pre && !is_mayan && !is_debridge {
             let has_id = intent.deposit_id.is_some()
                 || intent.id.rsplit(&[':', '_'][..]).find_map(|s| s.parse::<i64>().ok()).is_some()
@@ -576,6 +633,7 @@ impl LambdaController {
                 Err(e) => {
                     let err = format!("calldata_build:{e}");
                     self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
@@ -591,6 +649,7 @@ impl LambdaController {
                 None => {
                     let err = format!("no DlnDestination address for chain {}", intent.dst_chain);
                     self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
@@ -599,6 +658,7 @@ impl LambdaController {
                 Err(e) => {
                     let err = format!("calldata_build:{e}");
                     self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
@@ -614,6 +674,7 @@ impl LambdaController {
                 Err(e) => {
                     let err = format!("calldata_build:{e}");
                     self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
@@ -627,6 +688,7 @@ impl LambdaController {
                 Err(e) => {
                     let err = format!("calldata_build:{e}");
                     self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
@@ -681,13 +743,28 @@ impl LambdaController {
         // Solana-source intents are already guarded by the stub above.
         {
             let solver_addr = self.signer.address();
-            let estimate_outcome = run_evm_estimate_with_value(
+            let mut estimate_outcome = run_evm_estimate_with_value(
                 wiring.chain_id,
                 solver_addr,
                 tx_target,
                 &tx_calldata,
                 eth_fill_value,
             ).await;
+
+            // deBridge DLN `fulfillOrder` reverts with `data: "0x"` when
+            // `allowedTakerDst != msg.sender` (exclusive taker check). The generic
+            // classifier treats bare-data reverts as InsufficientFundsLike (ERC-20
+            // balance check), which is wrong for deBridge — we'd broadcast and burn
+            // gas. Re-classify to Reverted so the estimate gate blocks us early.
+            if is_debridge {
+                if let crate::estimate::EstimateOutcome::InsufficientFundsLike(ref msg) = estimate_outcome {
+                    let lower = msg.to_lowercase();
+                    if lower.contains("execution reverted") {
+                        warn!("⚠️  deBridge: re-classifying bare revert as Reverted (likely allowedTakerDst check)");
+                        estimate_outcome = crate::estimate::EstimateOutcome::Reverted(msg.clone());
+                    }
+                }
+            }
 
             if !estimate_outcome.is_green() {
                 let detail = match &estimate_outcome {
@@ -698,9 +775,34 @@ impl LambdaController {
                 let reason = format!("estimate_gate:{}:{}", estimate_outcome.tag(), detail);
                 warn!("⚠️  estimate gate blocked {} — {}", intent.id, reason);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
             info!("✅ estimate gate passed ({:?})", estimate_outcome);
+        }
+
+        // 6b-post. NATIVE-OUT BALANCE CHECK — for fills where outputToken=native we attach
+        // msg.value = outputAmount. Verify we actually hold that much ETH before broadcasting.
+        if let Some(required_wei) = eth_fill_value {
+            let rpc_url = crate::evm_estimate::resolve_rpc_url(wiring.chain_id);
+            if let Some(url) = rpc_url {
+                if let Ok(parsed) = url.parse() {
+                    use alloy::providers::{Provider, ProviderBuilder};
+                    let provider = ProviderBuilder::new().on_http(parsed);
+                    if let Ok(bal) = provider.get_balance(self.signer.address()).await {
+                        if bal < required_wei {
+                            let reason = format!(
+                                "native_out_insufficient_eth:have={}wei<need={}wei",
+                                bal, required_wei
+                            );
+                            warn!("⚠️  {} — {}", intent.id, reason);
+                            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                            let _ = self.wallet.release(&intent.id);
+                            return Ok(LambdaExecuteOutcome::Skipped { reason });
+                        }
+                    }
+                }
+            }
         }
 
         // 6c. FEE-AWARE GAS PRICE — fetch from Razor API, clamp to sane range, apply 1.2× buffer.
@@ -1538,5 +1640,45 @@ mod tests {
         let intents = mgr.list_intents(None, 100).unwrap();
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0].intent_id, "i1");
+    }
+
+    #[tokio::test]
+    async fn lambda_execute_skips_when_notional_exceeds_cap() {
+        // Demo safety belt — MAX_NOTIONAL_USD must short-circuit before the wallet
+        // ledger is touched, so a hostile or accidental large intent never
+        // reaches broadcast on a live mainnet wallet.
+        let mgr = Arc::new(WalletManager::open(":memory:", 1_000_000.0).unwrap());
+        let signer = PrivateKeySigner::random();
+        let ctrl = LambdaController {
+            wallet: mgr.clone(),
+            spinner: SpinnerSolverClient::new("http://127.0.0.1:1"),
+            signer,
+            chains: HashMap::new(),
+            outcome_log: None,
+            dry_run: true,
+            profit_threshold_usd: 0.10,
+            feedback_url: None,
+        };
+        // 50_000 USDC (6 decimals) = $50,000 — well above the default $200 cap.
+        let mut i = intent("big", "50000000000");
+        i.src_token = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".into(); // USDC Base
+        // Set a low cap explicitly so the test is deterministic regardless of
+        // the operator's MAX_NOTIONAL_USD env in CI.
+        // SAFETY: tests in this module run serially within the cargo-test
+        // tokio runtime; setting a process-wide env here is acceptable
+        // because no other test in this binary reads MAX_NOTIONAL_USD.
+        unsafe { std::env::set_var("MAX_NOTIONAL_USD", "200") };
+        let out = ctrl.lambda_execute(&i).await.unwrap();
+        unsafe { std::env::remove_var("MAX_NOTIONAL_USD") };
+        match out {
+            LambdaExecuteOutcome::Skipped { reason } => {
+                assert!(reason.starts_with("notional_cap_exceeded"), "got {reason}");
+            }
+            other => panic!("expected Skipped(notional_cap_exceeded), got {other:?}"),
+        }
+        // Crucially, the wallet ledger MUST NOT have a record — the cap
+        // short-circuits before record_detected.
+        let intents = mgr.list_intents(None, 100).unwrap();
+        assert_eq!(intents.len(), 0);
     }
 }

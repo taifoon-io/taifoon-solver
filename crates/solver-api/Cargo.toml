@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# Internal: executor crate owns the rusqlite outcome log + P&L aggregator.
+# solver-api depends on it so the dashboard endpoints can read realized P&L
+# without duplicating the SQL logic.
+executor = { path = "../executor" }
+
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }

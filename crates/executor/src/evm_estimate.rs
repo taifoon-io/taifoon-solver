@@ -62,12 +62,12 @@ pub fn default_debridge_dln_addresses() -> HashMap<u64, Address> {
 /// Premium RPCs sourced from rpc-hunter / t3rn-guardian endpoints.
 pub fn default_rpc_for_chain(chain_id: u64) -> Option<&'static str> {
     match chain_id {
-        1 => Some("https://mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
+        1 => Some("https://ethereum-rpc.publicnode.com"),
         10 => Some("https://mainnet.optimism.io"),
         42161 => Some("https://arb1.arbitrum.io/rpc"),
-        8453 => Some("https://base-mainnet.infura.io/v3/753cc78f52604510b0dc93c72f623740"),
-        137 => Some("https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab"),
-        56 => Some("https://bsc-mainnet.infura.io/v3/2aa61415c8df44278215d749d6ccd221"),
+        8453 => Some("https://base-rpc.publicnode.com"),
+        137 => Some("https://polygon-bor-rpc.publicnode.com"),
+        56 => Some("https://bsc-dataseed.binance.org"),
         43114 => Some("https://api.avax.network/ext/bc/C/rpc"),
         59144 => Some("https://rpc.linea.build"),
         534352 => Some("https://rpc.scroll.io"),
@@ -240,7 +240,7 @@ pub fn gas_price_range_for_chain(chain_id: u64) -> GasPriceRange {
         56      => GasPriceRange { min_gwei: 1.0,   max_gwei: 20.0,  typical_gwei: 3.0   }, // BSC
         137     => GasPriceRange { min_gwei: 30.0,  max_gwei: 500.0, typical_gwei: 50.0  }, // Polygon
         8453    => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.05  }, // Base
-        42161   => GasPriceRange { min_gwei: 0.001, max_gwei: 0.5,   typical_gwei: 0.01  }, // Arbitrum
+        42161   => GasPriceRange { min_gwei: 0.01,  max_gwei: 0.5,   typical_gwei: 0.1   }, // Arbitrum
         43114   => GasPriceRange { min_gwei: 25.0,  max_gwei: 100.0, typical_gwei: 30.0  }, // Avalanche
         59144   => GasPriceRange { min_gwei: 0.05,  max_gwei: 5.0,   typical_gwei: 0.1   }, // Linea
         324     => GasPriceRange { min_gwei: 0.05,  max_gwei: 5.0,   typical_gwei: 0.25  }, // zkSync Era
@@ -270,13 +270,24 @@ pub async fn fetch_razor_gas_price_gwei(chain_id: u64, warmbed_base: &str) -> Op
     parsed.gas_price_gwei
 }
 
+/// Fetch `eth_gasPrice` from the chain's RPC as a secondary gas price source.
+/// Returns the price in gwei, or `None` on failure.
+async fn fetch_rpc_gas_price_gwei(chain_id: u64) -> Option<f64> {
+    let rpc_url = resolve_rpc_url(chain_id)?;
+    let url = rpc_url.parse().ok()?;
+    let provider = ProviderBuilder::new().on_http(url);
+    let wei = provider.get_gas_price().await.ok()?;
+    Some(wei as f64 / 1_000_000_000.0)
+}
+
 /// Compute the optimal maxFeePerGas (wei) for a chain.
 ///
 /// Strategy (mirrors t3rn-guardian + Python filler):
 ///   1. Try Razor API for live gas price.
 ///   2. Clamp result against per-chain min/max from `GAS_PRICE_RANGES`.
 ///   3. Apply 1.2× safety buffer.
-///   4. If Razor unavailable, use chain `typical` as fallback.
+///   4. If Razor unavailable, try `eth_gasPrice` RPC as secondary fallback.
+///   5. If both fail, use chain `typical` as static floor.
 ///
 /// Returns (max_fee_per_gas_wei, priority_fee_wei).
 pub async fn optimal_gas_price_wei(chain_id: u64, warmbed_base: &str) -> (u128, u128) {
@@ -286,8 +297,21 @@ pub async fn optimal_gas_price_wei(chain_id: u64, warmbed_base: &str) -> (u128, 
         // Clamp against known-sane range, then apply 1.2× buffer.
         let clamped = live.max(range.min_gwei).min(range.max_gwei);
         clamped * 1.2
+    } else if let Some(rpc_price) = fetch_rpc_gas_price_gwei(chain_id).await {
+        // Razor unavailable — use live eth_gasPrice from the node, clamped and buffered.
+        let clamped = rpc_price.max(range.min_gwei).min(range.max_gwei);
+        warn!(
+            target: "estimate",
+            "gas: Razor unavailable for chain={}, using eth_gasPrice={:.4} gwei", chain_id, rpc_price
+        );
+        clamped * 1.2
     } else {
-        // Razor unavailable — use chain typical as safe floor.
+        // Both Razor and RPC failed — use chain typical as static floor.
+        warn!(
+            target: "estimate",
+            "gas: both Razor and eth_gasPrice failed for chain={}, using typical={} gwei",
+            chain_id, range.typical_gwei
+        );
         range.typical_gwei * 1.2
     };
 

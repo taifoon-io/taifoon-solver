@@ -177,10 +177,20 @@ impl DeBridgeAdapter {
         if let Some(n) = intent.maker_order_nonce {
             return Ok(n);
         }
+        // Fallback: try the last segment of the intent ID as a decimal nonce.
+        // Reject segments that look like 32-byte tx hashes (0x + 16+ hex chars) —
+        // fabricating a nonce from a hash produces wrong orderId and an on-chain revert.
         let parts: Vec<&str> = intent.id.split(&[':', '_'][..]).collect();
         let nonce_str = parts
             .last()
             .ok_or_else(|| anyhow!("Failed to extract nonce from intent ID: {}", intent.id))?;
+        let looks_like_hash = nonce_str.starts_with("0x") && nonce_str.len() >= 18;
+        if looks_like_hash {
+            anyhow::bail!(
+                "debridge intent {} missing maker_order_nonce (id segment '{}' is a hash, not a nonce)",
+                intent.id, nonce_str
+            )
+        }
         nonce_str.parse::<u64>()
             .map_err(|e| anyhow!("Failed to parse nonce '{}': {}", nonce_str, e))
     }

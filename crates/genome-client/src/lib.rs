@@ -466,11 +466,11 @@ pub struct AcrossPoller {
 impl AcrossPoller {
     pub fn default_mainnet() -> Self {
         Self {
-            // All chains with an Across V3 SpokePool (no BSC — no SpokePool there).
-            dst_chains: vec![8453, 10, 42161, 1, 137, 59144, 534352, 34443, 57073, 324],
-            // 10 chains × ~5s inter-chain = ~50s for the full loop; poll_interval_secs adds
-            // a rest between full sweeps. Total cycle ≈ 50s + 10s = ~60s end-to-end.
-            poll_interval_secs: 10,
+            // Only chains where solver has funded liquidity:
+            //   10=Optimism (4.54 USDC), 8453=Base (0.46 USDC), 42161=Arbitrum (0.015 ETH).
+            // 3 chains × 15s = 45s/sweep + 30s rest = ~75s cycle. No 429 risk.
+            dst_chains: vec![10, 8453, 42161],
+            poll_interval_secs: 30,
             limit: 20,
         }
     }
@@ -488,9 +488,9 @@ impl AcrossPoller {
 
         loop {
             for &dst_chain in &self.dst_chains {
-                // 5s inter-chain sleep spreads 10 chains over ~50s instead of bursting
-                // all at once, reducing Cloudflare 429 rate-limiting on app.across.to.
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                // 20s inter-chain sleep: 3 chains × 20s = 60s/sweep, well under Cloudflare
+                // rate limit threshold. Manual curl calls can trigger temporary bans.
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
                 let url = format!(
                     "https://app.across.to/api/deposits?status=unfilled&destinationChainId={}&limit={}",
                     dst_chain, self.limit
@@ -505,8 +505,9 @@ impl AcrossPoller {
                 }
                 let deps: Vec<serde_json::Value> = match resp.json().await {
                     Ok(d) => d,
-                    Err(e) => { tracing::debug!("AcrossPoller chain={} parse error: {}", dst_chain, e); continue; }
+                    Err(e) => { tracing::warn!("AcrossPoller chain={} parse error: {}", dst_chain, e); continue; }
                 };
+                tracing::info!("AcrossPoller chain={} polled: {} unfilled deposits", dst_chain, deps.len());
 
                 let now_secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -565,8 +566,6 @@ impl AcrossPoller {
                     }
                 }
 
-                // Stagger chain polls slightly to avoid hitting rate limits
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;

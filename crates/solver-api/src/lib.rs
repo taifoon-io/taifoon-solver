@@ -126,6 +126,28 @@ pub struct RazorGasPreset {
     pub reason: Option<String>,
 }
 
+/// Cache for the P&L summary endpoint — avoid hammering rusqlite on every
+/// dashboard refresh. Refreshes every `PNL_CACHE_TTL_SECS` (default 2s).
+struct PnlCache {
+    last_refresh: std::time::Instant,
+    cached: executor::PnlSummary,
+}
+
+impl Default for PnlCache {
+    fn default() -> Self {
+        Self {
+            last_refresh: std::time::Instant::now()
+                - std::time::Duration::from_secs(3600),
+            cached: executor::PnlSummary {
+                realized_usd_total: 0.0,
+                fills_total: 0,
+                last_24h_count: 0,
+                by_protocol: HashMap::new(),
+            },
+        }
+    }
+}
+
 /// Shared state
 pub struct ApiState {
     event_tx: broadcast::Sender<SolverEvent>,
@@ -138,6 +160,13 @@ pub struct ApiState {
     razor_cache: Arc<RwLock<HashMap<u64, RazorGasPreset>>>,
     warmbed_api_url: String,
     http_client: reqwest::Client,
+    /// Optional outcome log — when set, exposes /api/solver/outcomes and
+    /// /api/solver/pnl endpoints reading realized P&L from rusqlite.
+    /// `OnceLock` so solver-main can inject it after the router has already
+    /// cloned the `Arc<ApiState>` — handlers read via `.get()` which is safe
+    /// after a single set.
+    outcome_log: std::sync::OnceLock<Arc<executor::OutcomeLog>>,
+    pnl_cache: Arc<RwLock<PnlCache>>,
 }
 
 /// Main solver API
@@ -188,7 +217,21 @@ impl SolverApi {
                 razor_cache: Arc::new(RwLock::new(HashMap::new())),
                 warmbed_api_url,
                 http_client: reqwest::Client::new(),
+                outcome_log: std::sync::OnceLock::new(),
+                pnl_cache: Arc::new(RwLock::new(PnlCache::default())),
             }),
+        }
+    }
+
+    /// Inject an `OutcomeLog` so the dashboard P&L endpoints can read realized
+    /// fills from rusqlite. Safe to call after `router()` has been built and
+    /// even after `Arc<ApiState>` has been cloned to handlers — the OnceLock
+    /// is shared through the Arc.
+    ///
+    /// First call wins; subsequent calls log a warning and are ignored.
+    pub fn set_outcome_log(&self, log: Arc<executor::OutcomeLog>) {
+        if self.state.outcome_log.set(log).is_err() {
+            tracing::warn!("set_outcome_log called twice — ignoring second call");
         }
     }
 
@@ -203,6 +246,8 @@ impl SolverApi {
             .route("/api/solver/money-flow", get(money_flow_handler))
             .route("/api/solver/razor", get(razor_handler))
             .route("/api/solver/portfolio", get(portfolio_handler))
+            .route("/api/solver/outcomes", get(outcomes_handler))
+            .route("/api/solver/pnl", get(pnl_handler))
             .layer(tower_http::cors::CorsLayer::permissive())
             .with_state(self.state.clone())
     }
@@ -787,4 +832,161 @@ async fn portfolio_handler(
         fills,
         as_of: Utc::now(),
     })
+}
+
+// =============================================================================
+// Frontier Hackathon — Live P&L endpoints
+// =============================================================================
+
+/// Query parameters for the outcomes endpoint.
+#[derive(Debug, Deserialize)]
+pub struct OutcomesQuery {
+    /// Number of records to return, newest first. Default 50, max 500.
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+/// Single outcome record exposed via the dashboard API. Mirrors
+/// `executor::OutcomeRecord` but flattens the timestamp to RFC3339 and adds
+/// the chain-aware explorer URL up-front so the dashboard doesn't need to
+/// know per-chain explorers.
+#[derive(Debug, Serialize)]
+pub struct OutcomeApiRecord {
+    pub ts: String,
+    pub intent_id: String,
+    pub protocol: String,
+    pub src_chain: u64,
+    pub dst_chain: u64,
+    pub decision: String,
+    pub tx_hash: Option<String>,
+    pub explorer_url: Option<String>,
+    pub predicted_gas: Option<u64>,
+    pub gas_used: Option<u64>,
+    pub effective_gas_price_wei: Option<String>,
+    pub predicted_profit_usd: Option<f64>,
+    pub actual_profit_usd: Option<f64>,
+    pub skip_reason: Option<String>,
+    pub error: Option<String>,
+}
+
+fn explorer_url_for(chain_id: u64, tx_hash: &str) -> Option<String> {
+    let base = match chain_id {
+        1 => "https://etherscan.io/tx/",
+        10 => "https://optimistic.etherscan.io/tx/",
+        137 => "https://polygonscan.com/tx/",
+        8453 => "https://basescan.org/tx/",
+        42161 => "https://arbiscan.io/tx/",
+        59144 => "https://lineascan.build/tx/",
+        324 => "https://explorer.zksync.io/tx/",
+        56 => "https://bscscan.com/tx/",
+        43114 => "https://snowtrace.io/tx/",
+        // Solana uses base58 signatures; tx_hash already includes them.
+        1_399_811_149 => "https://solscan.io/tx/",
+        _ => return None,
+    };
+    Some(format!("{base}{tx_hash}"))
+}
+
+/// GET /api/solver/outcomes?limit=N
+///
+/// Returns the most recent outcome records from the rusqlite outcome log,
+/// newest first. Returns an empty array when no `OutcomeLog` is configured.
+async fn outcomes_handler(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Query(q): axum::extract::Query<OutcomesQuery>,
+) -> Json<Vec<OutcomeApiRecord>> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let log = match state.outcome_log.get() {
+        Some(l) => l.clone(),
+        None => return Json(Vec::new()),
+    };
+
+    let log_clone = log.clone();
+    let recs = tokio::task::spawn_blocking(move || log_clone.recent(limit))
+        .await
+        .unwrap_or_else(|_| Ok(Vec::new()))
+        .unwrap_or_default();
+
+    let api_recs: Vec<OutcomeApiRecord> = recs
+        .into_iter()
+        .map(|r| {
+            let explorer_url = r
+                .tx_hash
+                .as_deref()
+                .and_then(|tx| explorer_url_for(r.dst_chain, tx));
+            OutcomeApiRecord {
+                ts: r.ts.to_rfc3339(),
+                intent_id: r.intent_id,
+                protocol: r.protocol,
+                src_chain: r.src_chain,
+                dst_chain: r.dst_chain,
+                decision: r.decision,
+                tx_hash: r.tx_hash,
+                explorer_url,
+                predicted_gas: r.predicted_gas,
+                gas_used: r.gas_used,
+                effective_gas_price_wei: r.effective_gas_price_wei,
+                predicted_profit_usd: r.predicted_profit_usd,
+                actual_profit_usd: r.actual_profit_usd,
+                skip_reason: r.skip_reason,
+                error: r.error,
+            }
+        })
+        .collect();
+
+    Json(api_recs)
+}
+
+/// GET /api/solver/pnl
+///
+/// Aggregate P&L summary backing the dashboard `LivePnL` panel. Result is
+/// cached for `PNL_CACHE_TTL_SECS` (env, default 2s) to avoid hammering
+/// rusqlite. Returns zeros when no `OutcomeLog` is configured (so the
+/// dashboard renders gracefully in dev).
+async fn pnl_handler(
+    State(state): State<Arc<ApiState>>,
+) -> Json<executor::PnlSummary> {
+    let ttl_secs: u64 = std::env::var("PNL_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+
+    {
+        let cache = state.pnl_cache.read().await;
+        if cache.last_refresh.elapsed() < std::time::Duration::from_secs(ttl_secs) {
+            return Json(cache.cached.clone());
+        }
+    }
+
+    let log = match state.outcome_log.get() {
+        Some(l) => l.clone(),
+        None => {
+            return Json(executor::PnlSummary {
+                realized_usd_total: 0.0,
+                fills_total: 0,
+                last_24h_count: 0,
+                by_protocol: HashMap::new(),
+            });
+        }
+    };
+
+    let log_clone = log.clone();
+    let summary = tokio::task::spawn_blocking(move || log_clone.pnl_summary())
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or(executor::PnlSummary {
+            realized_usd_total: 0.0,
+            fills_total: 0,
+            last_24h_count: 0,
+            by_protocol: HashMap::new(),
+        });
+
+    {
+        let mut cache = state.pnl_cache.write().await;
+        cache.cached = summary.clone();
+        cache.last_refresh = std::time::Instant::now();
+    }
+
+    Json(summary)
 }

@@ -72,10 +72,10 @@ sol! {
 }
 
 /// Default Mayan Swift addresses by EVM chain id.
-/// Source: https://docs.mayan.finance — Swift contract is deployed at the
-/// same address on every supported EVM chain.
+/// Verified live: 0x337685fdab40d39bd02028545a4ffa7d287cc3e2 has bytecode on all chains.
+/// (0xC38d8a07D4d9E8BC1D32dF50D4b1eAEEbeAfdC1f was stale — no code exists there)
 pub fn default_mayan_swift_addresses() -> HashMap<u64, Address> {
-    let swift: Address = "0xC38d8a07D4d9E8BC1D32dF50D4b1eAEEbeAfdC1f"
+    let swift: Address = "0x337685fdab40d39bd02028545a4ffa7d287cc3e2"
         .parse()
         .expect("hardcoded Mayan Swift address");
     let mut m = HashMap::new();
@@ -364,7 +364,7 @@ mod tests {
             .expect("calldata builds for a complete fixture");
         assert_eq!(
             to,
-            "0xC38d8a07D4d9E8BC1D32dF50D4b1eAEEbeAfdC1f"
+            "0x337685fdab40d39bd02028545a4ffa7d287cc3e2"
                 .parse::<Address>()
                 .unwrap()
         );

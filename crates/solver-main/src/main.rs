@@ -52,7 +52,9 @@ const DEFAULT_API_PORT: u16 = 8082;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Build a SolverApi first so we can wire its log channel into tracing
+    // Build a SolverApi first so we can wire its log channel into tracing.
+    // We delay the .with_outcome_log() call until after OUTCOME_DB_PATH is
+    // resolved, but BEFORE we capture log_sender — see further down.
     let solver_api = SolverApi::new();
     let log_tx = solver_api.log_sender();
 
@@ -141,6 +143,21 @@ async fn main() -> Result<()> {
         Ok(l) => Some(l),
         Err(e) => { warn!("rule-skip log init failed: {} — rule skips won't be recorded", e); None }
     };
+
+    // Inject a second OutcomeLog handle (separate Connection) into SolverApi so
+    // the dashboard P&L endpoints can read fills from the same SQLite file.
+    // The two handles are independent rusqlite Connections — SQLite's WAL mode
+    // allows concurrent readers alongside the executor's write connection. The
+    // OnceLock lets this run after solver_api.router() is already built.
+    match OutcomeLog::open(&outcome_db_path, None) {
+        Ok(l) => {
+            solver_api.set_outcome_log(Arc::new(l));
+            info!("📊 Dashboard P&L endpoints wired to {}", outcome_db_path);
+        }
+        Err(e) => {
+            warn!("solver-api outcome handle failed: {} — /api/solver/{{outcomes,pnl}} will return empty", e);
+        }
+    }
 
     // ── Wallet manager (col-p2) — backs the Lambda controller's state machine
     // and exposes /api/wallet/{status,intents} on the solver-event API port.

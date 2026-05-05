@@ -40,7 +40,7 @@ pub use mayan_solana_estimate::{
     load_messiah_solana_pubkey_or_fallback, svm_to_parent, MayanSolanaEstimateAdapter,
     DEFAULT_SOLANA_RPC, FALLBACK_SOLANA_PAYER_PUBKEY,
 };
-pub use outcome_log::{OutcomeLog, OutcomeRecord};
+pub use outcome_log::{OutcomeLog, OutcomeRecord, PnlSummary, ProtocolPnl};
 pub use skip_rules::{RulePredicate, SkipRule, SkipRules};
 pub use spinner_solver::{SpinnerSolverClient, TestRunResult};
 
