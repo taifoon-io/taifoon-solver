@@ -1002,7 +1002,10 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
         recipient: receiver,
         tx_hash,
         give_amount: Some(give_amount),
-        take_amount: Some(take_amount),
+        take_amount: Some(take_amount.clone()),
+        // output_amount = take_amount in wei so the executor can attach msg.value
+        // for native-ETH fills (fulfillOrder requires msg.value == fulfillAmount when takeToken == 0x0).
+        output_amount: Some(take_amount),
         order_id: Some(order_id_hex),
         maker_order_nonce: Some(maker_nonce),
         dln_give_patch_authority_src: give_patch_authority_src,
@@ -1282,16 +1285,18 @@ pub struct MayanPoller {
     pub limit: usize,
 }
 
-/// Mayan internal chain ID → EVM chain ID
+/// Mayan internal chain ID → EVM chain ID.
+/// Mayan uses Wormhole chain IDs: ETH=2, BSC=4, Polygon=5, Avalanche=6,
+/// Arbitrum=23, Optimism=24, Base=30.
 fn mayan_chain_to_evm(mayan: &str) -> Option<u64> {
     match mayan {
         "2"  => Some(1),      // Ethereum
         "4"  => Some(56),     // BSC
         "5"  => Some(137),    // Polygon
         "6"  => Some(43114),  // Avalanche
-        "23" => Some(8453),   // Base
-        "30" => Some(42161),  // Arbitrum
-        "47" => Some(10),     // Optimism
+        "23" => Some(42161),  // Arbitrum
+        "24" => Some(10),     // Optimism
+        "30" => Some(8453),   // Base
         _    => None,
     }
 }
