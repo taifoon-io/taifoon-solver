@@ -30,7 +30,8 @@ echo "Mode: $([[ "$DRY_RUN" == "--dry-run" ]] && echo 'DRY-RUN (no broadcasts)' 
 echo ""
 
 # Protocol contract addresses
-DLN_DEST="0xE7351Fd770A37282b91D153Ee690B63579D6dd7f"  # deBridge DlnDestination (all chains)
+DLN_DEST="0xE7351Fd770A37282b91D153Ee690B63579D6dd7f"  # deBridge DlnDestination (all chains — fill side)
+DLN_SRC="0xeF4fB24aD0916217251F553c0596F8Edc630EB66"   # deBridge DlnSource (all chains — create side)
 
 declare -A SPOKE_POOLS=(
     [10]="0x6f26Bf09B1C792e3228e5467807a900A503c0281"    # Optimism
@@ -95,6 +96,13 @@ echo "=== deBridge DlnDestination approvals ==="
 for chain in 10 8453 42161; do
     usdc="${USDC_ADDRS[$chain]}"
     approve "$chain" "$usdc" "$DLN_DEST" "deBridge DlnDest"
+done
+
+echo ""
+echo "=== deBridge DlnSource approvals (create-order side) ==="
+for chain in 10 8453 42161; do
+    usdc="${USDC_ADDRS[$chain]}"
+    approve "$chain" "$usdc" "$DLN_SRC" "deBridge DlnSrc"
 done
 
 echo ""
