@@ -24,3 +24,8 @@ logs/
 
 # Config
 config/local.toml
+
+# Runtime state (SQLite DBs, outcome logs, scheduler lock)
+outcomes/
+*.sqlite
+.claude/scheduled_tasks.lock
