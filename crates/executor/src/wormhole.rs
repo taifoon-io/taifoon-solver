@@ -1,20 +1,25 @@
 //! Wormhole guardian VAA fetcher for Mayan Swift EVM fills.
 //!
-//! `fulfillOrder` requires a guardian-signed VAA (`encodedVm`) attesting the
-//! source-chain `OrderCreated` event. The VAA is emitted by the Mayan Swift
-//! Forwarder contract (`0xd78d199f8c402e7b5cc2abe278df0412400a3bae`) on the
-//! source chain — the same address on every supported EVM chain.
+//! ## VAA types in the Mayan Swift flow
 //!
-//! Payload layout (35 bytes):
-//!   [0]     = 0x05  (Mayan Swift message type)
-//!   [1..2]  = reserved / padding
-//!   [3..34] = 32-byte order hash (matches `mayan_order_id`)
+//! ### Source-chain Forwarder VAA (type 0x05, 35 bytes)
+//! Emitted by `0xd78d199f8c402e7b5cc2abe278df0412400a3bae` on the source EVM chain.
+//! Payload: `[0x05, reserved(2), order_hash(32)]`.
+//! This VAA notifies the Solana auction program that a new order exists.
+//! It is NOT the VAA passed to `fulfillOrder`.
 //!
-//! Lookup strategy: query wormholescan by emitter chain + emitter address,
-//! scan recent VAAs descending, and return the first one whose payload
-//! matches the target order hash.  This is ~4× faster than the old
-//! `?txHash=` approach (which indexed by the Wormhole bridge contract tx,
-//! NOT Mayan's user swap tx) and actually works.
+//! ### Auction result VAA (type 0x01, ~75 bytes) — required for `fulfillOrder`
+//! Emitted by Mayan's private guardian on Wormhole chain 42069, emitter `0x4155`.
+//! Payload: `[0x01, order_hash(32), fulfill_amount(8), padding(9)]`.
+//! This VAA is issued by Mayan's private auction infrastructure after a ~3s
+//! Solana auction. Solvers must be registered with Mayan to participate in the
+//! auction and receive this VAA. Chain 42069 is NOT indexed on public wormholescan.
+//!
+//! ## Current state
+//! This fetcher queries public wormholescan for the source-chain Forwarder VAA
+//! (type 0x05) as a best-effort path. For production fills the auction VAA
+//! (type 0x01 from chain 42069) is required and must come from Mayan's solver
+//! registration infrastructure.
 
 use tracing::{info, warn};
 

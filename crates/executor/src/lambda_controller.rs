@@ -48,6 +48,7 @@ use crate::spinner_solver::SpinnerSolverClient;
 use protocol_adapters::debridge::DeBridgeAdapter;
 use protocol_adapters::{ProtocolAdapter, SpinnerClient};
 use protocol_adapters_solana::{MayanSolanaIntent, SolanaBroadcaster};
+use crate::wormhole::fetch_vaa_for_mayan_order;
 
 /// Outcome of a `lambda_execute` run, mirrored back to the solver event API.
 #[derive(Debug, Clone)]
@@ -513,18 +514,35 @@ impl LambdaController {
             }
         }
         // Mayan Swift EVM fills (EVM source → EVM destination):
-        // The `fulfillOrder` call requires a VAA from Mayan's private auction chain
-        // (Wormhole chain 42069, emitter 0x4155). This VAA is issued by Mayan's
-        // auction authority only to the winning solver after a 3-second Solana auction.
+        // The `fulfillOrder` call requires a Wormhole VAA emitted by the Mayan Forwarder
+        // contract on the source chain. We fetch it from wormholescan by scanning the
+        // forwarder's recent VAAs for one whose payload encodes the target order hash.
         // Solana-sourced orders are handled above by the Solana broadcaster path.
-        // EVM→EVM fills need the auction win; skip them until the auction participation
-        // path is implemented.
         let mayan_vaa: Option<Vec<u8>> = if is_mayan && !is_solana_src {
-            let reason = "mayan_evm_needs_auction_vaa";
-            info!("⏭️  {} — {}", intent.id, reason);
-            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-            let _ = self.wallet.release(&intent.id);
-            return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+            let order_hash = match intent.mayan_order_id.as_deref() {
+                Some(h) => h.to_string(),
+                None => {
+                    let reason = "mayan_evm_missing_order_id";
+                    info!("⏭️  {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+                }
+            };
+            info!("🔍 Fetching Wormhole VAA for Mayan EVM order {} (src_chain={})", order_hash, intent.src_chain);
+            match fetch_vaa_for_mayan_order(intent.src_chain, &order_hash).await {
+                Some(vaa) => {
+                    info!("✅ Got Mayan VAA ({} bytes) for {}", vaa.len(), intent.id);
+                    Some(vaa)
+                }
+                None => {
+                    let reason = "mayan_vaa_not_found";
+                    info!("⏭️  {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+                }
+            }
         } else {
             None
         };

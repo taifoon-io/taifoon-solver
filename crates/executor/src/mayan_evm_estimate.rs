@@ -36,51 +36,90 @@ use crate::estimate::{
 use crate::evm_estimate::run_evm_estimate;
 
 sol! {
-    /// Mayan Swift v2 destination interface.
+    /// Mayan Swift Forwarder interface — deployed at 0xd78d199f8c402e7b5cc2abe278df0412400a3bae
+    /// on all supported EVM chains. Solvers call fulfillOrder (for auctionMode=2 orders
+    /// with an auction VAA from Mayan's private chain 42069/0x4155) or fulfillSimple
+    /// (for auctionMode=0 orders, no VAA needed).
     ///
-    /// `OrderParams` matches the on-chain `Order` struct field-for-field. We
-    /// only build the `fulfillOrder` call; the `Settle` event is captured for
-    /// reference — solvers monitor it post-fill.
-    interface MayanSwift {
+    /// Verified selector: fulfillOrder = 0x19535a54
+    ///
+    /// Struct layout verified from live fill tx on Base
+    /// (0x86cd20148f63360c151b2c5ea4fe2ab89ac19a2451959ea039d18ddddb7aec75).
+    interface MayanForwarder {
         struct OrderParams {
+            uint8 payloadType;
             bytes32 trader;
-            uint16 srcChainId;
-            bytes32 tokenIn;
-            uint64 amountIn;
             bytes32 destAddr;
             uint16 destChainId;
+            bytes32 referrerAddr;
             bytes32 tokenOut;
             uint64 minAmountOut;
             uint64 gasDrop;
             uint64 cancelFee;
             uint64 refundFee;
             uint64 deadline;
+            uint8 referrerBps;
             uint8 auctionMode;
             bytes32 random;
         }
 
-        /// Solver-side fulfill call. The encoded VAA is the Wormhole guardian
-        /// signature attesting to the source-side `OrderCreated` event.
+        struct ExtraParams {
+            uint16 srcChainId;
+            bytes32 tokenIn;
+            uint8 protocolBps;
+            bytes32 customPayloadHash;
+        }
+
+        struct UnlockParams {
+            bytes32 recipient;
+            bytes32 driver;
+            bool batch;
+        }
+
+        struct PermitParams {
+            uint256 value;
+            uint256 deadline;
+            uint8 v;
+            bytes32 r;
+            bytes32 s;
+        }
+
+        /// Fill an auctionMode=2 order. Requires an auction VAA from Mayan's
+        /// private chain (Wormhole chain 42069, emitter 0x4155).
+        /// Selector: 0x19535a54
         function fulfillOrder(
-            bytes32 orderHash,
             uint256 fulfillAmount,
             bytes encodedVm,
             OrderParams params,
-            address recipient
-        ) external payable returns (uint64 sequence);
+            ExtraParams extraParams,
+            UnlockParams unlockParams,
+            PermitParams permit
+        ) external payable returns (bytes memory);
+
+        /// Fill an auctionMode=0 order directly without an auction VAA.
+        /// Selector: 0x899c62b1
+        function fulfillSimple(
+            uint256 fulfillAmount,
+            bytes32 orderHash,
+            OrderParams params,
+            ExtraParams extraParams,
+            UnlockParams unlockParams,
+            PermitParams permit
+        ) external payable;
     }
 }
 
-/// Default Mayan Swift addresses by EVM chain id.
-/// Verified live: 0x337685fdab40d39bd02028545a4ffa7d287cc3e2 has bytecode on all chains.
-/// (0xC38d8a07D4d9E8BC1D32dF50D4b1eAEEbeAfdC1f was stale — no code exists there)
+/// Default Mayan Swift Forwarder addresses by EVM chain id.
+/// The Forwarder (`0xd78d199f8c402e7b5cc2abe278df0412400a3bae`) is the same address
+/// on all supported chains. Solvers call `fulfillOrder` / `fulfillSimple` on it.
+/// (0x337685fdab40d39bd02028545a4ffa7d287cc3e2 was a different contract — token router)
 pub fn default_mayan_swift_addresses() -> HashMap<u64, Address> {
-    let swift: Address = "0x337685fdab40d39bd02028545a4ffa7d287cc3e2"
+    let forwarder: Address = "0xd78d199f8c402e7b5cc2abe278df0412400a3bae"
         .parse()
-        .expect("hardcoded Mayan Swift address");
+        .expect("hardcoded Mayan Swift Forwarder address");
     let mut m = HashMap::new();
     for chain in [1u64, 10, 56, 137, 8453, 42161, 43114] {
-        m.insert(chain, swift);
+        m.insert(chain, forwarder);
     }
     m
 }
@@ -115,10 +154,11 @@ impl MayanEvmEstimateAdapter {
             .get(&intent.dst_chain)
             .ok_or_else(|| anyhow::anyhow!("no Mayan Swift on chain {}", intent.dst_chain))?;
 
+        // Validate order_id exists (required for production fills; used to match the auction VAA).
         let order_id = intent.mayan_order_id.as_deref().ok_or_else(|| {
             anyhow::anyhow!("Mayan estimate requires intent.mayan_order_id (not present)")
         })?;
-        let order_hash = parse_bytes32(order_id)?;
+        let _order_hash = parse_bytes32(order_id)?;
 
         let fulfill_amount = {
             let s = intent.output_amount.as_deref().unwrap_or(&intent.amount);
@@ -182,41 +222,76 @@ impl MayanEvmEstimateAdapter {
                 + 3600
         });
 
-        let params = MayanSwift::OrderParams {
+        // OrderParams layout (verified from live fill tx on Base):
+        // payloadType=1 (EVM order), trader (bytes32), destAddr (bytes32), destChainId (Wormhole),
+        // referrerAddr (bytes32 zero), tokenOut (bytes32), minAmountOut, gasDrop, cancelFee,
+        // refundFee, deadline, referrerBps=0, auctionMode=2, random (bytes32 zero for synthetic)
+        let params = MayanForwarder::OrderParams {
+            payloadType: 1,  // 1 = EVM order, 2 = Solana order
             trader,
-            srcChainId: src_chain_wh,
-            tokenIn: token_in,
-            amountIn: amount_in,
             destAddr: dest_addr,
             destChainId: dst_chain_wh,
+            referrerAddr: FixedBytes::ZERO,  // no referrer
             tokenOut: token_out,
             minAmountOut: min_amount_out,
             gasDrop: 0,
             cancelFee: 0,
             refundFee: 0,
             deadline,
+            referrerBps: 0,
             auctionMode: 2,
-            // The random field is a deterministic 32-byte salt the source-side
-            // emitted; we pass zero here because the synthetic fixture doesn't
-            // carry it. (A real captured event would have the value.)
+            // random is a 32-byte salt included in the order hash. For synthetic estimates
+            // we use zero; a real fill requires the actual value from the order creation event.
             random: FixedBytes::ZERO,
         };
 
-        // The encoded Wormhole VAA. When a real VAA is available (live fills),
-        // pass it as `vaa`. For synthetic estimates, None → empty bytes → the
-        // contract reverts at VAA verification, surfaces as a synthetic-fixture
-        // revert with empty data (acceptable for calldata-shape validation).
+        // ExtraParams carries the source-chain token + protocol fee bps.
+        let extra_params = MayanForwarder::ExtraParams {
+            srcChainId: src_chain_wh,
+            tokenIn: token_in,
+            protocolBps: 3,  // Mayan's protocol fee is 3 bps
+            customPayloadHash: FixedBytes::ZERO,
+        };
+
+        // UnlockParams: where to send the unlock (claimback) on the source chain.
+        // For synthetic estimates use zero; real fills use the solver's address.
+        let solver_bytes32 = {
+            let addr_bytes = self.messiah_address.as_slice();
+            let mut arr = [0u8; 32];
+            arr[12..].copy_from_slice(addr_bytes);
+            FixedBytes(arr)
+        };
+        let unlock_params = MayanForwarder::UnlockParams {
+            recipient: solver_bytes32,
+            driver: solver_bytes32,
+            batch: false,
+        };
+
+        // PermitParams: zero for native ETH or when no ERC-20 permit is needed.
+        let permit = MayanForwarder::PermitParams {
+            value: U256::ZERO,
+            deadline: U256::ZERO,
+            v: 0,
+            r: FixedBytes::ZERO,
+            s: FixedBytes::ZERO,
+        };
+
+        // The encoded Wormhole VAA. When a real auction VAA is available (live fills,
+        // from Mayan's private chain 42069/emitter 0x4155), pass it as `vaa`.
+        // For synthetic estimates, None → empty bytes → the contract reverts at VAA
+        // verification (acceptable for calldata-shape validation).
         let encoded_vm = match vaa {
             Some(bytes) => Bytes::from(bytes.to_vec()),
             None => Bytes::new(),
         };
 
-        let call = MayanSwift::fulfillOrderCall {
-            orderHash: order_hash,
+        let call = MayanForwarder::fulfillOrderCall {
             fulfillAmount: fulfill_amount,
             encodedVm: encoded_vm,
             params,
-            recipient: intent.recipient.parse()?,
+            extraParams: extra_params,
+            unlockParams: unlock_params,
+            permit,
         };
 
         Ok((swift, call.abi_encode()))
@@ -364,14 +439,15 @@ mod tests {
             .expect("calldata builds for a complete fixture");
         assert_eq!(
             to,
-            "0x337685fdab40d39bd02028545a4ffa7d287cc3e2"
+            "0xd78d199f8c402e7b5cc2abe278df0412400a3bae"
                 .parse::<Address>()
                 .unwrap()
         );
         // Selector is the first 4 bytes; assert it matches `fulfillOrder` exactly.
+        // Verified selector: 0x19535a54 from live on-chain fills.
         let selector = &calldata[..4];
-        let expected_sel = MayanSwift::fulfillOrderCall::SELECTOR;
-        assert_eq!(selector, expected_sel, "selector must match fulfillOrder");
+        let expected_sel = MayanForwarder::fulfillOrderCall::SELECTOR;
+        assert_eq!(selector, expected_sel, "selector must match fulfillOrder (0x19535a54)");
         // Calldata must be at least selector + tuple — empirically ~700 bytes.
         assert!(calldata.len() > 100, "calldata suspiciously small");
     }
