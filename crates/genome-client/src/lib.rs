@@ -698,13 +698,13 @@ impl DeBridgePoller {
         };
         Self {
             chains: vec![
-                (42161,  rpc(42161,  "https://arbitrum-mainnet.infura.io/v3/9e09ec06e2fd43778f9fd52eb0265d75")),
-                (8453,   rpc(8453,   "https://base-mainnet.infura.io/v3/6c90d1c7ee4e4ff08ea67114a81c9ae0")),
-                (10,     rpc(10,     "https://optimism-mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410")),
-                (137,    rpc(137,    "https://polygon-mainnet.infura.io/v3/b541434d35ca4478b9c63f95fc79eeab")),
-                (56,     rpc(56,     "https://bsc-mainnet.infura.io/v3/51022b81bc7e4030895fd39e5f80abbe")),
+                (42161,  rpc(42161,  "https://arb1.arbitrum.io/rpc")),
+                (8453,   rpc(8453,   "https://mainnet.base.org")),
+                (10,     rpc(10,     "https://mainnet.optimism.io")),
+                (137,    rpc(137,    "https://polygon-rpc.com")),
+                (56,     rpc(56,     "https://bsc-dataseed.binance.org")),
                 (59144,  "https://rpc.linea.build".into()),
-                (1,      rpc(1,      "https://mainnet.infura.io/v3/06e7773baa7a469e9bf7ae79cd102410")),
+                (1,      rpc(1,      "https://eth.llamarpc.com")),
                 (534352, "https://rpc.scroll.io".into()),
                 (57073,  "https://rpc-gel.inkonchain.com".into()),
                 (34443,  "https://mainnet.mode.network".into()),

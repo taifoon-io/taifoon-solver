@@ -60,6 +60,7 @@ sol! {
             uint256 giveChainId;
             bytes giveTokenAddress;
             uint256 giveAmount;
+            uint256 takeChainId;
             bytes takeTokenAddress;
             uint256 takeAmount;
             bytes receiverDst;
@@ -157,6 +158,7 @@ impl DeBridgeAdapter {
             giveChainId: U256::from(intent.src_chain),
             giveTokenAddress: self.address_to_bytes(&intent.src_token)?,
             giveAmount: give_amount,
+            takeChainId: U256::from(intent.dst_chain),
             takeTokenAddress: self.address_to_bytes(&intent.dst_token)?,
             takeAmount: take_amount,
             receiverDst: self.address_to_bytes(&intent.recipient)?,
