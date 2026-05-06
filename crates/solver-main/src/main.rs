@@ -4,7 +4,7 @@ use executor::{
     build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
     LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
-use genome_client::{DeBridgePoller, GenomeClient, Intent};
+use genome_client::{AcrossPoller, DeBridgePoller, GenomeClient, Intent};
 use portfolio_sidecar::PortfolioSidecar;
 use profit_calc::ProfitCalculator;
 use protocol_adapters::AdapterFactory;
@@ -290,18 +290,17 @@ async fn main() -> Result<()> {
     // kept only for block/gas signals — all fillable intents come from the pollers.
     let genome_client = GenomeClient::new(&genome_sse_url);
     let (intent_tx, mut intent_rx) = mpsc::channel(100);
-    // AcrossPoller disabled — Across fills suspended pending repayment economics audit.
-    // Re-enable by passing vec![AcrossPoller::default_mainnet()] below.
     let debridge_poller = DeBridgePoller::default_mainnet();
+    let across_poller = AcrossPoller::default_mainnet();
     let _genome_handle = tokio::spawn(async move {
         if let Err(e) = genome_client
-            .subscribe_with_all_pollers(intent_tx, vec![], Some(debridge_poller))
+            .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
             .await
         {
             error!("Genome stream error: {}", e);
         }
     });
-    info!("✅ Genome SSE + deBridge on-chain + Mayan pollers started (Across DISABLED)");
+    info!("✅ Genome SSE + deBridge on-chain + Across + Mayan pollers started");
     info!("⏳ Waiting for intents...");
 
     // Dedup: track intent IDs we've already dispatched in this session.
