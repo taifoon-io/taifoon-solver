@@ -254,7 +254,7 @@ function Stat({
 
 function pillClass(decision: string): string {
   const base = 'inline-block rounded-full px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide'
-  if (decision === 'confirmed' || decision === 'execute') return `${base} bg-emerald-900/40 text-emerald-300`
+  if (decision === 'confirmed' || decision === 'execute' || decision === 'executed') return `${base} bg-emerald-900/40 text-emerald-300`
   if (decision === 'reverted') return `${base} bg-rose-900/40 text-rose-300`
   if (decision === 'dry_run') return `${base} bg-sky-900/40 text-sky-300`
   if (decision.startsWith('skip')) return `${base} bg-neutral-800 text-neutral-400`

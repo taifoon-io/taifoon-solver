@@ -204,7 +204,7 @@ impl OutcomeLog {
         let (total_realized, total_fills, last_24h_count): (f64, i64, i64) = conn.query_row(
             "SELECT
                 COALESCE(SUM(CASE WHEN actual_profit_usd IS NOT NULL THEN actual_profit_usd ELSE 0.0 END), 0.0),
-                COALESCE(SUM(CASE WHEN decision IN ('confirmed', 'execute') THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN decision IN ('confirmed', 'execute', 'executed') THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN ts >= datetime('now', '-1 day') THEN 1 ELSE 0 END), 0)
              FROM solver_outcomes",
             [],
