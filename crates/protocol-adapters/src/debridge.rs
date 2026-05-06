@@ -109,21 +109,25 @@ impl DeBridgeAdapter {
     pub fn new(spinner_client: SpinnerClient) -> Self {
         let mut dln_addresses = std::collections::HashMap::new();
 
-        // deBridge DLN addresses (same for source and destination)
-        let dln_addr: Address = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66".parse().unwrap();
+        // deBridge DLN Source address (same on all chains — creates orders, claims unlocks)
+        let dln_src: Address = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66".parse().unwrap();
+        // deBridge DLN Destination address (same on all chains — fulfills orders)
+        // Different from DlnSource! Use this as the `to` address for fulfillOrder calls.
+        let dln_dst: Address = "0xE7351Fd770A37282b91D153Ee690B63579D6dd7f".parse().unwrap();
+        let _ = dln_src; // kept for claimUnlock / dln_source_address()
 
-        dln_addresses.insert(1, dln_addr);       // Ethereum
-        dln_addresses.insert(10, dln_addr);      // Optimism
-        dln_addresses.insert(42161, dln_addr);   // Arbitrum
-        dln_addresses.insert(8453, dln_addr);    // Base
-        dln_addresses.insert(56, dln_addr);      // BSC
-        dln_addresses.insert(43114, dln_addr);   // Avalanche
-        dln_addresses.insert(59144, dln_addr);   // Linea
-        dln_addresses.insert(137, dln_addr);     // Polygon
-        dln_addresses.insert(534352, dln_addr);  // Scroll
-        dln_addresses.insert(57073, dln_addr);   // Ink
-        dln_addresses.insert(34443, dln_addr);   // Mode
-        dln_addresses.insert(100, dln_addr);     // Gnosis
+        dln_addresses.insert(1, dln_dst);       // Ethereum
+        dln_addresses.insert(10, dln_dst);      // Optimism
+        dln_addresses.insert(42161, dln_dst);   // Arbitrum
+        dln_addresses.insert(8453, dln_dst);    // Base
+        dln_addresses.insert(56, dln_dst);      // BSC
+        dln_addresses.insert(43114, dln_dst);   // Avalanche
+        dln_addresses.insert(59144, dln_dst);   // Linea
+        dln_addresses.insert(137, dln_dst);     // Polygon
+        dln_addresses.insert(534352, dln_dst);  // Scroll
+        dln_addresses.insert(57073, dln_dst);   // Ink
+        dln_addresses.insert(34443, dln_dst);   // Mode
+        dln_addresses.insert(100, dln_dst);     // Gnosis
 
         Self {
             spinner_client,
@@ -341,8 +345,8 @@ impl DeBridgeAdapter {
         Ok(call.abi_encode())
     }
 
-    /// Address of DlnSource on the given source chain (same contract handles both sides).
-    pub fn dln_source_address(&self, src_chain: u64) -> Option<Address> {
-        self.dln_addresses.get(&src_chain).copied()
+    /// Address of DlnSource on the given chain (for claimUnlock / order creation polling).
+    pub fn dln_source_address(&self, _src_chain: u64) -> Option<Address> {
+        Some("0xeF4fB24aD0916217251F553c0596F8Edc630EB66".parse().unwrap())
     }
 }

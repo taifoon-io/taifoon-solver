@@ -27,8 +27,9 @@ use crate::estimate::{
 
 use protocol_adapters::{DeBridgeAdapter, SpinnerClient};
 
-/// Default deBridge DLN destination address (same on every supported chain).
-pub const DEBRIDGE_DLN_DESTINATION: &str = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66";
+/// DlnDestination contract address — where solvers call fulfillOrder (same on all chains).
+/// Different from DlnSource (0xeF4fB24...) which is for order creation / claimUnlock.
+pub const DEBRIDGE_DLN_DESTINATION: &str = "0xE7351Fd770A37282b91D153Ee690B63579D6dd7f";
 
 /// Default Across SpokePool addresses, keyed by destination chain id.
 /// Must stay in sync with chain_wiring.json across_adapter entries.

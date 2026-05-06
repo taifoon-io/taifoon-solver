@@ -644,9 +644,10 @@ impl LambdaController {
                 eth_fill_value.map(|v| format!(", value={v}wei")).unwrap_or_default());
             (swift_addr, calldata)
         } else if is_debridge {
-            // deBridge DLN path: fulfillOrder() on DlnDestination (same address all chains).
+            // deBridge DLN path: fulfillOrder() on DlnDestination (0xE7351Fd770... all chains).
             let adapter = DeBridgeAdapter::new(SpinnerClient::new(self.spinner.base_url()));
-            let dln_addr = match adapter.dln_source_address(intent.dst_chain) {
+            // Use the standalone DlnDestination address (0xE7351Fd770... on all chains)
+            let dln_addr = match dln_destination_address(intent.dst_chain) {
                 Some(a) => a,
                 None => {
                     let err = format!("no DlnDestination address for chain {}", intent.dst_chain);
@@ -1183,6 +1184,14 @@ impl LambdaController {
             Err(e) => warn!("⚠️  genome feedback http build: {e}"),
         }
     }
+}
+
+/// Returns the DlnDestination contract address for the given chain.
+/// DlnDestination (0xE7351Fd770...) is separate from DlnSource (0xeF4fB24...).
+pub fn dln_destination_address(chain_id: u64) -> Option<alloy::primitives::Address> {
+    let addr: alloy::primitives::Address = "0xE7351Fd770A37282b91D153Ee690B63579D6dd7f".parse().ok()?;
+    let supported = [1u64, 10, 56, 137, 42161, 8453, 43114, 59144, 534352, 57073, 34443, 100];
+    if supported.contains(&chain_id) { Some(addr) } else { None }
 }
 
 /// Best-effort USD valuation for the `Intent.amount` raw token units. The
