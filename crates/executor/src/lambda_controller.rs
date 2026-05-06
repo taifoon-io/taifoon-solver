@@ -297,6 +297,50 @@ impl LambdaController {
             }
         }
 
+        // ERC-20 balance pre-check for deBridge fills.
+        // fulfillOrder requires the solver to have >= take_amount of the take token on dst chain.
+        if is_debridge_pre {
+            let take_token = intent.dst_token.trim().to_lowercase();
+            let is_erc20 = !take_token.is_empty()
+                && take_token != "native"
+                && take_token != "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                && take_token != "0x0000000000000000000000000000000000000000";
+            if is_erc20 {
+                if let Some(required) = intent.take_amount.as_deref()
+                    .and_then(|s| s.parse::<u128>().ok())
+                    .filter(|&v| v > 0)
+                {
+                    if let Ok(token_addr) = take_token.parse::<alloy::primitives::Address>() {
+                        let rpc_url_opt = crate::evm_estimate::resolve_rpc_url(wiring.chain_id);
+                        if let Some(rpc_url) = rpc_url_opt {
+                            if let Ok(parsed) = rpc_url.parse() {
+                                use alloy::providers::{Provider, ProviderBuilder};
+                                let provider = ProviderBuilder::new().on_http(parsed);
+                                let mut call_data = [0u8; 36];
+                                call_data[0..4].copy_from_slice(&[0x70, 0xa0, 0x82, 0x31]);
+                                call_data[16..36].copy_from_slice(self.signer.address().as_slice());
+                                let tx = alloy::rpc::types::TransactionRequest::default()
+                                    .to(token_addr)
+                                    .input(alloy::primitives::Bytes::from(call_data.to_vec()).into());
+                                if let Ok(result) = provider.call(&tx).await {
+                                    let bal = if result.len() >= 32 {
+                                        u128::from_be_bytes(result[16..32].try_into().unwrap_or([0u8; 16]))
+                                    } else { 0u128 };
+                                    if bal < required {
+                                        let reason = format!("debridge_erc20_insufficient:have={}<need={}", bal, required);
+                                        info!("⏭️  {} — {}", intent.id, reason);
+                                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                                        let _ = self.wallet.release(&intent.id);
+                                        return Ok(LambdaExecuteOutcome::Skipped { reason });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 4. PROOF_FETCH — skipped for direct-fill chains (operator==0x0) and for
         // deBridge/Mayan which submit directly to their own contracts (no Taifoon proof).
         let proof_bytes: Vec<u8> = if bypass_spinner {
