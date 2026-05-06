@@ -36,7 +36,7 @@ import time
 import urllib.request
 
 FIXED_FEE_WEI = 1_000_000_000_000_000   # 0.001 ETH fixed protocol fee
-GIVE_AMOUNT_RAW = 200_000                # 0.20 USDC (6 decimals) — small enough to fill with Optimism $0.22
+GIVE_AMOUNT_RAW = 500_000                # 0.50 USDC (6 decimals) — deBridge API minimum; take ≈ $0.2154 USDC
 DLN_SOURCE = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66"   # same on all chains
 
 # Chain configs: chain_id → (name, rpc, usdc_addr, has_usdc_for_fill)
