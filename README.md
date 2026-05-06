@@ -1,5 +1,32 @@
 # Taifoon Solver
 
+## Hackathon Submission
+
+### What are we building, and who is it for?
+
+Taifoon is a cross-chain intent solver — a bot that monitors live bridging intent streams and fills user orders on-chain across EVM chains and Solana, earning the spread as profit. It is built for the competitive solver/filler market created by intent-based bridge protocols (Across, deBridge, LiFi, Mayan). The end users are people bridging assets cross-chain; the direct customer is the operator running the solver to capture MEV-adjacent arbitrage on bridging spreads.
+
+### Why did we decide to build this, and why build it now?
+
+Intent-based bridging is the dominant UX paradigm for cross-chain today — Across, deBridge, and LiFi have collectively moved billions in volume through solver-filled orders. The solver market is still thin: most fills come from a handful of large market makers with custom infrastructure. Taifoon is an attempt to build an open, multi-protocol solver that any operator can run against mainnet with a funded wallet. We built it now because EVM↔Solana intent flow is just opening up through Mayan Swift — that bidirectional path is new, underserved, and gives a technically differentiated story beyond pure EVM arbitrage.
+
+### What technologies are we using?
+
+- **Rust** (async/tokio) — core solver runtime, all protocol adapters, outcome logging
+- **Across V3 Protocol** — `SpokePool.fillV3Relay` direct fills on Base and Arbitrum
+- **deBridge DLN** — `DlnDestination.fulfillOrder` on Arbitrum/Base
+- **LiFi** — meta-aggregator integration; resolver maps LiFi events to underlying bridge contracts
+- **Mayan Swift** — Solana-side fills via raw Solana JSON-RPC, ed25519 signing, VAA fetch with retry
+- **Helius** — Solana mainnet RPC
+- **SQLite (rusqlite)** — outcome log: every fill recorded with tx hash, spread, realized P&L
+- **Next.js / TypeScript** — live P&L dashboard
+- **Claude Code (Anthropic)** — used as an autonomous coding + review agent loop to deliver phases end-to-end; the entire delivery pipeline (code, review, gate verification) was driven by Claude agents operating on phase-scoped prompts
+- **NVIDIA Nemotron (Taifoon Intel LLM)** — the end-goal intelligence layer: an LLM fine-tuned on cross-chain market data and solver outcomes that autonomously manages the solver — selecting protocols, sizing fills, adjusting spread thresholds, and responding to on-chain conditions in real time without human intervention
+
+**Category:** DeFi / Cross-Chain Infrastructure
+
+---
+
 **Production-ready cross-chain intent solver with T3RN LiquidityWellCompact integration**
 
 A high-performance Rust-based solver that monitors 31+ bridge protocols across 38+ chains, calculates profitability in real-time, and executes profitable fills using a multi-tier liquidity waterfall.
