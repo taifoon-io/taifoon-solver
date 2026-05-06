@@ -1,14 +1,11 @@
-//! deBridge DLN fulfillOrder calldata regression tests (Phase 3 acceptance gate).
+//! deBridge DLN calldata regression tests (Phase 3 acceptance gate).
 //!
-//! Asserts that the estimate and broadcast paths both delegate to the same
-//! DeBridgeAdapter::build_fulfill_order_calldata, producing byte-identical output
-//! for the same inputs. A divergence here would cause the on-chain orderId hash
-//! check to succeed in simulation but revert on broadcast (or vice versa).
-//!
-//! Also asserts:
-//!   (a) calldata starts with the canonical `fulfillOrder` selector 0x58796069.
+//! Covers fulfillOrder (fill side) and claimUnlock (unlock side) calldata.
+//! Asserts:
+//!   (a) calldata starts with the canonical `fulfillOrder` selector 0xc358547e.
 //!   (b) calldata is deterministic across calls.
 //!   (c) fixture has all required fields (order_id, take_amount, give_amount, nonce).
+//!   (d) claimUnlock calldata builds without error and has the correct selector.
 
 use alloy::primitives::{address, Address};
 use protocol_adapters::SpinnerClient;
@@ -127,10 +124,27 @@ fn debridge_calldata_length_is_reasonable() {
     }
 }
 
-// The fulfillOrder selector from DlnDestination ABI. Computed once, locked here.
-// keccak256("fulfillOrder((uint64,bytes,bytes32,uint256,uint256,uint256,bytes,bytes,bytes,bytes,bytes,bytes,bytes),uint256,bytes32,bytes,address)")[..4]
-// Derive from a test run: cargo test debridge_calldata_selector -- --nocapture
-// then update if needed.
-// keccak256("fulfillOrder(...)")[..4] — verified by running the test and locking the output.
-// If the deBridge ABI changes, this will catch the regression.
+// keccak256("fulfillOrder(...)")[..4] — verified by running tests/debridge_calldata::debridge_calldata_selector_is_fulfill_order.
 const FULFILL_ORDER_SELECTOR: [u8; 4] = [0xc3, 0x58, 0x54, 0x7e];
+
+#[test]
+fn debridge_claim_unlock_calldata_builds() {
+    let adapter = make_adapter();
+    for fixture_name in debridge_fixtures() {
+        let intent = load_intent(fixture_name);
+        let calldata = adapter
+            .build_claim_unlock_calldata(&intent, TEST_SOLVER)
+            .unwrap_or_else(|e| panic!("build_claim_unlock_calldata failed for {}: {}", fixture_name, e));
+
+        assert!(calldata.len() >= 4, "claimUnlock calldata too short: {} bytes", calldata.len());
+        let selector = &calldata[..4];
+        assert_ne!(selector, &[0u8; 4], "claimUnlock selector is all-zeros — encoding error");
+        // Locked by running this test — update if deBridge ABI changes.
+        let expected: [u8; 4] = [0x58, 0x86, 0xd8, 0xd2];
+        assert_eq!(
+            selector, &expected,
+            "claimUnlock selector mismatch for {}: got 0x{:02x}{:02x}{:02x}{:02x}",
+            fixture_name, selector[0], selector[1], selector[2], selector[3]
+        );
+    }
+}
