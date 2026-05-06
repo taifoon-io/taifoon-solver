@@ -55,6 +55,27 @@ if [[ -z "${SOLANA_PRIVATE_KEY:-}" ]]; then
     fi
 fi
 
+# --- Derive SOLANA_ADDRESS from the keypair (extract pubkey = last 32 bytes of 64-byte keypair) ---
+if [[ -z "${SOLANA_ADDRESS:-}" && -n "$SOLANA_PRIVATE_KEY" ]]; then
+    KEYFILE_TMP=$(mktemp /tmp/sol_kp_XXXXXX.json)
+    python3 -c "
+import sys
+ALPHA='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+k='$SOLANA_PRIVATE_KEY'.strip()
+n=0
+for c in k: n=n*58+ALPHA.index(c)
+nb=(n.bit_length()+7)//8
+raw=n.to_bytes(max(nb,1),'big')
+if len(raw)==64: print('['+','.join(str(b) for b in raw)+']')
+" > "$KEYFILE_TMP" 2>/dev/null
+    if [[ -s "$KEYFILE_TMP" ]]; then
+        SOLANA_ADDRESS=$(solana-keygen pubkey "$KEYFILE_TMP" 2>/dev/null || true)
+    fi
+    rm -f "$KEYFILE_TMP"
+fi
+# Fallback to the known solver Solana address
+SOLANA_ADDRESS="${SOLANA_ADDRESS:-DUDgHSeM1KU9W8WyiMpEP7HtQKY22fRmpjxKViLEBQQF}"
+
 # --- Resolve solver EVM address (informational; cast is optional) ---
 ADDR=""
 if command -v cast >/dev/null 2>&1; then
@@ -66,6 +87,7 @@ echo "==================== Taifoon Solver — MAINNET ===================="
 echo " Mode:           $([[ "$DRY_RUN" == "true" ]] && echo 'DRY-RUN (no broadcasts)' || echo 'LIVE — WILL BROADCAST')"
 echo " Solver (EVM):   ${ADDR:-<install foundry to decode>}"
 echo " Solana key:     $([[ -n "$SOLANA_PRIVATE_KEY" ]] && echo 'loaded' || echo 'MISSING — Solana fills will skip')"
+echo " Solana address: ${SOLANA_ADDRESS:-not set}"
 echo " Max notional:   \$$MAX_NOTIONAL_USD per fill"
 echo " Min profit:     \$$MIN_PROFIT_USD per fill"
 echo " Protocols:      $PROTOCOL_FILTER"
@@ -115,6 +137,7 @@ fi
 exec env \
     SOLVER_PRIVATE_KEY="$SOLVER_PRIVATE_KEY" \
     SOLANA_PRIVATE_KEY="$SOLANA_PRIVATE_KEY" \
+    SOLANA_ADDRESS="$SOLANA_ADDRESS" \
     DRY_RUN="$DRY_RUN" \
     SIMULATION_MODE="$SIMULATION_MODE" \
     MAX_NOTIONAL_USD="$MAX_NOTIONAL_USD" \

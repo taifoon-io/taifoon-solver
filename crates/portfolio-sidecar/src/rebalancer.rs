@@ -97,6 +97,27 @@ sol! {
     }
 }
 
+sol! {
+    interface WETH {
+        function withdraw(uint256 wad) external;
+        function deposit() external payable;
+    }
+    interface UniswapSwapRouter {
+        struct ExactInputSingleParams {
+            address tokenIn;
+            address tokenOut;
+            uint24 fee;
+            address recipient;
+            uint256 amountIn;
+            uint256 amountOutMinimum;
+            uint160 sqrtPriceLimitX96;
+        }
+        function exactInputSingle(ExactInputSingleParams params) external payable returns (uint256 amountOut);
+        function unwrapWETH9(uint256 amountMinimum, address recipient) external payable;
+        function multicall(bytes[] calldata data) external payable returns (bytes[] memory results);
+    }
+}
+
 /// Spoke pool addresses per chain (Across V3).
 fn spoke_pool(chain_id: u64) -> Option<Address> {
     use std::str::FromStr;
@@ -125,6 +146,14 @@ fn rpc_for(chain_id: u64) -> &'static str {
 
 const GAS_TOPUP_USD: f64 = 4.0;
 const MIN_BRIDGE_USD: f64 = 1.0;
+
+const UNISWAP_SWAP_ROUTER_BASE: &str = "0x2626664c2603336E57B271c5C0b26F421741e481"; // SwapRouter02 on Base
+const USDT_BASE: &str = "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2";
+const WETH_BASE: &str = "0x4200000000000000000000000000000000000006";
+const WETH_ARB: &str = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
+const WETH_OPT: &str = "0x4200000000000000000000000000000000000006";
+const MIN_BASE_ETH_FOR_OPS: f64 = 0.0008;
+const USDT_SWAP_AMOUNT_USD: f64 = 5.0;
 
 /// Mayan Forwarder (create side) — same address on all EVM chains.
 const MAYAN_FORWARDER_ADDR: &str = "0x337685fdab40d39bd02028545a4ffa7d287cc3e2";
@@ -165,6 +194,8 @@ pub enum BridgeKind {
     NativeSweep,
     /// Mayan Swift forwardERC20 → USDC on Solana.
     MayanSolana,
+    /// Swap USDT→ETH or bridge WETH→Base to fund operations.
+    EthBootstrap,
 }
 
 /// Chain ID of the canonical home chain — surplus repayments consolidate here.
@@ -270,6 +301,53 @@ impl Rebalancer {
                 Some((status, t, snap))
             })
             .collect();
+
+        // Phase -1: ETH bootstrap on Base.
+        // Step a: unwrap any WETH already sitting on Base (e.g. from a prior WETH bridge cycle).
+        // Step b: if still gas-starved, swap USDT→WETH→ETH via Uniswap V3 multicall.
+        {
+            let base_snap = snapshots.iter().find(|s| s.chain_id == HOME_CHAIN_ID);
+            if let Some(base) = base_snap {
+                if base.gas_eth < MIN_BASE_ETH_FOR_OPS {
+                    // Step a: unwrap WETH on Base if any
+                    if base.weth_raw > 0 {
+                        info!("🔓 Unwrapping {} WETH on Base → native ETH", base.weth_raw as f64 / 1e18);
+                        let action = self.unwrap_weth_on_base(base.weth_raw).await;
+                        actions.push(action);
+                    } else if base.secondary_stable_raw > 0 && base.secondary_stable_usd >= USDT_SWAP_AMOUNT_USD {
+                        // Step b: no WETH to unwrap — swap USDT instead
+                        let swap_raw = usd_to_raw(USDT_SWAP_AMOUNT_USD, base.secondary_stable_decimals);
+                        info!("⛽ Base ETH low ({:.6}), swapping ${:.2} USDT→ETH", base.gas_eth, USDT_SWAP_AMOUNT_USD);
+                        let action = self.usdt_to_eth_swap(swap_raw).await;
+                        actions.push(action);
+                    }
+                }
+            }
+        }
+
+        // Phase -2: bridge WETH from Arb or Opt to Base if Base ETH still critical
+        let already_bootstrapping = actions.iter().any(|a| matches!(a.kind, BridgeKind::EthBootstrap));
+        if !already_bootstrapping {
+            let base_snap = snapshots.iter().find(|s| s.chain_id == HOME_CHAIN_ID);
+            if let Some(base) = base_snap {
+                if base.gas_eth < MIN_BASE_ETH_FOR_OPS {
+                    let weth_src = snapshots.iter()
+                        .filter(|s| s.chain_id != HOME_CHAIN_ID && s.weth_raw > 0)
+                        .max_by(|a, b| a.weth_raw.partial_cmp(&b.weth_raw).unwrap_or(std::cmp::Ordering::Equal));
+                    if let Some(src) = weth_src {
+                        let keep_raw = (0.0001 * 1e18) as u128;
+                        if src.weth_raw > keep_raw {
+                            let send_raw = src.weth_raw - keep_raw;
+                            let send_usd = send_raw as f64 / 1e18 * 3000.0;
+                            info!("🌉 Bridging {:.6} WETH from chain {} → Base (ETH bootstrap)", send_raw as f64 / 1e18, src.chain_id);
+                            let weth_src_addr = if src.chain_id == 42161 { WETH_ARB } else { WETH_OPT };
+                            let action = self.bridge_weth_to_base(src, weth_src_addr, send_raw, send_usd).await;
+                            actions.push(action);
+                        }
+                    }
+                }
+            }
+        }
 
         // Phase 0: bootstrap gas for src-only chains that have stranded stables but no gas.
         // Without gas on the src chain we can't broadcast the Across deposit from it.
@@ -872,6 +950,175 @@ impl Rebalancer {
         let hash = format!("{:#x}", pending.tx_hash());
         let receipt = pending.with_required_confirmations(1).get_receipt().await.context("receipt")?;
         if receipt.status() { Ok(hash) } else { anyhow::bail!("reverted: {}", hash) }
+    }
+
+    async fn unwrap_weth_on_base(&self, weth_raw: u128) -> BridgeAction {
+        let mut action = BridgeAction {
+            src_chain: HOME_CHAIN_ID, dst_chain: HOME_CHAIN_ID,
+            token_symbol: "WETH".into(), amount_usd: weth_raw as f64 / 1e18 * 3000.0,
+            kind: BridgeKind::EthBootstrap, tx_hash: None,
+            status: if self.dry_run { "dry_run".into() } else { "pending".into() },
+        };
+        if self.dry_run {
+            info!("[DRY RUN] Would unwrap {} WETH → ETH on Base", weth_raw as f64 / 1e18);
+            return action;
+        }
+        let rpc = rpc_for(HOME_CHAIN_ID);
+        let calldata = WETH::withdrawCall { wad: U256::from(weth_raw) }.abi_encode();
+        match self.send_raw(rpc, WETH_BASE, &hex::encode(&calldata)).await {
+            Ok(h) => { action.tx_hash = Some(h); action.status = "sent".into(); }
+            Err(e) => { warn!("WETH unwrap failed: {e:#}"); action.status = format!("error: {e:#}"); }
+        }
+        action
+    }
+
+    async fn usdt_to_eth_swap(&self, usdt_raw: u128) -> BridgeAction {
+        let mut action = BridgeAction {
+            src_chain: 8453,
+            dst_chain: 8453,
+            token_symbol: "USDT".into(),
+            amount_usd: usdt_raw as f64 / 1e6,
+            kind: BridgeKind::EthBootstrap,
+            tx_hash: None,
+            status: if self.dry_run { "dry_run".into() } else { "pending".into() },
+        };
+
+        if self.dry_run {
+            info!("[DRY RUN] Would swap {} USDT raw → ETH on Base via Uniswap V3 multicall", usdt_raw);
+            return action;
+        }
+
+        match self.execute_usdt_to_eth_swap(usdt_raw).await {
+            Ok(hash) => { action.tx_hash = Some(hash); action.status = "sent".into(); }
+            Err(e) => { warn!("USDT→ETH swap failed: {e:#}"); action.status = format!("error: {e:#}"); }
+        }
+        action
+    }
+
+    async fn execute_usdt_to_eth_swap(&self, usdt_raw: u128) -> Result<String> {
+        let rpc = rpc_for(8453);
+        let router: Address = UNISWAP_SWAP_ROUTER_BASE.parse().context("parse router")?;
+        let amount_u256 = U256::from(usdt_raw);
+
+        self.ensure_allowance(USDT_BASE, UNISWAP_SWAP_ROUTER_BASE, amount_u256, rpc)
+            .await.context("approve Uniswap router for USDT")?;
+
+        // min WETH out: convert USDT (6 dec) → WETH (18 dec) at $3000/ETH, 90% floor
+        let min_out = (usdt_raw as f64 / 1e6 / 3000.0 * 0.90 * 1e18) as u128;
+
+        let swap_params = UniswapSwapRouter::ExactInputSingleParams {
+            tokenIn: USDT_BASE.parse().context("parse USDT")?,
+            tokenOut: WETH_BASE.parse().context("parse WETH")?,
+            fee: alloy::primitives::Uint::<24, 1>::from(3000u32),
+            recipient: router, // router holds WETH so unwrapWETH9 can pull it
+            amountIn: amount_u256,
+            amountOutMinimum: U256::from(min_out),
+            sqrtPriceLimitX96: alloy::primitives::Uint::<160, 3>::ZERO,
+        };
+        let swap_call = UniswapSwapRouter::exactInputSingleCall { params: swap_params }.abi_encode();
+
+        let unwrap_call = UniswapSwapRouter::unwrapWETH9Call {
+            amountMinimum: U256::ZERO,
+            recipient: self.solver_addr,
+        }.abi_encode();
+
+        let multicall_calldata = UniswapSwapRouter::multicallCall {
+            data: vec![Bytes::from(swap_call), Bytes::from(unwrap_call)],
+        }.abi_encode();
+
+        info!(
+            "📤 Uniswap multicall: {} USDT raw → ETH on Base (min_out={} wei)",
+            usdt_raw, min_out
+        );
+
+        self.send_raw(rpc, UNISWAP_SWAP_ROUTER_BASE, &hex::encode(multicall_calldata)).await
+    }
+
+    async fn bridge_weth_to_base(
+        &self,
+        src: &ChainSnapshot,
+        weth_addr: &str,
+        weth_raw: u128,
+        amount_usd: f64,
+    ) -> BridgeAction {
+        let mut action = BridgeAction {
+            src_chain: src.chain_id,
+            dst_chain: 8453,
+            token_symbol: "WETH".into(),
+            amount_usd,
+            kind: BridgeKind::EthBootstrap,
+            tx_hash: None,
+            status: if self.dry_run { "dry_run".into() } else { "pending".into() },
+        };
+
+        if self.dry_run {
+            info!(
+                "[DRY RUN] Would bridge {} WETH raw from chain {} → Base via Across",
+                weth_raw, src.chain_id
+            );
+            return action;
+        }
+
+        match self.execute_weth_bridge(src.chain_id, weth_addr, weth_raw).await {
+            Ok(hash) => { action.tx_hash = Some(hash); action.status = "sent".into(); }
+            Err(e) => {
+                warn!("WETH bridge {} → Base failed: {e:#}", src.chain_id);
+                action.status = format!("error: {e:#}");
+            }
+        }
+        action
+    }
+
+    async fn execute_weth_bridge(&self, src_chain: u64, weth_addr: &str, weth_raw: u128) -> Result<String> {
+        let src_rpc = rpc_for(src_chain);
+        let weth_src: Address = weth_addr.parse().context("parse src WETH")?;
+        let weth_base: Address = WETH_BASE.parse().context("parse dst WETH")?;
+        let amount_u256 = U256::from(weth_raw);
+
+        let fee_url = format!(
+            "https://app.across.to/api/suggested-fees?originChainId={}&destinationChainId=8453&token={:#x}&amount={}",
+            src_chain, weth_src, weth_raw
+        );
+        let fees: FeesResp = self.http.get(&fee_url).send().await
+            .context("Across suggested-fees for WETH")?
+            .json().await
+            .context("parse WETH fees response")?;
+
+        let output_amount: U256 = fees.output_amount.parse().unwrap_or(U256::ZERO);
+        let exclusive_relayer: Address = fees.exclusive_relayer.parse().unwrap_or(Address::ZERO);
+        let quote_ts: u32 = fees.timestamp.parse().unwrap_or(0);
+
+        let spoke = spoke_pool(src_chain)
+            .ok_or_else(|| anyhow::anyhow!("No SpokePool for chain {}", src_chain))?;
+
+        self.ensure_allowance(
+            weth_addr,
+            &format!("{:#x}", spoke),
+            amount_u256,
+            src_rpc,
+        ).await.context("approve SpokePool for WETH")?;
+
+        let calldata = depositV3Call {
+            depositor: self.solver_addr,
+            recipient: self.solver_addr,
+            inputToken: weth_src,
+            outputToken: weth_base,
+            inputAmount: amount_u256,
+            outputAmount: output_amount,
+            destinationChainId: U256::from(8453u64),
+            exclusiveRelayer: exclusive_relayer,
+            quoteTimestamp: quote_ts,
+            fillDeadline: fees.fill_deadline,
+            exclusivityDeadline: fees.exclusivity_deadline,
+            message: Bytes::new(),
+        }.abi_encode();
+
+        info!(
+            "📤 Across depositV3: {} WETH raw chain {} → Base",
+            weth_raw, src_chain
+        );
+
+        self.send_raw(src_rpc, &format!("{:#x}", spoke), &hex::encode(&calldata)).await
     }
 
     /// Sweep native gas token (e.g. MATIC) from a src-only chain to USDC on Base

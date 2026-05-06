@@ -100,6 +100,8 @@ pub struct ChainSnapshot {
     pub gas_eth: f64,
     /// WETH balance in USD.
     pub weth_usd: f64,
+    /// WETH balance in raw wei (18 dec).
+    pub weth_raw: u128,
 
     /// Best available bridge token: primary if non-zero, else secondary.
     /// Callers should use these fields rather than choosing manually.
@@ -146,11 +148,11 @@ async fn scan_chain(http: &reqwest::Client, ct: &ChainTokens, solver: Address) -
             (0, 0.0, String::new(), 6)
         };
 
-    let weth_usd = if let Some(addr) = ct.weth {
+    let (weth_usd, weth_raw) = if let Some(addr) = ct.weth {
         let raw = erc20_balance_raw(http, ct.rpc, addr, solver).await.unwrap_or(0);
-        (raw as f64 / 1e18) * WETH_PRICE_USD
+        ((raw as f64 / 1e18) * WETH_PRICE_USD, raw)
     } else {
-        0.0
+        (0.0, 0)
     };
 
     // Best bridge token: pick whichever has the larger balance.
@@ -177,6 +179,7 @@ async fn scan_chain(http: &reqwest::Client, ct: &ChainTokens, solver: Address) -
         secondary_stable_decimals,
         gas_eth,
         weth_usd,
+        weth_raw,
         bridge_token_addr,
         bridge_token_decimals,
         bridge_token_raw,
