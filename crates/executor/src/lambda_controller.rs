@@ -855,18 +855,29 @@ impl LambdaController {
             });
         }
 
-        // 6b. ESTIMATE GATE — mandatory estimateGas before every broadcast.
+        // 6b. ESTIMATE GATE — optional estimateGas before broadcast.
         // Catches AlreadyFilled / ABI mismatches before they burn gas on-chain.
-        // Solana-source intents are already guarded by the stub above.
+        // Can be bypassed with SKIP_GAS_ESTIMATE=1 for direct Across fills on L2s
+        // where gas is near-zero and latency matters more than pre-flight safety.
+        // deBridge and Mayan always use the full estimate gate regardless.
+        let skip_estimate = !is_debridge && !is_mayan
+            && std::env::var("SKIP_GAS_ESTIMATE").as_deref() == Ok("1");
         {
+            if skip_estimate {
+                info!("⚡ SKIP_GAS_ESTIMATE=1 — bypassing eth_estimateGas (direct Across L2 fill)");
+            }
             let solver_addr = self.signer.address();
-            let mut estimate_outcome = run_evm_estimate_with_value(
-                wiring.chain_id,
-                solver_addr,
-                tx_target,
-                &tx_calldata,
-                eth_fill_value,
-            ).await;
+            let mut estimate_outcome = if skip_estimate {
+                crate::estimate::EstimateOutcome::OkGas(200_000)  // conservative pre-set for fillV3Relay
+            } else {
+                run_evm_estimate_with_value(
+                    wiring.chain_id,
+                    solver_addr,
+                    tx_target,
+                    &tx_calldata,
+                    eth_fill_value,
+                ).await
+            };
 
             // deBridge DLN `fulfillOrder` reverts with `data: "0x"` when
             // `allowedTakerDst != msg.sender` (exclusive taker check). The generic
