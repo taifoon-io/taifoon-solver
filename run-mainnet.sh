@@ -90,10 +90,14 @@ if [[ -n "$ADDR" && "$DRY_RUN" == "false" ]]; then
     echo
     echo "*** This will broadcast LIVE TRANSACTIONS on mainnet."
     echo "*** Fills are capped at \$$MAX_NOTIONAL_USD notional, profit-gated at \$$MIN_PROFIT_USD."
-    read -r -p "Type 'GO LIVE' to confirm: " confirm
-    if [[ "$confirm" != "GO LIVE" ]]; then
-        echo "Aborted. Re-run without DRY_RUN=false to dry-run instead." >&2
-        exit 1
+    if [[ "${YES_I_AM_SURE:-}" == "1" ]]; then
+        echo "Auto-confirmed (YES_I_AM_SURE=1)."
+    else
+        read -r -p "Type 'GO LIVE' to confirm: " confirm
+        if [[ "$confirm" != "GO LIVE" ]]; then
+            echo "Aborted. Re-run without DRY_RUN=false to dry-run instead." >&2
+            exit 1
+        fi
     fi
 fi
 
