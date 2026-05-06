@@ -487,6 +487,8 @@ impl AcrossPoller {
             .build()
             .unwrap_or_default();
         let mut seen: HashSet<i64> = HashSet::new();
+        // Backoff state: incremented on 429, reset on success.
+        let mut consecutive_429s: u32 = 0;
 
         loop {
             for &dst_chain in &self.dst_chains {
@@ -501,10 +503,18 @@ impl AcrossPoller {
                     Ok(r) => r,
                     Err(e) => { tracing::warn!("AcrossPoller chain={} request error: {}", dst_chain, e); continue; }
                 };
-                if !resp.status().is_success() {
-                    tracing::warn!("AcrossPoller chain={} HTTP {}: likely rate-limited", dst_chain, resp.status());
+                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    consecutive_429s += 1;
+                    let backoff = std::cmp::min(30 * consecutive_429s, 300);
+                    tracing::warn!("AcrossPoller chain={} rate-limited (429), backing off {}s", dst_chain, backoff);
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff as u64)).await;
                     continue;
                 }
+                if !resp.status().is_success() {
+                    tracing::warn!("AcrossPoller chain={} HTTP {}: skipping", dst_chain, resp.status());
+                    continue;
+                }
+                consecutive_429s = 0;
                 let deps: Vec<serde_json::Value> = match resp.json().await {
                     Ok(d) => d,
                     Err(e) => { tracing::warn!("AcrossPoller chain={} parse error: {}", dst_chain, e); continue; }
