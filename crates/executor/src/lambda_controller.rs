@@ -623,6 +623,55 @@ impl LambdaController {
             }
         }
 
+        // ERC-20 balance pre-check for Across non-native fills.
+        // Saves a round-trip estimate call when we obviously can't fund the fill.
+        // Only fires for direct fills with a non-zero, non-native output token.
+        if direct_fill && !is_debridge && !is_mayan {
+            let dst_tok = intent.dst_token.trim().to_lowercase();
+            let is_erc20 = !dst_tok.is_empty()
+                && dst_tok != "native"
+                && dst_tok != "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                && dst_tok != "0x0000000000000000000000000000000000000000";
+            if is_erc20 {
+                if let Some(required) = intent.output_amount.as_deref()
+                    .and_then(|s| s.parse::<u128>().ok())
+                    .filter(|&v| v > 0)
+                {
+                    if let Ok(token_addr) = intent.dst_token.parse::<alloy::primitives::Address>() {
+                        let rpc_url_opt = crate::evm_estimate::resolve_rpc_url(wiring.chain_id);
+                        if let Some(rpc_url) = rpc_url_opt {
+                            if let Ok(parsed) = rpc_url.parse() {
+                                // balanceOf(address) via raw eth_call — selector 0x70a08231
+                                use alloy::providers::{Provider, ProviderBuilder};
+                                let provider = ProviderBuilder::new().on_http(parsed);
+                                let mut call_data = [0u8; 36];
+                                call_data[0..4].copy_from_slice(&[0x70, 0xa0, 0x82, 0x31]);
+                                call_data[16..36].copy_from_slice(self.signer.address().as_slice());
+                                let tx = alloy::rpc::types::TransactionRequest::default()
+                                    .to(token_addr)
+                                    .input(alloy::primitives::Bytes::from(call_data.to_vec()).into());
+                                if let Ok(result) = provider.call(&tx).await {
+                                    let bal_u128 = if result.len() >= 32 {
+                                        u128::from_be_bytes(result[16..32].try_into().unwrap_or([0u8; 16]))
+                                    } else { 0u128 };
+                                    if bal_u128 < required {
+                                        let reason = format!(
+                                            "erc20_insufficient:have={}<need={}",
+                                            bal_u128, required
+                                        );
+                                        info!("⏭️  {} — {}", intent.id, reason);
+                                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                                        let _ = self.wallet.release(&intent.id);
+                                        return Ok(LambdaExecuteOutcome::Skipped { reason });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ETH/WETH fill value — applies to Across direct fills and Mayan native-out.
         let eth_fill_value: Option<U256> = {
             let weth = weth_address_for_chain(wiring.chain_id);
