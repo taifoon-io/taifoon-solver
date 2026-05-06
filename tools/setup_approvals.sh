@@ -57,15 +57,17 @@ approve() {
 
     if [[ "$token" != "$usdc" ]]; then return; fi  # only USDC for now
 
-    # Check current allowance
+    # Check current allowance (cast may include "[1.157e77]" annotation — strip it)
     local allow
     allow=$(cast call "$token" "allowance(address,address)(uint256)" "$SOLVER" "$spender" \
-        --rpc-url "$rpc" 2>/dev/null | head -1 || echo "0")
+        --rpc-url "$rpc" 2>/dev/null | head -1 | awk '{print $1}' || echo "0")
 
     echo "Chain $chain ($label): allowance=$allow"
 
-    if [[ "$allow" == "$MAX_UINT256" ]]; then
-        echo "  ✅ Already max-approved"
+    # Consider already-approved if allowance > 10^30 (well above any realistic fill).
+    # Exact MAX_UINT256 check fails when tokens have been spent from the allowance.
+    if python3 -c "import sys; sys.exit(0 if int('$allow' or '0') > 10**30 else 1)" 2>/dev/null; then
+        echo "  ✅ Already max-approved (residual allowance)"
         return
     fi
 
