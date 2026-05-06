@@ -185,6 +185,126 @@ where:
 
 Default protocol fee: 10 bps (0.1%) if not in solver_intel.json
 
+## Portfolio Sidecar
+
+The **portfolio sidecar** is a proactive cross-chain inventory manager that runs
+alongside the solver and automatically pre-funds fill chains before they run dry.
+
+### Why it exists
+
+The solver fills Across V3 intents on dst chains (Base, Arbitrum, Optimism). Each
+fill spends the solver's stablecoins on that chain. If a fill chain runs out of
+either stablecoins or native gas, the executor skips profitable intents with
+`reserve_failed` or the broadcast tx fails — both mean missed revenue.
+
+### How it works
+
+```
+[Across intents arrive]
+       │ user deposits on src chains (Ethereum / Polygon / zkSync / Linea / Scroll)
+       ▼
+[Solver fills on dst chains]
+       │ spends USDC/USDT on Base / Arbitrum / Optimism
+       ▼
+[Repayment lands on dst chain]   ← repaymentChainId = dst_chain (fixed 2026-05-06)
+       │ balances rebuild over time
+       ▼
+[Sidecar detects LOW_FUNDS or LOW_GAS on fill chain]
+       │ picks best-funded surplus chain as source
+       ▼
+[Sidecar sends Across bridge intent]
+       │ gas top-up: /api/swap → native token on dst
+       │ stable fill: depositV3 → USDC on dst
+       ▼
+[Fill chain restored to HEALTHY]
+       │ solver resumes filling
+       ▼
+[Claim command]    ← backstop: consolidates excess back to Base every 30 min
+```
+
+### Chain inventory targets (defaults)
+
+| Chain | Role | Min stable | Target | High water | Min gas |
+|---|---|---|---|---|---|
+| Base (8453) | fill | $50 | $150 | $400 | 0.002 ETH |
+| Arbitrum (42161) | fill | $30 | $100 | $300 | 0.002 ETH |
+| Optimism (10) | fill | $20 | $80 | $200 | 0.002 ETH |
+| Ethereum (1) | src-only | — | — | — | — |
+| Polygon (137) | src-only | — | — | — | — |
+| zkSync (324) | src-only | — | — | — | — |
+| Linea (59144) | src-only | — | — | — | — |
+| Scroll (534352) | src-only | — | — | — | — |
+
+Override any target via environment:
+```bash
+SIDECAR_MIN_STABLE_8453=100   # raise Base minimum to $100
+SIDECAR_TARGET_STABLE_42161=200
+SIDECAR_HIGH_WATER_10=300
+SIDECAR_MIN_GAS_8453=0.005
+```
+
+### Status classification
+
+Each cycle the sidecar classifies every fill chain:
+
+| Status | Condition | Action |
+|---|---|---|
+| `HEALTHY` | stables ≥ min AND gas ≥ min | nothing |
+| `LOW_GAS` | stables OK, gas < min | gas top-up via Across swap+bridge |
+| `LOW_FUNDS` | stables < min, gas OK | stable bridge via Across depositV3 |
+| `CRITICAL` | both low | gas top-up first, then stable bridge |
+| `SURPLUS` | stables > high_water | available as source for other chains |
+
+### Running the sidecar
+
+```bash
+# Dry-run: scan every 5 min, show what would happen
+taifoon sidecar --private-key 0x...
+
+# Live mode: scan every 5 min, broadcast bridges automatically
+taifoon sidecar --private-key 0x... --execute
+
+# Faster cycle for active trading sessions
+taifoon sidecar --private-key 0x... --execute --interval 120
+
+# JSON output (for dashboard / open-mamba integration)
+taifoon --json sidecar --private-key 0x... --execute
+
+# One cycle (useful in scripts / CI)
+taifoon sidecar --private-key 0x... --max-cycles 1
+```
+
+### Running alongside the solver
+
+Both processes read the same keychain entry. Start them in separate terminals or
+use a process manager:
+
+```bash
+# Terminal 1: solver
+DRY_RUN=false MAX_NOTIONAL_USD=50 ./run-mainnet.sh
+
+# Terminal 2: sidecar (proactive funding)
+taifoon sidecar --private-key "$(security find-generic-password -s mamba-messiah-key -w)" \
+  --execute --interval 300
+
+# Terminal 3: claim loop (reactive consolidation)
+taifoon claim --private-key "$(security find-generic-password -s mamba-messiah-key -w)" \
+  --execute --loop
+```
+
+### Integration tests (open-mamba)
+
+The classify/rebalance decision logic is verified in
+`open-mamba/crates/mamba-bus/tests/portfolio_sidecar_integration.rs`:
+
+```bash
+cd /path/to/open-mamba
+cargo test -p mamba-bus --test portfolio_sidecar_integration
+# 8 tests, 0 failures
+```
+
+---
+
 ## T3RN LWC Integration
 
 ### Enable T3RN Sidecar

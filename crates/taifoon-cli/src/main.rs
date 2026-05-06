@@ -23,6 +23,8 @@ mod execute;
 mod test_mode;
 mod commands;
 
+extern crate portfolio_sidecar;
+
 use wallet::Wallet;
 
 // ── CLI Structure ────────────────────────────────────────────────────────────
@@ -209,6 +211,78 @@ enum Commands {
         /// Show what would be approved without sending transactions
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Scan all chains for stranded repayment balances and bridge them back to Base via Across.
+    ///
+    /// Across repays the relayer on the repaymentChainId set at fill time. If fills were sent
+    /// with repaymentChainId = src_chain, balances accumulate on multiple chains. This command
+    /// finds them and bridges back automatically via Across depositV3.
+    ///
+    /// Example:
+    ///   taifoon claim --private-key 0x...             # dry-run scan
+    ///   taifoon claim --private-key 0x... --execute   # bridge everything >= $1 back to Base
+    ///   taifoon claim --private-key 0x... --execute --loop  # run every 30 min
+    Claim {
+        /// Private key (hex, with or without 0x prefix)
+        #[arg(long, env = "SOLVER_PRIVATE_KEY")]
+        private_key: String,
+
+        /// Actually broadcast bridge transactions (default: dry-run scan only)
+        #[arg(long)]
+        execute: bool,
+
+        /// Destination chain for consolidation (default: 8453 = Base)
+        #[arg(long, default_value = "8453")]
+        consolidate_to: u64,
+
+        /// Run in a loop every 30 minutes
+        #[arg(long)]
+        r#loop: bool,
+    },
+
+    /// Full fill lifecycle manager — rebalance + deBridge claim retry each cycle.
+    ///
+    /// Runs every --interval seconds. Each cycle:
+    ///   1. Claim retry: fire claimUnlock for any deBridge fills stuck in CONFIRMED state
+    ///   2. Rebalance: scan balances, fund depleted fill chains, sweep src-chain recoveries
+    ///
+    /// Run alongside solver-main (which does the actual fills).
+    ///
+    /// Example:
+    ///   taifoon sidecar --private-key 0x...                         # dry-run
+    ///   taifoon sidecar --private-key 0x... --execute               # live
+    ///   taifoon sidecar --private-key 0x... --execute --claim-retry # live + claim retry
+    Sidecar {
+        /// Private key (hex, with or without 0x prefix)
+        #[arg(long, env = "SOLVER_PRIVATE_KEY")]
+        private_key: String,
+
+        /// Actually broadcast bridge/claim transactions (default: dry-run)
+        #[arg(long)]
+        execute: bool,
+
+        /// Seconds between cycles (default: 300)
+        #[arg(long, default_value = "300")]
+        interval: u64,
+
+        /// Exit after N cycles (omit for infinite loop)
+        #[arg(long)]
+        max_cycles: Option<u64>,
+
+        /// Retry deBridge claimUnlock for CONFIRMED fills each cycle
+        #[arg(long)]
+        claim_retry: bool,
+
+        /// Wallet DB path (solver-main writes here; sidecar reads for claim retry)
+        #[arg(long, env = "WALLET_DB_PATH",
+              default_value = "/tmp/taifoon_solver_wallet.sqlite")]
+        wallet_db: String,
+
+        /// Outcome DB path (for LambdaController construction)
+        #[arg(long, env = "OUTCOME_DB_PATH",
+              default_value = "/tmp/taifoon_solver_outcomes.sqlite")]
+        outcome_db: String,
     },
 
     /// Show multi-chain inventory: USDC/USDT/WETH balances + fill P&L
@@ -447,6 +521,31 @@ async fn main() -> Result<()> {
             commands::setup_approvals::run(commands::setup_approvals::ApprovalArgs {
                 private_key,
                 dry_run,
+            })
+            .await
+        }
+
+        Commands::Sidecar { private_key, execute, interval, max_cycles, claim_retry, wallet_db, outcome_db } => {
+            commands::sidecar::run(commands::sidecar::SidecarArgs {
+                private_key,
+                dry_run: !execute,
+                interval_secs: interval,
+                json_mode: cli.json,
+                max_cycles,
+                claim_retry,
+                wallet_db_path: wallet_db,
+                outcome_db_path: outcome_db,
+            })
+            .await
+        }
+
+        Commands::Claim { private_key, execute, consolidate_to, r#loop } => {
+            commands::claim::run(commands::claim::ClaimArgs {
+                private_key,
+                dry_run: !execute,
+                consolidate_to_chain: consolidate_to,
+                json_mode: cli.json,
+                run_loop: r#loop,
             })
             .await
         }

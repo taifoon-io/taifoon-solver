@@ -92,6 +92,19 @@ pub const DEFAULT_MAYAN_SWIFT_PROGRAM: &str = "BLZRi6frs4X4DNLw56V4EXai1b6QVESN1
 /// fixture didn't carry one — kept here so the constants are auditable).
 pub const SYSTEM_PROGRAM_ID: &str = "11111111111111111111111111111111";
 
+/// Solana ComputeBudget program. We prepend `SetComputeUnitLimit` and
+/// `SetComputeUnitPrice` instructions so the simulated tx (and downstream
+/// broadcasts that mirror this layout) carry a non-zero priority fee — Helius
+/// and Triton both deprioritize zero-fee transactions, and Phase 1 wants
+/// telemetry to confirm we're paying for inclusion.
+pub const COMPUTE_BUDGET_PROGRAM_ID: &str = "ComputeBudget111111111111111111111111111111";
+
+/// Default priority fee in micro-lamports per compute unit. 50_000 µlamports/CU
+/// over a 240_000-CU budget = ~12_000 lamports = ~0.000012 SOL — a sane Helius
+/// "above floor" value during demo conditions. Override via env at the executor
+/// edge if the network is congested.
+pub const DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU: u64 = 50_000;
+
 /// Default mainnet RPC endpoint. Public, free, supports `simulateTransaction`.
 /// We don't hardcode this in production — use `SOLANA_RPC_URL` env override.
 pub const DEFAULT_SOLANA_RPC_URL: &str = "https://mainnet.helius-rpc.com/?api-key=741d812c-923e-46e1-aaa0-f89883e7147b";
@@ -235,6 +248,21 @@ impl MayanSolanaSimulator {
         let trader = decode_base58_pubkey(&intent.trader_pubkey_b58)
             .context("decode trader pubkey")?;
         let system = decode_base58_pubkey(SYSTEM_PROGRAM_ID).expect("system program is valid");
+        let cb_program = decode_base58_pubkey(COMPUTE_BUDGET_PROGRAM_ID)
+            .expect("compute budget program id is valid");
+
+        // ComputeBudget instructions (no account metas — reads only its own program id):
+        //   SetComputeUnitLimit(u32) → tag byte 0x02 + 4-byte LE limit
+        //   SetComputeUnitPrice(u64) → tag byte 0x03 + 8-byte LE micro-lamports/CU
+        // Reference: https://docs.solana.com/developing/runtime-facilities/programs#compute-budget
+        let cu_limit_u32: u32 = intent.compute_units_estimate.min(u32::MAX as u64) as u32;
+        let mut cu_limit_data = Vec::with_capacity(5);
+        cu_limit_data.push(0x02);
+        cu_limit_data.extend_from_slice(&cu_limit_u32.to_le_bytes());
+
+        let mut cu_price_data = Vec::with_capacity(9);
+        cu_price_data.push(0x03);
+        cu_price_data.extend_from_slice(&DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU.to_le_bytes());
 
         // Anchor instruction layout for the Mayan Swift `fulfill` instruction:
         //   - 8-byte sha256("global:fulfill")[..8] discriminator
@@ -250,14 +278,14 @@ impl MayanSolanaSimulator {
         // distinction we care about is ABI-invalid (we couldn't even build
         // the bytes) vs program-reject (we built valid bytes but the order
         // state didn't match) vs ok-compute-units (it ran).
-        let mut data = Vec::with_capacity(8 + 32 + 8 + 8);
-        data.extend_from_slice(&anchor_discriminator("fulfill"));
+        let mut fulfill_data = Vec::with_capacity(8 + 32 + 8 + 8);
+        fulfill_data.extend_from_slice(&anchor_discriminator("fulfill"));
 
         let order_id_bytes = decode_hex_32(&intent.mayan_order_id_hex)
             .context("decode mayan_order_id hex")?;
-        data.extend_from_slice(&order_id_bytes);
-        data.extend_from_slice(&intent.min_amount_out.to_le_bytes());
-        data.extend_from_slice(&intent.deadline.to_le_bytes());
+        fulfill_data.extend_from_slice(&order_id_bytes);
+        fulfill_data.extend_from_slice(&intent.min_amount_out.to_le_bytes());
+        fulfill_data.extend_from_slice(&intent.deadline.to_le_bytes());
 
         // Account-meta layout for the fulfill instruction:
         //   0: payer            (signer, writable)  — the MESSIAH solver
@@ -265,7 +293,7 @@ impl MayanSolanaSimulator {
         //   2: vault            (writable)          — escrow PDA
         //   3: trader           (read-only)         — order originator
         //   4: system_program   (read-only)         — for any inner CPI
-        let metas: Vec<AccountMeta> = vec![
+        let fulfill_metas: Vec<AccountMeta> = vec![
             AccountMeta { pubkey: payer, is_signer: true, is_writable: true },
             AccountMeta { pubkey: state, is_signer: false, is_writable: true },
             AccountMeta { pubkey: vault, is_signer: false, is_writable: true },
@@ -273,7 +301,13 @@ impl MayanSolanaSimulator {
             AccountMeta { pubkey: system, is_signer: false, is_writable: false },
         ];
 
-        let tx_bytes = serialize_legacy_transaction(payer, program, &metas, &data)?;
+        let instructions: Vec<Instruction> = vec![
+            Instruction { program_id: cb_program, metas: vec![], data: cu_limit_data },
+            Instruction { program_id: cb_program, metas: vec![], data: cu_price_data },
+            Instruction { program_id: program,    metas: fulfill_metas, data: fulfill_data },
+        ];
+
+        let tx_bytes = serialize_legacy_transaction_multi(payer, &instructions)?;
         Ok(BASE64.encode(tx_bytes))
     }
 }
@@ -291,6 +325,13 @@ struct AccountMeta {
     pubkey: [u8; 32],
     is_signer: bool,
     is_writable: bool,
+}
+
+#[derive(Debug, Clone)]
+struct Instruction {
+    program_id: [u8; 32],
+    metas: Vec<AccountMeta>,
+    data: Vec<u8>,
 }
 
 fn decode_base58_pubkey(s: &str) -> Result<[u8; 32]> {
@@ -360,15 +401,31 @@ fn write_compact_u16(buf: &mut Vec<u8>, mut n: u16) {
 ///
 /// The validator with `replaceRecentBlockhash=true` overwrites the zeroed
 /// blockhash, and with `sigVerify=false` it doesn't check the zero signature.
-fn serialize_legacy_transaction(
+fn serialize_legacy_transaction_multi(
     payer: [u8; 32],
-    program_id: [u8; 32],
-    metas: &[AccountMeta],
-    instruction_data: &[u8],
+    instructions: &[Instruction],
 ) -> Result<Vec<u8>> {
     // Build the deduplicated account_keys list with the canonical Solana
     // ordering: [signer-writable, signer-readonly, nonsigner-writable,
     // nonsigner-readonly]. Payer must be index 0 and a signer-writable.
+    //
+    // The classification is per-key, not per-meta: if any meta marks a key
+    // as signer/writable, the key carries that capability for the whole
+    // message. We accumulate that union before bucketing.
+    use std::collections::HashMap;
+    let mut caps: HashMap<[u8; 32], (bool, bool)> = HashMap::new();
+    caps.insert(payer, (true, true));
+
+    for ix in instructions {
+        for m in &ix.metas {
+            let entry = caps.entry(m.pubkey).or_insert((false, false));
+            entry.0 = entry.0 || m.is_signer;
+            entry.1 = entry.1 || m.is_writable;
+        }
+        // Program id is read-only, non-signer (it's the executable).
+        caps.entry(ix.program_id).or_insert((false, false));
+    }
+
     let mut signer_w: Vec<[u8; 32]> = vec![payer];
     let mut signer_r: Vec<[u8; 32]> = Vec::new();
     let mut nonsign_w: Vec<[u8; 32]> = Vec::new();
@@ -380,20 +437,25 @@ fn serialize_legacy_transaction(
         }
     };
 
-    for m in metas {
-        // Skip the payer if it appears again — it's already at index 0.
-        if m.pubkey == payer {
-            continue;
-        }
-        match (m.is_signer, m.is_writable) {
-            (true, true) => push_unique(&mut signer_w, m.pubkey),
-            (true, false) => push_unique(&mut signer_r, m.pubkey),
-            (false, true) => push_unique(&mut nonsign_w, m.pubkey),
-            (false, false) => push_unique(&mut nonsign_r, m.pubkey),
+    // First pass: signers from instruction metas, then non-signer-writable,
+    // then non-signer-readonly (program ids land here naturally).
+    for ix in instructions {
+        for m in &ix.metas {
+            if m.pubkey == payer {
+                continue;
+            }
+            let (is_signer, is_writable) = caps.get(&m.pubkey).copied().unwrap_or((false, false));
+            match (is_signer, is_writable) {
+                (true, true) => push_unique(&mut signer_w, m.pubkey),
+                (true, false) => push_unique(&mut signer_r, m.pubkey),
+                (false, true) => push_unique(&mut nonsign_w, m.pubkey),
+                (false, false) => push_unique(&mut nonsign_r, m.pubkey),
+            }
         }
     }
-    // Program id is appended as nonsigner-readonly (it's the executable).
-    push_unique(&mut nonsign_r, program_id);
+    for ix in instructions {
+        push_unique(&mut nonsign_r, ix.program_id);
+    }
 
     let num_required_sigs = (signer_w.len() + signer_r.len()) as u8;
     let num_readonly_signed = signer_r.len() as u8;
@@ -412,12 +474,6 @@ fn serialize_legacy_transaction(
             .ok_or_else(|| anyhow!("internal: pubkey not in deduped list"))
     };
 
-    let program_id_index = key_index(&program_id)?;
-    let account_indices: Vec<u8> = metas
-        .iter()
-        .map(|m| key_index(&m.pubkey))
-        .collect::<Result<_>>()?;
-
     // Message body
     let mut message = Vec::with_capacity(256);
     message.push(num_required_sigs);
@@ -429,13 +485,20 @@ fn serialize_legacy_transaction(
     }
     // recent_blockhash placeholder
     message.extend_from_slice(&[0u8; 32]);
-    // one instruction
-    write_compact_u16(&mut message, 1);
-    message.push(program_id_index);
-    write_compact_u16(&mut message, account_indices.len() as u16);
-    message.extend_from_slice(&account_indices);
-    write_compact_u16(&mut message, instruction_data.len() as u16);
-    message.extend_from_slice(instruction_data);
+    write_compact_u16(&mut message, instructions.len() as u16);
+    for ix in instructions {
+        let program_id_index = key_index(&ix.program_id)?;
+        let account_indices: Vec<u8> = ix
+            .metas
+            .iter()
+            .map(|m| key_index(&m.pubkey))
+            .collect::<Result<_>>()?;
+        message.push(program_id_index);
+        write_compact_u16(&mut message, account_indices.len() as u16);
+        message.extend_from_slice(&account_indices);
+        write_compact_u16(&mut message, ix.data.len() as u16);
+        message.extend_from_slice(&ix.data);
+    }
 
     // Wrap with signature placeholder(s).
     let mut tx = Vec::with_capacity(message.len() + 65);
@@ -563,5 +626,187 @@ mod tests {
         let disc = anchor_discriminator("fulfill");
         let found = raw.windows(8).any(|w| w == disc);
         assert!(found, "discriminator missing from serialized tx");
+    }
+
+    // ── Phase 1 table-driven fixture decode tests ─────────────────────────
+    //
+    // The brief asks for three tests over the on-disk fixtures:
+    //   * test_decode_live_fixture        — Intent::from_intent succeeds for
+    //     each fixture, and the live fixture is OPTIONAL (skip if absent)
+    //   * test_compute_units_estimate_in_range — projected estimate sits in
+    //     [200_000, 1_400_000] (sane Anchor program range)
+    //   * test_priority_fee_set           — built tx contains a non-zero
+    //     ComputeBudget SetComputeUnitPrice instruction
+    //
+    // The fixtures live at <workspace_root>/tests/fixtures/. We reach them
+    // via CARGO_MANIFEST_DIR ("../../tests/fixtures") so the test runs the
+    // same way under `cargo test -p ...` as under a top-level cargo invocation.
+
+    fn fixture_paths() -> Vec<(&'static str, std::path::PathBuf)> {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../..").join("tests/fixtures");
+        let mut out: Vec<(&'static str, std::path::PathBuf)> = vec![
+            ("mayan_solana.json", root.join("mayan_solana.json")),
+        ];
+        // Optional live capture from tools/capture_intent.sh — included only
+        // if it actually exists on disk. The capture script declines to write
+        // it when the genome host is unreachable, so most CI runs won't have it.
+        let live = root.join("mayan_solana_live.json");
+        if live.exists() {
+            out.push(("mayan_solana_live.json", live));
+        }
+        out
+    }
+
+    fn intent_from_genome_fixture(path: &std::path::Path) -> Intent {
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
+        let event = genome_client::GenomeEvent::from_json_str(&raw)
+            .unwrap_or_else(|e| panic!("parse {} as GenomeEvent: {}", path.display(), e));
+        Intent::from_genome_event(event)
+            .unwrap_or_else(|e| panic!("project {} → Intent: {}", path.display(), e))
+    }
+
+    #[test]
+    fn test_decode_live_fixture() {
+        let fixtures = fixture_paths();
+        assert!(
+            !fixtures.is_empty(),
+            "table-driven decode test needs at least the synthetic fixture"
+        );
+        for (name, path) in &fixtures {
+            let intent = intent_from_genome_fixture(path);
+            // Sanity: the fixtures are tagged as Mayan Swift on a Solana source.
+            assert_eq!(intent.protocol, "mayan_swift", "{}: protocol", name);
+            assert_eq!(
+                intent.is_solana_source,
+                Some(true),
+                "{}: expected is_solana_source=true",
+                name
+            );
+            // The decoder accepts every required Mayan Solana field.
+            let solana = MayanSolanaIntent::from_intent(&intent)
+                .unwrap_or_else(|e| panic!("{}: from_intent failed: {}", name, e));
+            assert_eq!(solana.intent_id, intent.id, "{}: intent_id round-trip", name);
+            assert!(
+                !solana.mayan_order_id_hex.is_empty(),
+                "{}: mayan_order_id_hex must be set",
+                name
+            );
+            assert!(
+                !solana.state_account_b58.is_empty()
+                    && !solana.vault_account_b58.is_empty(),
+                "{}: state + vault PDAs must be present",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_compute_units_estimate_in_range() {
+        // Anchor programs typically request between 200k and 1.4M compute units.
+        // Below 200k is suspicious (most CPI-using programs need at least that),
+        // above 1.4M is the legacy validator hard cap. If the genome poller
+        // ever feeds us a malformed compute_units field this test catches it
+        // before broadcast.
+        const MIN_CU: u64 = 200_000;
+        const MAX_CU: u64 = 1_400_000;
+        for (name, path) in fixture_paths() {
+            let intent = intent_from_genome_fixture(&path);
+            let solana = MayanSolanaIntent::from_intent(&intent)
+                .unwrap_or_else(|e| panic!("{}: from_intent: {}", name, e));
+            assert!(
+                solana.compute_units_estimate >= MIN_CU
+                    && solana.compute_units_estimate <= MAX_CU,
+                "{}: compute_units_estimate {} out of [{}, {}]",
+                name,
+                solana.compute_units_estimate,
+                MIN_CU,
+                MAX_CU
+            );
+        }
+    }
+
+    #[test]
+    fn test_priority_fee_set() {
+        // Walk the serialized tx and find the ComputeBudget SetComputeUnitPrice
+        // instruction (tag byte 0x03 followed by an 8-byte LE u64 price). Assert
+        // the price is non-zero. We do this by:
+        //   1. Skipping the signature prefix (compact-u16 sig count + 64*N).
+        //   2. Searching the message-body bytes for the signature {0x03, ...}
+        //      where the next 8 bytes parse as a non-zero u64. Since the
+        //      transaction is small and the instruction data length is encoded
+        //      with compact-u16(9), {0x09, 0x03, …} is also a stable marker —
+        //      we anchor on that to avoid false matches on the program-id list.
+        let sim =
+            MayanSolanaSimulator::new(SYSTEM_PROGRAM_ID, DEFAULT_SOLANA_RPC_URL);
+        let mut saw_at_least_one = false;
+        for (name, path) in fixture_paths() {
+            let intent = intent_from_genome_fixture(&path);
+            let solana = MayanSolanaIntent::from_intent(&intent)
+                .unwrap_or_else(|e| panic!("{}: from_intent: {}", name, e));
+            let tx_b64 = sim
+                .build_simulate_tx_b64(&solana)
+                .unwrap_or_else(|e| panic!("{}: build_simulate_tx_b64: {}", name, e));
+            let raw = BASE64
+                .decode(&tx_b64)
+                .unwrap_or_else(|e| panic!("{}: base64 decode: {}", name, e));
+
+            // Look for {0x09, 0x03, p0..p7} — compact-u16 length 9 followed by
+            // SetComputeUnitPrice tag and a u64 LE price.
+            let mut found_price: Option<u64> = None;
+            for w in raw.windows(10) {
+                if w[0] == 0x09 && w[1] == 0x03 {
+                    let mut buf = [0u8; 8];
+                    buf.copy_from_slice(&w[2..10]);
+                    let price = u64::from_le_bytes(buf);
+                    if price > 0 {
+                        found_price = Some(price);
+                        break;
+                    }
+                }
+            }
+            let price = found_price.unwrap_or_else(|| {
+                panic!(
+                    "{}: SetComputeUnitPrice instruction with non-zero price not found",
+                    name
+                );
+            });
+            assert!(
+                price > 0,
+                "{}: priority fee must be non-zero (got {})",
+                name,
+                price
+            );
+            // Sanity: the default we set is reachable from this point — if the
+            // constant ever drops to zero this test will catch it.
+            assert_eq!(
+                price, DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU,
+                "{}: priority fee should match the documented default",
+                name
+            );
+
+            // Also: SetComputeUnitLimit (tag 0x02) must appear with a non-zero
+            // 4-byte LE limit. Walk for {0x05, 0x02, l0..l3} (length=5).
+            let mut found_limit: Option<u32> = None;
+            for w in raw.windows(6) {
+                if w[0] == 0x05 && w[1] == 0x02 {
+                    let mut buf = [0u8; 4];
+                    buf.copy_from_slice(&w[2..6]);
+                    let limit = u32::from_le_bytes(buf);
+                    if limit > 0 {
+                        found_limit = Some(limit);
+                        break;
+                    }
+                }
+            }
+            assert!(
+                found_limit.is_some(),
+                "{}: SetComputeUnitLimit instruction missing or zero",
+                name
+            );
+            saw_at_least_one = true;
+        }
+        assert!(saw_at_least_one, "no fixtures exercised");
     }
 }

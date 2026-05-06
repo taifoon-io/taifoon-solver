@@ -2,4 +2,5 @@
 //! bootstrap, etc.) that the `taifoon-solver` and `estimate_one` binaries
 //! both consume.
 
+pub mod lifi_resolver;
 pub mod messiah;

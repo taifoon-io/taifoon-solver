@@ -12,7 +12,7 @@
 //!   cargo run -p solver-main --bin estimate_one -- across tests/fixtures/across.json
 //!
 //! Env:
-//!   SPINNER_API_URL       — base url for V5 attempt-bundle write (default: http://46.4.96.124:30081)
+//!   SPINNER_API_URL       — base url for V5 attempt-bundle write (default: https://api.taifoon.dev)
 //!   ETH_RPC_URL           — chain-1 RPC override
 //!   RPC_URL_<chain_id>    — per-chain RPC override (falls back to a public default)
 
@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     let path = &args[2];
 
     let spinner_base = std::env::var("SPINNER_API_URL")
-        .unwrap_or_else(|_| "http://46.4.96.124:30081".to_string());
+        .unwrap_or_else(|_| "https://api.taifoon.dev".to_string());
 
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("read fixture {}", path))?;

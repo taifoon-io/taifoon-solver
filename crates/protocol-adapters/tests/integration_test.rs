@@ -64,7 +64,7 @@ fn create_test_proof() -> V5ProofBlob {
 async fn test_across_full_lifecycle() {
     println!("\n🔵 Testing Across V3 Full Lifecycle\n");
 
-    let spinner_client = SpinnerClient::new("http://46.4.96.124:30081");
+    let spinner_client = SpinnerClient::new("https://api.taifoon.dev");
     let adapter = AcrossAdapter::new(spinner_client);
     let intent = create_test_intent("across_v3", 1, 42161);
     let proof = create_test_proof();
@@ -112,7 +112,7 @@ async fn test_across_full_lifecycle() {
 async fn test_debridge_full_lifecycle() {
     println!("\n🟣 Testing deBridge DLN Full Lifecycle\n");
 
-    let spinner_client = SpinnerClient::new("http://46.4.96.124:30081");
+    let spinner_client = SpinnerClient::new("https://api.taifoon.dev");
     let adapter = DeBridgeAdapter::new(spinner_client);
     let intent = create_test_intent("debridge_dln", 1, 42161);
     let proof = create_test_proof();
@@ -160,7 +160,7 @@ async fn test_debridge_full_lifecycle() {
 async fn test_mayan_full_lifecycle() {
     println!("\n🟡 Testing Mayan Finance Full Lifecycle\n");
 
-    let spinner_client = SpinnerClient::new("http://46.4.96.124:30081");
+    let spinner_client = SpinnerClient::new("https://api.taifoon.dev");
     let adapter = MayanAdapter::new(spinner_client);
     let intent = create_test_intent("mayan_finance", 1, 42161);
     let proof = create_test_proof();
@@ -208,7 +208,7 @@ async fn test_mayan_full_lifecycle() {
 async fn test_adapter_factory() {
     println!("\n🏭 Testing AdapterFactory\n");
 
-    let factory = AdapterFactory::new("http://46.4.96.124:30081");
+    let factory = AdapterFactory::new("https://api.taifoon.dev");
 
     // Test Across
     println!("1️⃣  Testing Across adapter creation...");
@@ -256,7 +256,7 @@ async fn test_adapter_factory() {
 async fn test_protocol_routing() {
     println!("\n🔀 Testing Protocol Routing\n");
 
-    let factory = AdapterFactory::new("http://46.4.96.124:30081");
+    let factory = AdapterFactory::new("https://api.taifoon.dev");
 
     // Test various protocol name variations
     let test_cases = vec![
@@ -292,7 +292,7 @@ async fn test_protocol_routing() {
 async fn test_multi_chain_support() {
     println!("\n🌐 Testing Multi-Chain Support\n");
 
-    let spinner_client = SpinnerClient::new("http://46.4.96.124:30081");
+    let spinner_client = SpinnerClient::new("https://api.taifoon.dev");
 
     // Test Across on multiple chains
     println!("1️⃣  Testing Across multi-chain support...");

@@ -4,12 +4,14 @@ use executor::{
     build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
     LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
-use genome_client::{AcrossPoller, DeBridgePoller, GenomeClient};
+use genome_client::{DeBridgePoller, GenomeClient, Intent};
+use portfolio_sidecar::PortfolioSidecar;
 use profit_calc::ProfitCalculator;
 use protocol_adapters::AdapterFactory;
 use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
+use solver_main::lifi_resolver::{resolve_lifi_bridge, LifiBridgeResult};
 use std::collections::HashSet;
 use std::sync::Arc;
 use taifoon_arb_bridge::{BalanceHighHandler, StubBridge, ThresholdHandler};
@@ -205,6 +207,50 @@ async fn main() -> Result<()> {
         }
     };
 
+    // ── Lifecycle background tasks ────────────────────────────────────────────
+    // These run forever alongside the fill loop in the same process:
+    //   Task A: rebalancer — scans balances every SIDECAR_INTERVAL_SECS, bridges
+    //           surplus to fund depleted fill chains and sweeps src-chain recoveries.
+    //   Task B: claim retry — scans wallet DB every SIDECAR_INTERVAL_SECS for deBridge
+    //           fills that are CONFIRMED but claimUnlock was never sent (network
+    //           error, process restart, gas spike), and fires claimUnlock for each.
+    let sidecar_interval_secs: u64 = std::env::var("SIDECAR_INTERVAL_SECS")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+
+    // Task A: rebalancer
+    if let Ok(sidecar) = PortfolioSidecar::from_key(
+        &std::env::var("SOLVER_PRIVATE_KEY").unwrap_or_default(),
+        dry_run,
+    ) {
+        info!("♻️  Rebalancer background task started (interval={}s dry_run={})", sidecar_interval_secs, dry_run);
+        tokio::spawn(async move {
+            // Stagger first tick by 10s so fill loop logs settle first.
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            loop {
+                sidecar.tick().await;
+                tokio::time::sleep(std::time::Duration::from_secs(sidecar_interval_secs)).await;
+            }
+        });
+    } else {
+        warn!("⚠️  Rebalancer disabled — SOLVER_PRIVATE_KEY not set");
+    }
+
+    // Task B: deBridge claim retry
+    if let Some(ref ctrl) = lambda_controller {
+        let ctrl_claim = Arc::clone(ctrl);
+        let wallet_db_claim = wallet_db_path.clone();
+        let claim_interval = sidecar_interval_secs;
+        info!("🔁 deBridge claim-retry background task started (interval={}s)", claim_interval);
+        tokio::spawn(async move {
+            // Stagger by 30s so rebalancer runs first.
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            loop {
+                debridge_claim_retry_tick(&wallet_db_claim, &ctrl_claim, dry_run).await;
+                tokio::time::sleep(std::time::Duration::from_secs(claim_interval)).await;
+            }
+        });
+    }
+
     // ── Legacy executor (kept for non-Across protocols) ───────────────────────
     let legacy_executor = Executor::new()?;
     let adapter_factory = AdapterFactory::new(
@@ -237,23 +283,25 @@ async fn main() -> Result<()> {
         }
     }
 
-    // ── Genome SSE consumer + Across REST + deBridge on-chain pollers ────────
-    // The genome SSE stream currently only emits block/gas events — it does NOT
-    // publish protocol deposit events. AcrossPoller polls the Across V3 REST API
-    // directly; DeBridgePoller scans eth_getLogs for DlnSource.OrderCreated events.
+    // ── Genome SSE consumer + Across REST + deBridge on-chain + Mayan pollers ──
+    // AcrossPoller polls the Across V3 REST API; DeBridgePoller scans eth_getLogs
+    // for DlnSource.OrderCreated; MayanPoller watches the Mayan order API for
+    // EVM-destination Swift orders. The SSE stream emits null-field events and is
+    // kept only for block/gas signals — all fillable intents come from the pollers.
     let genome_client = GenomeClient::new(&genome_sse_url);
     let (intent_tx, mut intent_rx) = mpsc::channel(100);
-    let across_poller = AcrossPoller::default_mainnet();
+    // AcrossPoller disabled — Across fills suspended pending repayment economics audit.
+    // Re-enable by passing vec![AcrossPoller::default_mainnet()] below.
     let debridge_poller = DeBridgePoller::default_mainnet();
     let _genome_handle = tokio::spawn(async move {
         if let Err(e) = genome_client
-            .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
+            .subscribe_with_all_pollers(intent_tx, vec![], Some(debridge_poller))
             .await
         {
             error!("Genome stream error: {}", e);
         }
     });
-    info!("✅ Genome SSE + Across REST + deBridge on-chain pollers started");
+    info!("✅ Genome SSE + deBridge on-chain + Mayan pollers started (Across DISABLED)");
     info!("⏳ Waiting for intents...");
 
     // Dedup: track intent IDs we've already dispatched in this session.
@@ -529,8 +577,11 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        // Legacy path — profit-calc for all, execute only for protocols with adapters.
-        // Orbiter/Socket/t3rn etc. are tracked for observability but not yet executable.
+        // Legacy path — only reached by protocols that cleared filter_match but aren't
+        // routable (e.g. Orbiter/Socket/t3rn). Skip entirely if protocol filter excludes them.
+        if !filter_match {
+            continue;
+        }
         let has_adapter = adapter_factory.get_adapter(&intent).is_ok();
         match profit_calc.calculate(&intent).await {
             Ok(p) => {
@@ -567,74 +618,68 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Rich resolution result from the LiFi status API.
-/// Carries the bridge slug plus the actual source-side deposit tx details so the
-/// enrichment path in lambda_controller can decode V3FundsDeposited correctly.
-struct LifiResolution {
-    bridge: String,
-    /// txHash of the actual underlying deposit (e.g. V3FundsDeposited tx), NOT the LiFi Diamond tx.
-    sending_tx_hash: Option<String>,
-    /// Chain id where the deposit tx was emitted.
-    sending_chain_id: Option<u64>,
-}
+/// Scan the wallet DB for deBridge fills in CONFIRMED state (fill tx landed but
+/// claimUnlock was never sent or failed) and fire claimUnlock for each.
+/// Runs every SIDECAR_INTERVAL_SECS as a background task inside solver-main.
+async fn debridge_claim_retry_tick(
+    wallet_db_path: &str,
+    ctrl: &executor::LambdaController,
+    dry_run: bool,
+) {
+    let wallet = match wallet_manager::WalletManager::open(wallet_db_path, 0.0) {
+        Ok(w) => w,
+        Err(e) => { warn!("claim_retry: wallet DB open failed: {}", e); return; }
+    };
+    let confirmed = match wallet.list_intents(Some("CONFIRMED"), 200) {
+        Ok(v) => v,
+        Err(e) => { warn!("claim_retry: list_intents failed: {}", e); return; }
+    };
+    let pending: Vec<_> = confirmed.iter().filter(|r| {
+        let p = r.protocol.to_lowercase();
+        p.contains("debridge") || p.contains("dln")
+    }).collect();
 
-enum LifiBridgeResult {
-    /// Bridge resolved and is fillable.
-    Resolved(LifiResolution),
-    /// li.quest returned a known bridge slug we don't handle — skip permanently.
-    NotRoutable,
-    /// API unavailable or tx not yet indexed — retry on next genome event.
-    Pending,
-}
+    if pending.is_empty() { return; }
+    info!("claim_retry: {} CONFIRMED deBridge fill(s) need claimUnlock", pending.len());
 
-/// Resolve the underlying bridge for a LiFi intent via the LiFi status API.
-async fn resolve_lifi_bridge(tx_hash: &str) -> LifiBridgeResult {
-    let url = format!("https://li.quest/v1/status?txHash={}", tx_hash);
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return LifiBridgeResult::Pending,
-    };
-    let resp = match client.get(&url).send().await {
-        Ok(r) => r,
-        Err(_) => return LifiBridgeResult::Pending,
-    };
-    if !resp.status().is_success() {
-        return LifiBridgeResult::Pending;
-    }
-    let body: serde_json::Value = match resp.json().await {
-        Ok(b) => b,
-        Err(_) => return LifiBridgeResult::Pending,
-    };
-    let raw = match body.get("tool")
-        .or_else(|| body.get("bridge"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_lowercase())
-    {
-        Some(r) => r,
-        // Response parsed but no tool/bridge field — tx not yet indexed.
-        None => return LifiBridgeResult::Pending,
-    };
-    let bridge = match raw.as_str() {
-        "across" | "across_v3" => "across".to_string(),
-        "debridge" | "dln" | "debridge_dln" => "debridge".to_string(),
-        "mayan" | "mayan_swift" | "mayanswift" => "mayan".to_string(),
-        _ => {
-            tracing::debug!("LiFi bridge '{}' not routable (not Across/deBridge/Mayan)", raw);
-            return LifiBridgeResult::NotRoutable;
+    for record in pending {
+        // DeBridgePoller sets intent.id = "debridge_dln:0x<orderId>"
+        // Extract the hex part after the colon for order_id.
+        let order_id_hex = if record.intent_id.contains(':') {
+            record.intent_id.splitn(2, ':').nth(1).unwrap_or(&record.intent_id).to_string()
+        } else {
+            record.intent_id.clone()
+        };
+        let intent = Intent {
+            id: record.intent_id.clone(),
+            protocol: record.protocol.clone(),
+            src_chain: record.src_chain as u64,
+            dst_chain: record.dst_chain as u64,
+            order_id: Some(order_id_hex.clone()),
+            ..Intent::default()
+        };
+        if dry_run {
+            info!("claim_retry: [DRY_RUN] would claimUnlock orderId={} src={}", order_id_hex, record.src_chain);
+            continue;
         }
-    };
-    let sending = body.get("sending");
-    let sending_tx_hash = sending
-        .and_then(|s| s.get("txHash"))
-        .and_then(|v| v.as_str())
-        .filter(|s| s.starts_with("0x") && s.len() == 66)
-        .map(String::from);
-    let sending_chain_id = sending
-        .and_then(|s| s.get("chainId"))
-        .and_then(|v| v.as_u64());
-    LifiBridgeResult::Resolved(LifiResolution { bridge, sending_tx_hash, sending_chain_id })
+        match ctrl.lambda_claim_debridge(&intent).await {
+            Ok(LambdaClaimOutcome::Claimed { tx_hash, fee_usd }) => {
+                info!("claim_retry: ✅ claimUnlock tx={} fee=${:.4} ({})", tx_hash, fee_usd, record.intent_id);
+            }
+            Ok(LambdaClaimOutcome::NotEligible { reason }) => {
+                info!("claim_retry: not eligible {} — {}", record.intent_id, reason);
+            }
+            Ok(LambdaClaimOutcome::Failed { error: e }) => {
+                warn!("claim_retry: ❌ claimUnlock failed for {} — {}", record.intent_id, e);
+            }
+            Err(e) => {
+                warn!("claim_retry: fatal for {} — {}", record.intent_id, e);
+            }
+        }
+    }
 }
+
+// LiFi status-API resolver moved to `solver_main::lifi_resolver` so the
+// response-parser is unit-testable without spinning up a network mock. Call
+// site is unchanged: `resolve_lifi_bridge(hash).await` above.
 

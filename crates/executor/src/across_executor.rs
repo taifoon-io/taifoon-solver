@@ -408,7 +408,9 @@ pub fn build_across_adapter_calldata(intent: &Intent) -> Result<Vec<u8>> {
     let call = IAcrossAdapter::fillCall {
         depositId: deposit_id,
         relayData: Bytes::from(encoded),
-        repaymentChainId: U256::from(intent.src_chain),
+        // Repay on dst_chain so capital stays on the chain where the solver holds tokens.
+        // Repaying to src_chain strands funds across N source chains with no gas to consolidate.
+        repaymentChainId: U256::from(intent.dst_chain),
     };
     Ok(call.abi_encode())
 }
@@ -420,12 +422,17 @@ pub fn build_across_adapter_calldata(intent: &Intent) -> Result<Vec<u8>> {
 /// Uses the new-style SpokePool interface with bytes32 address fields and a repaymentAddress
 /// parameter (selector 0xdeff4b24, verified on Base 0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64).
 pub fn build_across_spoke_pool_calldata(intent: &Intent) -> Result<Vec<u8>> {
-    build_across_spoke_pool_calldata_with_relayer(intent, None)
+    build_across_spoke_pool_calldata_with_relayer(intent, None, None)
 }
 
 /// Same as `build_across_spoke_pool_calldata` but allows specifying the repayment address
-/// (the relayer's address where Across will repay the fill on the origin chain).
-pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_address: Option<Address>) -> Result<Vec<u8>> {
+/// and repayment chain ID explicitly.
+///
+/// `repayment_chain_id` MUST be the chain where we are executing the fill (wiring.chain_id),
+/// NOT intent.dst_chain — the intent field is unreliable across different event sources.
+/// Across repays the relayer on the repayment chain; setting this to the fill chain keeps
+/// capital on the chain where the solver operates.
+pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_address: Option<Address>, repayment_chain_id: Option<u64>) -> Result<Vec<u8>> {
     let deposit_id = intent.deposit_id
         .or_else(|| parse_deposit_id_legacy(&intent.id))
         .or_else(|| parse_deposit_id_legacy(&intent.tx_hash))
@@ -506,9 +513,14 @@ pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_ad
     let repayment_addr = relayer_address.unwrap_or(depositor);
     let repayment_address = addr_to_b32(repayment_addr);
 
+    // repaymentChainId: the chain where Across will reimburse the relayer.
+    // Must be the chain we are filling on (wiring.chain_id), passed explicitly by the caller.
+    // Falling back to intent.dst_chain is NOT safe — that field's meaning varies by event source
+    // (AcrossPoller has it correct, but old SSE events had src/dst inverted).
+    let repay_chain = repayment_chain_id.unwrap_or(intent.dst_chain);
     let call = IAcrossSpokePool::fillRelayCall {
         relayData: relay,
-        repaymentChainId: U256::from(intent.src_chain),
+        repaymentChainId: U256::from(repay_chain),
         repaymentAddress: repayment_address,
     };
     Ok(call.abi_encode())

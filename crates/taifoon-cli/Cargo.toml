@@ -31,3 +31,4 @@ genome-client = { path = "../genome-client" }
 protocol-adapters = { path = "../protocol-adapters" }
 executor = { path = "../executor" }
 wallet-manager = { path = "../wallet-manager" }
+portfolio-sidecar = { path = "../portfolio-sidecar" }

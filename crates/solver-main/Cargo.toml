@@ -18,6 +18,7 @@ path = "src/bin/estimate_one.rs"
 
 [dependencies]
 genome-client = { path = "../genome-client" }
+portfolio-sidecar = { path = "../portfolio-sidecar" }
 profit-calc = { path = "../profit-calc" }
 executor = { path = "../executor" }
 protocol-adapters = { path = "../protocol-adapters" }

@@ -13,6 +13,7 @@ members = [
     "crates/taifoon-cli",
     "crates/wallet-manager",
     "crates/taifoon-arb-bridge",
+    "crates/portfolio-sidecar",
 ]
 
 [workspace.package]
@@ -59,3 +60,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Hex
 hex = "0.4"
+
+# WebSocket
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
