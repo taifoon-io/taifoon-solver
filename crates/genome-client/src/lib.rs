@@ -293,6 +293,32 @@ pub struct Intent {
     /// Genome snapshot batch_id — used as batchId in executeVerifiedCall V1.
     #[serde(default)]
     pub batch_id: Option<u64>,
+
+    // ── Mayan Swift V2 order fields decoded from source tx ────────────────────
+    /// 32-byte random salt included in the Mayan Swift V2 OrderParams.
+    /// Decoded from the `createOrderWithToken` calldata of the source tx.
+    /// Required to reconstruct the exact OrderParams for `fulfillOrder`/`fulfillSimple`.
+    #[serde(default)]
+    pub mayan_random: Option<String>,
+    /// Mayan Swift auction mode: 0=no-auction (fulfillSimple, no VAA needed),
+    /// 2=auction (fulfillOrder, requires auction VAA from chain 42069).
+    #[serde(default)]
+    pub mayan_auction_mode: Option<u8>,
+    /// Mayan Swift cancel relayer fee (raw u64, from OrderParams).
+    #[serde(default)]
+    pub mayan_cancel_fee: Option<u64>,
+    /// Mayan Swift refund relayer fee (raw u64, from OrderParams).
+    #[serde(default)]
+    pub mayan_refund_fee: Option<u64>,
+    /// Mayan Swift referrer address (bytes32 hex, from OrderParams).
+    #[serde(default)]
+    pub mayan_referrer_addr: Option<String>,
+    /// Mayan Swift referrer bps (from OrderParams).
+    #[serde(default)]
+    pub mayan_referrer_bps: Option<u8>,
+    /// Mayan Swift gasDrop amount (raw u64, from OrderParams).
+    #[serde(default)]
+    pub mayan_gas_drop: Option<u64>,
 }
 
 impl Intent {
@@ -436,6 +462,13 @@ impl Intent {
             exclusive_relayer: event.exclusive_relayer,
             message: event.message,
             batch_id: event.batch_id,
+            mayan_random: None,
+            mayan_auction_mode: None,
+            mayan_cancel_fee: None,
+            mayan_refund_fee: None,
+            mayan_referrer_addr: None,
+            mayan_referrer_bps: None,
+            mayan_gas_drop: None,
         })
     }
 }
@@ -1282,6 +1315,137 @@ fn parse_debridge_ws_message(
     })
 }
 
+// ── Mayan Swift order params decoder ─────────────────────────────────────────
+
+/// Decoded fields from a Mayan Swift V2 `createOrderWithToken` or
+/// `createOrderWithEth` calldata on the source chain transaction.
+#[derive(Debug, Default)]
+struct MayanOrderParams {
+    /// 32-byte random salt (hex, no 0x prefix).
+    pub random: Option<String>,
+    pub cancel_fee: Option<u64>,
+    pub refund_fee: Option<u64>,
+    pub gas_drop: Option<u64>,
+    pub deadline: Option<u64>,
+    pub referrer_addr: Option<String>,
+    pub referrer_bps: Option<u8>,
+    pub auction_mode: Option<u8>,
+}
+
+/// Fetch `eth_getTransactionByHash` on `src_chain` for `tx_hash` and extract
+/// the Mayan Swift V2 OrderParams fields from the `createOrderWithToken` calldata.
+///
+/// The Mayan Forwarder wraps an inner `createOrderWithToken` call. We locate the
+/// inner selector `0xe4269fc4` (MayanSwiftV2.createOrderWithToken) inside the
+/// calldata and decode the Order struct at that position.
+///
+/// Order struct layout (all slots 32 bytes each, after the 4-byte selector):
+///   slot 0: tokenIn (address, right-padded)
+///   slot 1: amountIn (uint256)
+///   slot 2: payloadType (uint8)
+///   slot 3: trader (bytes32)
+///   slot 4: tokenOut (bytes32)
+///   slot 5: destChainId (uint16)
+///   slot 6: destAddr (bytes32)
+///   slot 7: minAmountOut (uint64)
+///   slot 8: gasDrop (uint64)
+///   slot 9: cancelFee (uint64)
+///  slot 10: refundFee (uint64)
+///  slot 11: deadline (uint64)
+///  slot 12: referrerAddr (bytes32)
+///  slot 13: referrerBps (uint8)
+///  slot 14: auctionMode (uint8)
+///  slot 15: random (bytes32)
+async fn fetch_mayan_order_params(
+    http: &reqwest::Client,
+    src_chain: u64,
+    tx_hash: &str,
+) -> MayanOrderParams {
+    if tx_hash.is_empty() || tx_hash == "0x" {
+        return MayanOrderParams::default();
+    }
+    let rpc = match src_chain {
+        1     => "https://eth.llamarpc.com",
+        10    => "https://mainnet.optimism.io",
+        56    => "https://bsc-dataseed.binance.org",
+        137   => "https://polygon-bor-rpc.publicnode.com",
+        8453  => "https://mainnet.base.org",
+        42161 => "https://arb1.arbitrum.io/rpc",
+        43114 => "https://api.avax.network/ext/bc/C/rpc",
+        _     => return MayanOrderParams::default(),
+    };
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "eth_getTransactionByHash",
+        "params": [tx_hash]
+    });
+    let resp = match http.post(rpc).json(&body).send().await {
+        Ok(r) => r,
+        Err(_) => return MayanOrderParams::default(),
+    };
+    let v: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return MayanOrderParams::default(),
+    };
+    let input = match v["result"]["input"].as_str() {
+        Some(s) if s.len() > 10 => s.trim_start_matches("0x").to_string(),
+        _ => return MayanOrderParams::default(),
+    };
+
+    // Find the inner createOrderWithToken selector (0xe4269fc4) inside the calldata.
+    // It appears as the first 4 bytes of the inner calldata argument passed to
+    // forwardERC20 / forwardEth by the Mayan Forwarder contract.
+    const CREATE_ORDER_SEL: &str = "e4269fc4";
+    let pos = match input.find(CREATE_ORDER_SEL) {
+        Some(p) if p % 2 == 0 => p,
+        _ => return MayanOrderParams::default(),
+    };
+
+    // Skip past selector (8 hex chars = 4 bytes). Then read the ABI-encoded Order struct.
+    // The first 3 slots (tokenIn, amountIn, ... are skipped in our interest) but we need
+    // to be careful: the outer function may have ABI-encoded the struct itself, so there may
+    // be an offset pointer before the struct data. We detect this by checking if slot 0
+    // looks like an offset (< 256) vs an address (> 2^32).
+    let data = &input[pos + 8..]; // skip the selector
+
+    // Parse as 32-byte (64 hex char) slots
+    let slots: Vec<&str> = (0..data.len() / 64)
+        .map(|i| &data[i * 64..(i + 1) * 64])
+        .collect();
+
+    // The Order struct begins at the start. Slot layout (0-indexed):
+    // 0=tokenIn, 1=amountIn, 2=payloadType, 3=trader, 4=tokenOut,
+    // 5=destChainId, 6=destAddr, 7=minAmountOut, 8=gasDrop,
+    // 9=cancelFee, 10=refundFee, 11=deadline, 12=referrerAddr, 13=referrerBps,
+    // 14=auctionMode, 15=random
+    // If the first slot looks like a small offset (< 0x1000 = 4096), it's an ABI
+    // offset pointer — skip it and shift by 1.
+    let offset_shift: usize = if slots.first().map_or(false, |s| {
+        u64::from_str_radix(s, 16).unwrap_or(u64::MAX) < 4096
+    }) { 1 } else { 0 };
+
+    let slot = |i: usize| slots.get(i + offset_shift).copied().unwrap_or("");
+    let parse_u64 = |s: &str| u64::from_str_radix(s.trim_start_matches('0'), 16).ok().filter(|&v| v > 0);
+
+    MayanOrderParams {
+        random: {
+            let r = slot(15);
+            if r.len() == 64 && r != "0".repeat(64) { Some(r.to_string()) } else { None }
+        },
+        cancel_fee: parse_u64(slot(9)),
+        refund_fee: parse_u64(slot(10)),
+        gas_drop: parse_u64(slot(8)),
+        deadline: parse_u64(slot(11)),
+        referrer_addr: {
+            let r = slot(12);
+            if r.len() == 64 && r != "0".repeat(64) { Some(format!("0x{}", r)) } else { None }
+        },
+        referrer_bps: u8::from_str_radix(slot(13).trim_start_matches('0'), 16).ok(),
+        auction_mode: u8::from_str_radix(slot(14).trim_start_matches('0'), 16).ok(),
+    }
+}
+
 // ── Mayan Swift poller ────────────────────────────────────────────────────────
 
 /// Mayan Swift ORDER_CREATED poller.
@@ -1414,18 +1578,32 @@ impl MayanPoller {
                 let from_amount_str = order.get("fromAmount").and_then(|v| v.as_str()).unwrap_or("0");
                 let to_amount_str = order.get("toAmount").and_then(|v| v.as_str());
 
-                // Auction mode: 0=English, 1=Dutch, 2=No-auction (direct fill)
-                let auction_mode = order.get("auctionMode").and_then(|v| v.as_u64()).unwrap_or(2);
+                // Auction mode from Mayan API: 0=no-auction (fulfillSimple, no VAA needed),
+                // 2=auction (fulfillOrder, requires auction VAA from chain 42069).
+                let auction_mode_api = order.get("auctionMode").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
                 // is_solana_source: swapChain=1 means Solana intermediary
                 let is_solana_src = swap_chain == "1" && src_chain == 0;
 
-                info!("📡 MayanPoller ORDER_CREATED orderHash={} src={}({}) dst={}({}) {}→{} mode={}",
+                // Decode OrderParams from source tx calldata (non-blocking best-effort).
+                // This gives us `random`, `cancelFee`, `refundFee`, `gasDrop`, `deadline`,
+                // and other fields needed to reconstruct the exact OrderParams for fulfillOrder.
+                // Only attempt for EVM-source orders where we have a tx hash.
+                let order_params = if !is_solana_src && !source_tx.is_empty() && source_tx != "0x" {
+                    fetch_mayan_order_params(&client, src_chain, &source_tx).await
+                } else {
+                    MayanOrderParams::default()
+                };
+
+                let effective_auction_mode = order_params.auction_mode.unwrap_or(auction_mode_api);
+
+                info!("📡 MayanPoller ORDER_CREATED orderHash={} src={}({}) dst={}({}) {}→{} mode={} random={}",
                     &order_hash[..20.min(order_hash.len())],
                     src_chain_mayan, src_chain,
                     dst_chain_mayan, dst_chain,
                     order.get("fromTokenSymbol").and_then(|v| v.as_str()).unwrap_or("?"),
                     order.get("toTokenSymbol").and_then(|v| v.as_str()).unwrap_or("?"),
-                    auction_mode);
+                    effective_auction_mode,
+                    if order_params.random.is_some() { "✅" } else { "missing" });
 
                 let intent = Intent {
                     id: format!("mayan_swift:{}", order_hash),
@@ -1449,6 +1627,14 @@ impl MayanPoller {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs(),
+                    mayan_random: order_params.random,
+                    mayan_auction_mode: Some(effective_auction_mode),
+                    mayan_cancel_fee: order_params.cancel_fee,
+                    mayan_refund_fee: order_params.refund_fee,
+                    mayan_referrer_addr: order_params.referrer_addr,
+                    mayan_referrer_bps: order_params.referrer_bps,
+                    mayan_gas_drop: order_params.gas_drop,
+                    deadline: order_params.deadline,
                     ..Default::default()
                 };
 

@@ -46,6 +46,56 @@ sol! {
     function allowance(address owner, address spender) external view returns (uint256);
 }
 
+// Mayan Forwarder create-side — 0x337685fdab40d39bd02028545a4ffa7d287cc3e2
+sol! {
+    interface MayanForwarderCreate {
+        struct PermitParams {
+            uint256 value;
+            uint256 deadline;
+            uint8 v;
+            bytes32 r;
+            bytes32 s;
+        }
+
+        function forwardERC20(
+            address tokenIn,
+            uint256 amountIn,
+            PermitParams permit,
+            address swift,
+            bytes calldata createCalldata
+        ) external;
+    }
+}
+
+// MayanSwift V2 — createOrderWithToken selector 0xe4269fc4
+sol! {
+    interface MayanSwiftCreate {
+        struct Order {
+            bytes32 trader;
+            bytes32 tokenOut;
+            uint64 minAmountOut;
+            uint64 gasDrop;
+            uint64 cancelFee;
+            uint64 refundFee;
+            uint64 deadline;
+            bytes32 destAddr;
+            uint16 destChainId;
+            bytes32 referrerAddr;
+            uint8 referrerBps;
+            uint8 auctionMode;
+            bytes32 random;
+            uint8 payloadType;
+        }
+
+        function createOrderWithToken(
+            address tokenIn,
+            uint256 amountIn,
+            Order order,
+            bytes calldata customPayload
+        ) external;
+    }
+}
+
 /// Spoke pool addresses per chain (Across V3).
 fn spoke_pool(chain_id: u64) -> Option<Address> {
     use std::str::FromStr;
@@ -75,6 +125,17 @@ fn rpc_for(chain_id: u64) -> &'static str {
 const GAS_TOPUP_USD: f64 = 4.0;
 const MIN_BRIDGE_USD: f64 = 1.0;
 
+/// Mayan Forwarder (create side) — same address on all EVM chains.
+const MAYAN_FORWARDER_ADDR: &str = "0x337685fdab40d39bd02028545a4ffa7d287cc3e2";
+/// MayanSwift V2 contract on Base (8453). Same on most EVM chains.
+const MAYAN_SWIFT_BASE: &str = "0xC38d8a07D4d9E8BC1D32dF50D4b1eAEEbeAfdC1f";
+/// USDC on Base.
+const USDC_BASE: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+/// Mayan Wormhole chain ID for Solana.
+const MAYAN_SOLANA_CHAIN_ID: u16 = 1;
+/// Amount (USD) to bridge to Solana each cycle.
+const SOLANA_BRIDGE_USD: f64 = 3.0;
+
 /// A bridge action decided by the rebalancer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeAction {
@@ -101,6 +162,8 @@ pub enum BridgeKind {
     ClaimSweep,
     /// Swap native gas token (MATIC/ETH) on a src-only chain to USDC on home chain.
     NativeSweep,
+    /// Mayan Swift forwardERC20 → USDC on Solana.
+    MayanSolana,
 }
 
 /// Chain ID of the canonical home chain — surplus repayments consolidate here.
@@ -405,6 +468,37 @@ impl Rebalancer {
             }
         }
 
+        // Phase 4: Mayan Solana bridge — if SOLANA_ADDRESS is set and Base has surplus stables.
+        // Sends SOLANA_BRIDGE_USD worth of USDC from Base to the solver's Solana address
+        // via Mayan Forwarder forwardERC20 → MayanSwift createOrderWithToken.
+        if let Ok(solana_addr) = std::env::var("SOLANA_ADDRESS") {
+            if !solana_addr.is_empty() {
+                let base_snap = snapshots.iter().find(|s| s.chain_id == HOME_CHAIN_ID);
+                let base_working = working_stable.get(&HOME_CHAIN_ID).copied().unwrap_or(0.0);
+                let base_target = targets.iter().find(|t| t.chain_id == HOME_CHAIN_ID);
+                let base_reserve = base_target.map(|t| if t.is_fill_chain { t.min_stable_usd } else { 0.0 }).unwrap_or(0.0);
+                let base_available = base_working - base_reserve;
+
+                if let Some(base_snap) = base_snap {
+                    if base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD {
+                        let amount_raw = usd_to_raw(SOLANA_BRIDGE_USD, 6); // USDC 6 decimals
+                        info!(
+                            "🌞 Mayan bridge: ${:.2} USDC Base → Solana ({})",
+                            SOLANA_BRIDGE_USD, &solana_addr[..8.min(solana_addr.len())]
+                        );
+                        let action = self.mayan_solana_bridge(base_snap, &solana_addr, amount_raw, SOLANA_BRIDGE_USD).await;
+                        *working_stable.entry(HOME_CHAIN_ID).or_insert(0.0) -= SOLANA_BRIDGE_USD;
+                        actions.push(action);
+                    } else {
+                        info!(
+                            "⏭ Mayan Solana bridge skipped: Base available=${:.2} < ${:.2} needed",
+                            base_available, SOLANA_BRIDGE_USD + MIN_BRIDGE_USD
+                        );
+                    }
+                }
+            }
+        }
+
         actions
     }
 
@@ -508,6 +602,163 @@ impl Rebalancer {
             Err(e) => { warn!("Stable bridge failed {} → {}: {e:#}", src.chain_id, dst_target.chain_name); action.status = format!("error: {e:#}"); }
         }
         action
+    }
+
+    /// Bridge USDC from Base to Solana via Mayan Swift forwardERC20.
+    async fn mayan_solana_bridge(
+        &self,
+        src: &ChainSnapshot,
+        solana_addr: &str,
+        amount_raw: u128,
+        amount_usd: f64,
+    ) -> BridgeAction {
+        // Use chain_id 0 for Solana as a sentinel (Solana has no EVM chain ID).
+        let mut action = BridgeAction {
+            src_chain: src.chain_id,
+            dst_chain: 0, // Solana sentinel
+            token_symbol: "USDC".into(),
+            amount_usd,
+            kind: BridgeKind::MayanSolana,
+            tx_hash: None,
+            status: if self.dry_run { "dry_run".into() } else { "pending".into() },
+        };
+
+        if self.dry_run {
+            info!(
+                "[DRY RUN] Would Mayan-bridge ${:.2} USDC Base → Solana ({})",
+                amount_usd, &solana_addr[..8.min(solana_addr.len())]
+            );
+            return action;
+        }
+
+        match self.execute_mayan_solana_bridge(amount_raw, solana_addr).await {
+            Ok(hash) => { action.tx_hash = Some(hash); action.status = "sent".into(); }
+            Err(e) => {
+                warn!("Mayan Solana bridge failed: {e:#}");
+                action.status = format!("error: {e:#}");
+            }
+        }
+        action
+    }
+
+    /// Execute the Mayan forwardERC20 transaction to bridge USDC from Base to Solana.
+    ///
+    /// Flow:
+    ///   1. approve(MAYAN_FORWARDER, amount_raw) on USDC/Base if needed
+    ///   2. forwardERC20(USDC, amount_raw, zeroPermit, MayanSwift, createOrderCalldata)
+    async fn execute_mayan_solana_bridge(&self, amount_raw: u128, solana_addr: &str) -> Result<String> {
+        let rpc = rpc_for(HOME_CHAIN_ID);
+        let amount_u256 = U256::from(amount_raw);
+
+        // Decode the Solana base58 pubkey into 32 bytes.
+        let sol_bytes = bs58::decode(solana_addr)
+            .into_vec()
+            .context("invalid Solana base58 address")?;
+        if sol_bytes.len() != 32 {
+            anyhow::bail!("Solana address must be 32 bytes, got {}", sol_bytes.len());
+        }
+        let mut dest_addr = [0u8; 32];
+        dest_addr.copy_from_slice(&sol_bytes);
+        let dest_addr_fixed: alloy::primitives::FixedBytes<32> = dest_addr.into();
+
+        // Trader is the solver EVM address, left-padded to 32 bytes.
+        let solver_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[12..].copy_from_slice(self.solver_addr.as_slice());
+            b
+        };
+        let trader_fixed: alloy::primitives::FixedBytes<32> = solver_bytes.into();
+
+        // tokenOut on Solana: USDC is EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+        // Encoded as bytes32: right-aligned (Wormhole convention for Solana token addresses)
+        let usdc_solana = bs58::decode("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+            .into_vec()
+            .unwrap_or_default();
+        let mut token_out = [0u8; 32];
+        if usdc_solana.len() == 32 { token_out.copy_from_slice(&usdc_solana); }
+        let token_out_fixed: alloy::primitives::FixedBytes<32> = token_out.into();
+
+        // referrerAddr = zero bytes32
+        let zero_fixed: alloy::primitives::FixedBytes<32> = [0u8; 32].into();
+
+        // random = 32 random bytes for uniqueness
+        let random_bytes: [u8; 32] = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+            let lo = ts as u64;
+            let hi = (ts >> 64) as u64;
+            let mut r = [0u8; 32];
+            r[16..24].copy_from_slice(&hi.to_be_bytes());
+            r[24..].copy_from_slice(&lo.to_be_bytes());
+            r
+        };
+        let random_fixed: alloy::primitives::FixedBytes<32> = random_bytes.into();
+
+        // deadline = now + 30 minutes
+        let deadline = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 1800
+        };
+
+        // minAmountOut = 95% of input (5% slippage allowance)
+        let min_amount_out = (amount_raw as f64 * 0.95) as u64;
+
+        let swift: Address = MAYAN_SWIFT_BASE.parse().context("parse swift addr")?;
+        let usdc_base: Address = USDC_BASE.parse().context("parse usdc addr")?;
+
+        // Build inner createOrderWithToken calldata
+        let order = MayanSwiftCreate::Order {
+            trader: trader_fixed,
+            tokenOut: token_out_fixed,
+            minAmountOut: min_amount_out,
+            gasDrop: 0,
+            cancelFee: 0,
+            refundFee: 0,
+            deadline,
+            destAddr: dest_addr_fixed,
+            destChainId: MAYAN_SOLANA_CHAIN_ID,
+            referrerAddr: zero_fixed,
+            referrerBps: 0,
+            auctionMode: 0, // fulfillSimple — no auction VAA needed
+            random: random_fixed,
+            payloadType: 0,
+        };
+        let create_calldata = MayanSwiftCreate::createOrderWithTokenCall {
+            tokenIn: usdc_base,
+            amountIn: U256::from(amount_raw),
+            order,
+            customPayload: Bytes::new(),
+        }.abi_encode();
+
+        let forwarder: Address = MAYAN_FORWARDER_ADDR.parse().context("parse forwarder")?;
+
+        // Approve Mayan Forwarder for USDC
+        self.ensure_allowance(USDC_BASE, MAYAN_FORWARDER_ADDR, amount_u256, rpc)
+            .await.context("approve Mayan Forwarder")?;
+
+        // Zero permit (no EIP-2612 permit)
+        let zero_permit = MayanForwarderCreate::PermitParams {
+            value: U256::ZERO,
+            deadline: U256::ZERO,
+            v: 0,
+            r: [0u8; 32].into(),
+            s: [0u8; 32].into(),
+        };
+
+        let calldata = MayanForwarderCreate::forwardERC20Call {
+            tokenIn: usdc_base,
+            amountIn: U256::from(amount_raw),
+            permit: zero_permit,
+            swift,
+            createCalldata: Bytes::from(create_calldata),
+        }.abi_encode();
+
+        info!(
+            "📤 Mayan forwardERC20: {} USDC raw → Solana, swift={}, forwarder={}",
+            amount_raw, MAYAN_SWIFT_BASE, MAYAN_FORWARDER_ADDR
+        );
+
+        self.send_raw(rpc, &format!("{forwarder:#x}"), &hex::encode(&calldata)).await
     }
 
     async fn execute_gas_topup(&self, src: &ChainSnapshot, dst_chain: u64, amount_raw: u128) -> Result<String> {

@@ -557,34 +557,43 @@ impl LambdaController {
                 }
             }
         }
-        // Mayan Swift EVM fills (EVM source → EVM destination):
-        // The `fulfillOrder` call requires a Wormhole VAA emitted by the Mayan Forwarder
-        // contract on the source chain. We fetch it from wormholescan by scanning the
-        // forwarder's recent VAAs for one whose payload encodes the target order hash.
+        // Mayan Swift EVM fills (EVM source → EVM destination).
+        // Two paths:
+        //   auctionMode=0 → fulfillSimple (no VAA needed, direct fill)
+        //   auctionMode=2 → fulfillOrder (needs auction VAA from Mayan's private chain 42069;
+        //                   we fetch it from wormholescan — currently only type 0x05 available)
         // Solana-sourced orders are handled above by the Solana broadcaster path.
+        let mayan_auction_mode = intent.mayan_auction_mode.unwrap_or(2);
         let mayan_vaa: Option<Vec<u8>> = if is_mayan && !is_solana_src {
-            let order_hash = match intent.mayan_order_id.as_deref() {
-                Some(h) => h.to_string(),
-                None => {
-                    let reason = "mayan_evm_missing_order_id";
-                    info!("⏭️  {} — {}", intent.id, reason);
-                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-                    let _ = self.wallet.release(&intent.id);
-                    return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
-                }
-            };
-            info!("🔍 Fetching Wormhole VAA for Mayan EVM order {} (src_chain={})", order_hash, intent.src_chain);
-            match fetch_vaa_for_mayan_order(intent.src_chain, &order_hash).await {
-                Some(vaa) => {
-                    info!("✅ Got Mayan VAA ({} bytes) for {}", vaa.len(), intent.id);
-                    Some(vaa)
-                }
-                None => {
-                    let reason = "mayan_vaa_not_found";
-                    info!("⏭️  {} — {}", intent.id, reason);
-                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-                    let _ = self.wallet.release(&intent.id);
-                    return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+            if mayan_auction_mode == 0 {
+                // auctionMode=0 → fulfillSimple; no VAA required.
+                info!("✅ Mayan auctionMode=0: using fulfillSimple (no VAA needed) for {}", intent.id);
+                None
+            } else {
+                let order_hash = match intent.mayan_order_id.as_deref() {
+                    Some(h) => h.to_string(),
+                    None => {
+                        let reason = "mayan_evm_missing_order_id";
+                        info!("⏭️  {} — {}", intent.id, reason);
+                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+                        let _ = self.wallet.release(&intent.id);
+                        return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+                    }
+                };
+                info!("🔍 Fetching Wormhole VAA for Mayan EVM order {} (src_chain={} mode={})",
+                    order_hash, intent.src_chain, mayan_auction_mode);
+                match fetch_vaa_for_mayan_order(intent.src_chain, &order_hash).await {
+                    Some(vaa) => {
+                        info!("✅ Got Mayan VAA ({} bytes) for {}", vaa.len(), intent.id);
+                        Some(vaa)
+                    }
+                    None => {
+                        let reason = "mayan_vaa_not_found";
+                        info!("⏭️  {} — {}", intent.id, reason);
+                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+                        let _ = self.wallet.release(&intent.id);
+                        return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+                    }
                 }
             }
         } else {
@@ -739,9 +748,14 @@ impl LambdaController {
         };
 
         let (tx_target, tx_calldata) = if is_mayan {
-            // Mayan Swift EVM: fulfillOrder(orderHash, fulfillAmount, encodedVm, OrderParams, recipient)
             let adapter = MayanEvmEstimateAdapter::new(self.signer.address(), self.spinner.base_url());
-            let (swift_addr, calldata) = match adapter.build_estimate_call_with_vaa(intent, mayan_vaa.as_deref()) {
+            // auctionMode=0: fulfillSimple (no VAA), auctionMode=2: fulfillOrder (with VAA).
+            let build_result = if mayan_auction_mode == 0 {
+                adapter.build_fulfill_simple_call(intent)
+            } else {
+                adapter.build_estimate_call_with_vaa(intent, mayan_vaa.as_deref())
+            };
+            let (swift_addr, calldata) = match build_result {
                 Ok(v) => v,
                 Err(e) => {
                     let err = format!("calldata_build:{e}");
@@ -750,8 +764,9 @@ impl LambdaController {
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
-            info!("📋 Mayan Swift fulfillOrder on chain {} (swift {}): {} bytes calldata{}",
-                wiring.chain_id, swift_addr, calldata.len(),
+            let fn_name = if mayan_auction_mode == 0 { "fulfillSimple" } else { "fulfillOrder" };
+            info!("📋 Mayan Swift {} on chain {} (swift {}): {} bytes calldata{}",
+                fn_name, wiring.chain_id, swift_addr, calldata.len(),
                 eth_fill_value.map(|v| format!(", value={v}wei")).unwrap_or_default());
             (swift_addr, calldata)
         } else if is_debridge {

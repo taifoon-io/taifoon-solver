@@ -145,6 +145,140 @@ impl MayanEvmEstimateAdapter {
         self.build_estimate_call_with_vaa(intent, None)
     }
 
+    /// Build `fulfillSimple` calldata for an auctionMode=0 order (no VAA needed).
+    /// Selector: 0x899c62b1.
+    pub fn build_fulfill_simple_call(&self, intent: &Intent) -> Result<(Address, Vec<u8>)> {
+        let swift = *self
+            .swift_addresses
+            .get(&intent.dst_chain)
+            .ok_or_else(|| anyhow::anyhow!("no Mayan Swift on chain {}", intent.dst_chain))?;
+
+        let order_id = intent.mayan_order_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("Mayan fulfillSimple requires intent.mayan_order_id")
+        })?;
+        let order_hash = parse_bytes32(order_id)?;
+
+        let fulfill_amount = {
+            let s = intent.output_amount.as_deref().unwrap_or(&intent.amount);
+            let s = if s.contains('.') {
+                format!("{}", (s.parse::<f64>()? * 1e18) as u128)
+            } else { s.to_string() };
+            U256::from_str_radix(&s, 10)?
+        };
+
+        let params = self.build_order_params(intent)?;
+        let extra_params = self.build_extra_params(intent)?;
+        let unlock_params = self.build_unlock_params();
+        let permit = MayanForwarder::PermitParams {
+            value: U256::ZERO, deadline: U256::ZERO, v: 0,
+            r: FixedBytes::ZERO, s: FixedBytes::ZERO,
+        };
+
+        let call = MayanForwarder::fulfillSimpleCall {
+            fulfillAmount: fulfill_amount,
+            orderHash: order_hash,
+            params,
+            extraParams: extra_params,
+            unlockParams: unlock_params,
+            permit,
+        };
+        Ok((swift, call.abi_encode()))
+    }
+
+    fn build_order_params(&self, intent: &Intent) -> Result<MayanForwarder::OrderParams> {
+        let trader_str = intent.trader.as_deref().unwrap_or(&intent.depositor);
+        let trader = address_to_bytes32(trader_str)?;
+        let token_out = address_to_bytes32(&intent.dst_token)?;
+        let dest_addr = address_to_bytes32(&intent.recipient)?;
+
+        let amount_in = parse_u64_amount(&intent.amount, "amount")?;
+        let min_amount_out = match intent.output_amount.as_deref() {
+            Some(s) => parse_u64_amount(s, "output_amount")?,
+            None => amount_in,
+        };
+
+        let dst_chain_wh = intent.swift_dest_chain_wormhole_id.unwrap_or_else(|| {
+            match intent.dst_chain {
+                1 => 2, 10 => 24, 56 => 4, 137 => 5, 8453 => 30, 42161 => 23, 43114 => 6, _ => 0,
+            }
+        });
+
+        let deadline = intent.deadline.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() + 3600
+        });
+
+        let random: FixedBytes<32> = match intent.mayan_random.as_deref() {
+            Some(r) => {
+                let clean = r.trim_start_matches("0x");
+                // May be 64 hex chars (32 bytes) or shorter
+                let bytes = hex::decode(if clean.len() % 2 != 0 {
+                    format!("0{}", clean)
+                } else { clean.to_string() }).unwrap_or_default();
+                if bytes.len() == 32 {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    FixedBytes(arr)
+                } else {
+                    FixedBytes::ZERO
+                }
+            }
+            None => FixedBytes::ZERO,
+        };
+
+        let referrer_addr: FixedBytes<32> = match intent.mayan_referrer_addr.as_deref() {
+            Some(r) => {
+                let clean = r.trim_start_matches("0x");
+                let bytes = hex::decode(if clean.len() % 2 != 0 { format!("0{}", clean) } else { clean.to_string() }).unwrap_or_default();
+                if bytes.len() == 32 {
+                    let mut arr = [0u8; 32]; arr.copy_from_slice(&bytes); FixedBytes(arr)
+                } else { FixedBytes::ZERO }
+            }
+            None => FixedBytes::ZERO,
+        };
+
+        Ok(MayanForwarder::OrderParams {
+            payloadType: 1,
+            trader,
+            destAddr: dest_addr,
+            destChainId: dst_chain_wh,
+            referrerAddr: referrer_addr,
+            tokenOut: token_out,
+            minAmountOut: min_amount_out,
+            gasDrop: intent.mayan_gas_drop.unwrap_or(0),
+            cancelFee: intent.mayan_cancel_fee.unwrap_or(0),
+            refundFee: intent.mayan_refund_fee.unwrap_or(0),
+            deadline,
+            referrerBps: intent.mayan_referrer_bps.unwrap_or(0),
+            auctionMode: intent.mayan_auction_mode.unwrap_or(2),
+            random,
+        })
+    }
+
+    fn build_extra_params(&self, intent: &Intent) -> Result<MayanForwarder::ExtraParams> {
+        let token_in = address_to_bytes32(&intent.src_token)?;
+        let src_chain_wh = match intent.src_chain {
+            1 => 2, 10 => 24, 56 => 4, 137 => 5, 8453 => 30, 42161 => 23, 43114 => 6, _ => 0,
+        };
+        Ok(MayanForwarder::ExtraParams {
+            srcChainId: src_chain_wh,
+            tokenIn: token_in,
+            protocolBps: 3,
+            customPayloadHash: FixedBytes::ZERO,
+        })
+    }
+
+    fn build_unlock_params(&self) -> MayanForwarder::UnlockParams {
+        let solver_bytes32 = {
+            let mut arr = [0u8; 32];
+            arr[12..].copy_from_slice(self.messiah_address.as_slice());
+            FixedBytes(arr)
+        };
+        MayanForwarder::UnlockParams { recipient: solver_bytes32, driver: solver_bytes32, batch: false }
+    }
+
     /// Like `build_estimate_call` but accepts an optional Wormhole VAA.
     /// When `vaa` is `Some`, the real guardian-signed bytes are used.
     /// When `None`, an empty bytes payload is used (synthetic estimate only).
@@ -155,10 +289,9 @@ impl MayanEvmEstimateAdapter {
             .ok_or_else(|| anyhow::anyhow!("no Mayan Swift on chain {}", intent.dst_chain))?;
 
         // Validate order_id exists (required for production fills; used to match the auction VAA).
-        let order_id = intent.mayan_order_id.as_deref().ok_or_else(|| {
+        let _order_id = intent.mayan_order_id.as_deref().ok_or_else(|| {
             anyhow::anyhow!("Mayan estimate requires intent.mayan_order_id (not present)")
         })?;
-        let _order_hash = parse_bytes32(order_id)?;
 
         let fulfill_amount = {
             let s = intent.output_amount.as_deref().unwrap_or(&intent.amount);
@@ -171,103 +304,9 @@ impl MayanEvmEstimateAdapter {
             U256::from_str_radix(&s, 10)?
         };
 
-        // The trader address is the depositor on the src chain. Falls back to
-        // the intent.depositor when the canonical `trader` field isn't present.
-        let trader_str = intent
-            .trader
-            .as_deref()
-            .unwrap_or(&intent.depositor);
-        let trader = address_to_bytes32(trader_str)?;
-
-        let token_in = address_to_bytes32(&intent.src_token)?;
-        let token_out = address_to_bytes32(&intent.dst_token)?;
-        let dest_addr = address_to_bytes32(&intent.recipient)?;
-
-        let amount_in = parse_u64_amount(&intent.amount, "amount")?;
-        let min_amount_out = match intent.output_amount.as_deref() {
-            Some(s) => parse_u64_amount(s, "output_amount")?,
-            None => amount_in,
-        };
-
-        let dst_chain_wh = intent.swift_dest_chain_wormhole_id.unwrap_or_else(|| {
-            // Fallback wormhole-id mapping for the EVM chains Mayan supports.
-            // (Mayan would normally provide this in the genome event.)
-            match intent.dst_chain {
-                1 => 2,         // Ethereum
-                10 => 24,       // Optimism
-                56 => 4,        // BSC
-                137 => 5,       // Polygon
-                8453 => 30,     // Base
-                42161 => 23,    // Arbitrum
-                43114 => 6,     // Avalanche
-                _ => 0,
-            }
-        });
-        let src_chain_wh = match intent.src_chain {
-            1 => 2,
-            10 => 24,
-            56 => 4,
-            137 => 5,
-            8453 => 30,
-            42161 => 23,
-            43114 => 6,
-            _ => 0,
-        };
-
-        let deadline = intent.deadline.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + 3600
-        });
-
-        // OrderParams layout (verified from live fill tx on Base):
-        // payloadType=1 (EVM order), trader (bytes32), destAddr (bytes32), destChainId (Wormhole),
-        // referrerAddr (bytes32 zero), tokenOut (bytes32), minAmountOut, gasDrop, cancelFee,
-        // refundFee, deadline, referrerBps=0, auctionMode=2, random (bytes32 zero for synthetic)
-        let params = MayanForwarder::OrderParams {
-            payloadType: 1,  // 1 = EVM order, 2 = Solana order
-            trader,
-            destAddr: dest_addr,
-            destChainId: dst_chain_wh,
-            referrerAddr: FixedBytes::ZERO,  // no referrer
-            tokenOut: token_out,
-            minAmountOut: min_amount_out,
-            gasDrop: 0,
-            cancelFee: 0,
-            refundFee: 0,
-            deadline,
-            referrerBps: 0,
-            auctionMode: 2,
-            // random is a 32-byte salt included in the order hash. For synthetic estimates
-            // we use zero; a real fill requires the actual value from the order creation event.
-            random: FixedBytes::ZERO,
-        };
-
-        // ExtraParams carries the source-chain token + protocol fee bps.
-        let extra_params = MayanForwarder::ExtraParams {
-            srcChainId: src_chain_wh,
-            tokenIn: token_in,
-            protocolBps: 3,  // Mayan's protocol fee is 3 bps
-            customPayloadHash: FixedBytes::ZERO,
-        };
-
-        // UnlockParams: where to send the unlock (claimback) on the source chain.
-        // For synthetic estimates use zero; real fills use the solver's address.
-        let solver_bytes32 = {
-            let addr_bytes = self.messiah_address.as_slice();
-            let mut arr = [0u8; 32];
-            arr[12..].copy_from_slice(addr_bytes);
-            FixedBytes(arr)
-        };
-        let unlock_params = MayanForwarder::UnlockParams {
-            recipient: solver_bytes32,
-            driver: solver_bytes32,
-            batch: false,
-        };
-
-        // PermitParams: zero for native ETH or when no ERC-20 permit is needed.
+        let params = self.build_order_params(intent)?;
+        let extra_params = self.build_extra_params(intent)?;
+        let unlock_params = self.build_unlock_params();
         let permit = MayanForwarder::PermitParams {
             value: U256::ZERO,
             deadline: U256::ZERO,
