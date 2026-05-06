@@ -6,13 +6,12 @@
 //! against the live Base mainnet RPC.
 //!
 //! Synthetic-fixture caveat: the Mayan Swift contract's `fulfillOrder` verifies
-//! the supplied Wormhole VAA against the on-chain guardian set before
-//! transferring funds. A synthetic fixture's encodedVm is empty, so the call
-//! reverts at VAA verification with empty data (`"0x"`). We treat that as
-//! ACCEPTABLE: it confirms the contract decoded our `OrderParams` tuple far
-//! enough to reach the protocol-level VAA check. A *real* selector/ABI bug
-//! would surface as `Reverted("execution reverted: <reason>")` with a non-empty
-//! reason, or as `AbiInvalid` — both of which DO fail this test.
+//! the supplied Wormhole VAA. With an empty `encodedVm`, the contract's BytesLib
+//! immediately reverts with `toUint8_outOfBounds` when it reads byte 0 of the VAA
+//! to check the version header. We also accept empty-data (`"0x"`) reverts for older
+//! Forwarder versions. Both confirm the contract decoded our `OrderParams` tuple
+//! correctly and only fails on the empty VAA. A *real* ABI bug produces a different
+//! explicit revert reason (with a colon) — which DOES fail this test.
 //!
 //! Run explicitly with:
 //!     cargo test -p executor --test mayan_evm_estimate_test -- --ignored --nocapture
@@ -65,13 +64,18 @@ async fn mayan_evm_fixture_estimates_clean() {
             println!("Mayan EVM estimate-clean: {:?}", outcome);
         }
         EstimateOutcome::Reverted(msg) => {
-            // Mayan Swift reverts at VAA verification with empty data when the
-            // VAA is missing / unsigned. Treat that as ACCEPTABLE; a colon-
-            // prefixed reason indicates a real bug.
+            // Acceptable reverts for a synthetic (empty VAA) fixture:
+            //   1. Empty data "0x" — contract reaches VAA verification, fails at hash check.
+            //   2. "toUint8_outOfBounds" — BytesLib read on empty encodedVm byte slice; the
+            //      contract immediately reads byte 0 of the VAA to check the version header.
+            //      Both confirm the contract decoded our OrderParams correctly and only fails
+            //      when processing the empty-bytes VAA field.
+            // A colon-prefixed reason that is NOT one of these indicates a real ABI bug.
             let lower = msg.to_lowercase();
-            let has_reason = lower.contains("execution reverted:")
-                && !lower.contains(r#"data: "0x""#)
-                && !lower.contains("data: \"0x\"");
+            let is_expected = lower.contains(r#"data: "0x""#)
+                || lower.contains("data: \"0x\"")
+                || lower.contains("touint8_outofbounds");
+            let has_reason = lower.contains("execution reverted:") && !is_expected;
             if has_reason {
                 panic!(
                     "Mayan EVM reverted on Base with a reason — likely real ABI bug: {}",
@@ -79,7 +83,7 @@ async fn mayan_evm_fixture_estimates_clean() {
                 );
             }
             println!(
-                "Mayan EVM synthetic-fixture revert (expected — VAA not signed by guardians): {}",
+                "Mayan EVM synthetic-fixture revert (expected — VAA empty, contract failed on VAA header read): {}",
                 msg
             );
         }
