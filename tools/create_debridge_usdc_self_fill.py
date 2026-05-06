@@ -257,21 +257,41 @@ def main():
             sys.exit(1)
 
     if do_approve:
+        # Step A: approve DlnSource on src chain (give side — needed to call createSaltedOrder)
         allowance = get_usdc_allowance(solver_addr, src_cfg['usdc'], DLN_SOURCE, src_cfg['rpc'])
-        print(f"\nCurrent USDC allowance on {src_cfg['name']}: ${allowance/1e6:.4f}")
+        print(f"\n[A] DlnSource allowance on {src_cfg['name']}: ${allowance/1e6:.4f}")
         if allowance >= GIVE_AMOUNT_RAW:
-            print("  ✅ Already approved enough.")
-            return
-        print(f"  Approving ${GIVE_AMOUNT_RAW/1e6:.4f} USDC to DLN_SOURCE on {src_cfg['name']}...")
-        result = subprocess.run([
-            'cast', 'send', src_cfg['usdc'],
-            'approve(address,uint256)', DLN_SOURCE, str(GIVE_AMOUNT_RAW),
-            '--rpc-url', src_cfg['rpc'], '--private-key', pk,
-        ], capture_output=True, text=True)
-        if result.returncode != 0:
-            print("❌ Approve failed:", result.stderr[:300])
-            sys.exit(1)
-        print("  ✅ Approved")
+            print("  ✅ Already approved for DlnSource.")
+        else:
+            print(f"  Approving ${GIVE_AMOUNT_RAW/1e6:.4f} USDC to DLN_SOURCE on {src_cfg['name']}...")
+            result = subprocess.run([
+                'cast', 'send', src_cfg['usdc'],
+                'approve(address,uint256)', DLN_SOURCE, str(GIVE_AMOUNT_RAW),
+                '--rpc-url', src_cfg['rpc'], '--private-key', pk,
+            ], capture_output=True, text=True)
+            if result.returncode != 0:
+                print("❌ DlnSource approve failed:", result.stderr[:300])
+                sys.exit(1)
+            print("  ✅ DlnSource approved")
+
+        # Step B: approve DlnDestination on dst chain (take side — needed to call fulfillOrder)
+        DLN_DEST = "0xE7351Fd770A37282b91D153Ee690B63579D6dd7f"
+        dst_allow = get_usdc_allowance(solver_addr, dst_cfg['usdc'], DLN_DEST, dst_cfg['rpc'])
+        print(f"\n[B] DlnDestination allowance on {dst_cfg['name']}: ${dst_allow/1e6:.4f}")
+        MAX_UINT = 2**256 - 1
+        if dst_allow > 10**30:
+            print("  ✅ Already max-approved for DlnDestination.")
+        else:
+            print(f"  Approving max USDC to DLN_DEST on {dst_cfg['name']}...")
+            result = subprocess.run([
+                'cast', 'send', dst_cfg['usdc'],
+                'approve(address,uint256)', DLN_DEST, str(MAX_UINT),
+                '--rpc-url', dst_cfg['rpc'], '--private-key', pk,
+            ], capture_output=True, text=True)
+            if result.returncode != 0:
+                print("❌ DlnDestination approve failed:", result.stderr[:300])
+                sys.exit(1)
+            print("  ✅ DlnDestination approved")
         return
 
     print(f"\nFetching take amount from deBridge API ({src_cfg['name']} → {dst_cfg['name']})...")
@@ -304,7 +324,13 @@ def main():
 
     allowance = get_usdc_allowance(solver_addr, src_cfg['usdc'], DLN_SOURCE, src_cfg['rpc'])
     if allowance < GIVE_AMOUNT_RAW:
-        print(f"\n⚠️  Insufficient allowance (${allowance/1e6:.4f}). Run with --approve first.")
+        print(f"\n⚠️  Insufficient DlnSource allowance (${allowance/1e6:.4f}). Run with --approve first.")
+        sys.exit(1)
+    DLN_DEST = "0xE7351Fd770A37282b91D153Ee690B63579D6dd7f"
+    dst_allow = get_usdc_allowance(solver_addr, dst_cfg['usdc'], DLN_DEST, dst_cfg['rpc'])
+    if dst_allow <= 10**30 // 10**6:  # less than 10^24 raw (way below max-approved)
+        print(f"\n⚠️  DlnDestination allowance on {dst_cfg['name']} is ${dst_allow/1e6:.4f}.")
+        print(f"   Run with --approve to approve DlnDestination before broadcasting the order.")
         sys.exit(1)
 
     print(f"\nBroadcasting createSaltedOrder on {src_cfg['name']}...")
