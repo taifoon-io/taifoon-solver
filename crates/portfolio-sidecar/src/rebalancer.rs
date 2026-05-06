@@ -68,23 +68,24 @@ sol! {
 }
 
 // MayanSwift V2 — createOrderWithToken selector 0xe4269fc4
+// Order struct field order matches on-chain ABI (payloadType first, verified from tx calldata)
 sol! {
     interface MayanSwiftCreate {
         struct Order {
+            uint8 payloadType;
             bytes32 trader;
             bytes32 tokenOut;
+            uint16 destChainId;
+            bytes32 destAddr;
             uint64 minAmountOut;
             uint64 gasDrop;
             uint64 cancelFee;
             uint64 refundFee;
             uint64 deadline;
-            bytes32 destAddr;
-            uint16 destChainId;
             bytes32 referrerAddr;
             uint8 referrerBps;
             uint8 auctionMode;
             bytes32 random;
-            uint8 payloadType;
         }
 
         function createOrderWithToken(
