@@ -45,7 +45,6 @@ use crate::mayan_evm_estimate::MayanEvmEstimateAdapter;
 use crate::mayan_solana_estimate::DEFAULT_SOLANA_RPC;
 use crate::outcome_log::{OutcomeLog, OutcomeRecord};
 use crate::spinner_solver::SpinnerSolverClient;
-use crate::wormhole::fetch_vaa_for_mayan_order;
 use protocol_adapters::debridge::DeBridgeAdapter;
 use protocol_adapters::{ProtocolAdapter, SpinnerClient};
 use protocol_adapters_solana::{MayanSolanaIntent, SolanaBroadcaster};
@@ -513,23 +512,19 @@ impl LambdaController {
                 }
             }
         }
-        // For Mayan Swift EVM fills: fetch the guardian-signed VAA from wormholescan.
-        // The Mayan Forwarder contract (0xd78d199f8c402e7b5cc2abe278df0412400a3bae) emits
-        // a Wormhole message on the source chain; we scan recent VAAs from that emitter
-        // and match by the 32-byte order hash in the payload (bytes [3..35]).
+        // Mayan Swift EVM fills (EVM source → EVM destination):
+        // The `fulfillOrder` call requires a VAA from Mayan's private auction chain
+        // (Wormhole chain 42069, emitter 0x4155). This VAA is issued by Mayan's
+        // auction authority only to the winning solver after a 3-second Solana auction.
+        // Solana-sourced orders are handled above by the Solana broadcaster path.
+        // EVM→EVM fills need the auction win; skip them until the auction participation
+        // path is implemented.
         let mayan_vaa: Option<Vec<u8>> = if is_mayan && !is_solana_src {
-            let order_hash = intent.mayan_order_id.as_deref().unwrap_or(&intent.tx_hash);
-            info!("🔍 {} — fetching Mayan VAA for order {}", intent.id, order_hash);
-            match fetch_vaa_for_mayan_order(intent.src_chain, order_hash).await {
-                Some(vaa) => Some(vaa),
-                None => {
-                    let reason = "mayan_vaa_not_found";
-                    warn!("⏭️  {} — {} (order {})", intent.id, reason, order_hash);
-                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-                    let _ = self.wallet.release(&intent.id);
-                    return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
-                }
-            }
+            let reason = "mayan_evm_needs_auction_vaa";
+            info!("⏭️  {} — {}", intent.id, reason);
+            self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+            let _ = self.wallet.release(&intent.id);
+            return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
         } else {
             None
         };
@@ -660,7 +655,8 @@ impl LambdaController {
                     return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
                 }
             };
-            let calldata = match adapter.build_fulfill_order_calldata(intent) {
+            // unlockAuthority = solver address: must match allowedTakerDst if set.
+            let calldata = match adapter.build_fulfill_order_calldata(intent, self.signer.address()) {
                 Ok(c) => c,
                 Err(e) => {
                     let err = format!("calldata_build:{e}");

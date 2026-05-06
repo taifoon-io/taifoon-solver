@@ -306,7 +306,11 @@ impl ProtocolAdapter for DeBridgeAdapter {
 impl DeBridgeAdapter {
     /// Build `fulfillOrder(order, fulfillAmount, orderId, permit, unlockAuthority)` calldata
     /// for the DlnDestination contract on the destination chain.
-    pub fn build_fulfill_order_calldata(&self, intent: &Intent) -> Result<Vec<u8>> {
+    ///
+    /// `unlock_authority` is the address that will be recorded as the taker and can later
+    /// claim the give-side unlock on the source chain. When `allowedTakerDst` is set on the
+    /// order it must equal `unlock_authority` or the contract reverts. Pass the solver address.
+    pub fn build_fulfill_order_calldata(&self, intent: &Intent, unlock_authority: Address) -> Result<Vec<u8>> {
         let order = self.parse_order(intent)?;
         let order_id = self.extract_order_id(intent)?;
         // fulfill_amount is takeAmount (what solver sends to receiver on dst chain)
@@ -319,7 +323,7 @@ impl DeBridgeAdapter {
             _fulFillAmount: fulfill_amount,
             _orderId: order_id,
             _permit: Bytes::new(),
-            _unlockAuthority: Address::ZERO,
+            _unlockAuthority: unlock_authority,
         };
         Ok(call.abi_encode())
     }

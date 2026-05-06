@@ -132,7 +132,7 @@ impl AcrossEstimateAdapter {
 
         // Delegate to the broadcast calldata builder with messiah as the repaymentAddress.
         // This ensures estimate and broadcast use the same selector (0xdeff4b24) and tuple layout.
-        let calldata = build_across_spoke_pool_calldata_with_relayer(intent, Some(self.messiah_address))?;
+        let calldata = build_across_spoke_pool_calldata_with_relayer(intent, Some(self.messiah_address), Some(intent.dst_chain))?;
         Ok((spoke_pool, calldata))
     }
 }
@@ -190,7 +190,7 @@ impl DeBridgeEstimateAdapter {
         // (including authority fields) as the actual fulfillOrder broadcast.
         // A mismatch would cause the on-chain orderId hash check to revert.
         let adapter = DeBridgeAdapter::new(SpinnerClient::new(&self.spinner_base));
-        let calldata = adapter.build_fulfill_order_calldata(intent)?;
+        let calldata = adapter.build_fulfill_order_calldata(intent, self.messiah_address)?;
 
         Ok((dln, calldata, U256::ZERO))
     }
