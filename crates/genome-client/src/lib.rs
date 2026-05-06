@@ -467,11 +467,13 @@ impl AcrossPoller {
     pub fn default_mainnet() -> Self {
         Self {
             // Only chains where solver has funded liquidity:
-            //   10=Optimism (4.54 USDC), 8453=Base (0.46 USDC), 42161=Arbitrum (0.015 ETH).
-            // 3 chains × 15s = 45s/sweep + 30s rest = ~75s cycle. No 429 risk.
+            //   10=Optimism (0.22 USDC), 8453=Base (0.97 USDC), 42161=Arbitrum (0.03 USDC).
+            // 3 chains × 20s = 60s/sweep + 30s rest = ~90s cycle. No 429 risk.
+            // limit=50 ensures we see orders deeper in the unfilled queue — with the
+            // efficient Across market the first 20 are often already exclusive-locked.
             dst_chains: vec![10, 8453, 42161],
             poll_interval_secs: 30,
-            limit: 20,
+            limit: 50,
         }
     }
 
