@@ -11,14 +11,18 @@ Requirements on source chain:
   - USDC balance >= GIVE_AMOUNT_USDC + operating expenses (~$0.29 on a $0.50 order)
   - Must approve USDC to DLN_SOURCE address first (see --approve flag)
 
-Current blocker: need 0.001 ETH on any chain.
-Closest: Arbitrum 0.000658 ETH (34.2% more needed), Optimism 0.000431 ETH.
+Path to fund ETH on Base (currently 0.000142 ETH):
+    python3 tools/swap_usdt_to_eth.py --dry-run   # preview: swap $3 USDT → ~0.001274 ETH
+    python3 tools/swap_usdt_to_eth.py --approve   # approve USDT to Uniswap SwapRouter
+    python3 tools/swap_usdt_to_eth.py             # execute swap (gives ~0.001415 ETH on Base)
+    python3 tools/create_debridge_usdc_self_fill.py --src 8453 --approve
+    python3 tools/create_debridge_usdc_self_fill.py --src 8453
 
 Usage:
     python3 tools/create_debridge_usdc_self_fill.py --dry-run        # preview best chain
     python3 tools/create_debridge_usdc_self_fill.py --approve        # approve USDC on best src
     python3 tools/create_debridge_usdc_self_fill.py                  # broadcast order
-    python3 tools/create_debridge_usdc_self_fill.py --src 42161      # force Arbitrum as source
+    python3 tools/create_debridge_usdc_self_fill.py --src 8453       # force Base as source
 
 Environment:
     SOLVER_PRIVATE_KEY   EVM private key (or loaded from macOS keychain 'mamba-messiah-key')
@@ -32,7 +36,7 @@ import time
 import urllib.request
 
 FIXED_FEE_WEI = 1_000_000_000_000_000   # 0.001 ETH fixed protocol fee
-GIVE_AMOUNT_RAW = 400_000                # 0.40 USDC (6 decimals)
+GIVE_AMOUNT_RAW = 200_000                # 0.20 USDC (6 decimals) — small enough to fill with Optimism $0.22
 DLN_SOURCE = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66"   # same on all chains
 
 # Chain configs: chain_id → (name, rpc, usdc_addr, has_usdc_for_fill)
