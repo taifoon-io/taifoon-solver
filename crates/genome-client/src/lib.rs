@@ -1018,6 +1018,253 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
     })
 }
 
+// ── deBridge WS order feed ────────────────────────────────────────────────────
+
+/// Real-time deBridge DLN order feed via the deBridge-managed WebSocket service.
+///
+/// Connects to `wss://dln-ws.debridge.finance/ws` with a Bearer token.
+/// On connect, subscribes to new orders and requests all existing open orders.
+/// Messages arrive in real-time (sub-second) vs the 12s eth_getLogs poll cycle.
+///
+/// Protocol (from dln-taker reference):
+///   → send `{"Subscription":{"finalization_filter":{"confirmations_count":{}}}}`
+///   → send `{"GetOrders":{"Created":{}}}`
+///   ← receive `{"Order":{"subscription_id":"...","order_info":{...}}}`
+///     where `order_info.order_info_status` contains `{"Created":{...}}` for new orders
+///
+/// The default `WS_API_KEY` is the publicly documented rate-limited key.
+/// Set `DEBRIDGE_WS_API_KEY` env to override with a dedicated key.
+pub struct DeBridgeWsPoller {
+    pub ws_url: String,
+    pub api_key: String,
+}
+
+impl DeBridgeWsPoller {
+    pub fn default_mainnet() -> Self {
+        let api_key = std::env::var("DEBRIDGE_WS_API_KEY")
+            .unwrap_or_else(|_| "f8bb970668ba4cd15ee64bcbd24479bdf66c6bef9cbb9ece9f2ca3755bc2fe53".into());
+        Self {
+            ws_url: "wss://dln-ws.debridge.finance/ws".into(),
+            api_key,
+        }
+    }
+
+    pub async fn run(self, intent_tx: tokio::sync::mpsc::Sender<Intent>) {
+        use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::protocol::Message};
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use futures::{SinkExt, StreamExt};
+
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        loop {
+            let mut req = match self.ws_url.as_str().into_client_request() {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("deBridge WS: bad URL {}: {}", self.ws_url, e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            req.headers_mut().insert(
+                "Authorization",
+                format!("Bearer {}", self.api_key).parse().unwrap(),
+            );
+
+            let (ws_stream, _) = match connect_async_tls_with_config(req, None, false, None).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // 403 = invalid/missing API key; back off 60s to avoid log spam.
+                    let is_auth = e.to_string().contains("403");
+                    let delay = if is_auth { 60 } else { 5 };
+                    if is_auth {
+                        warn!("deBridge WS auth error (403) — set DEBRIDGE_WS_API_KEY. Retrying in {}s", delay);
+                    } else {
+                        warn!("deBridge WS connect error: {}. Retrying in {}s", e, delay);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                    continue;
+                }
+            };
+
+            info!("🔌 deBridge WS connected to {}", self.ws_url);
+            let (mut write, mut read) = ws_stream.split();
+
+            // Subscribe: no confirmation thresholds — accept all finalization states.
+            let sub_msg = serde_json::json!({
+                "Subscription": { "finalization_filter": { "confirmations_count": {} } }
+            });
+            let get_msg = serde_json::json!({ "GetOrders": { "Created": {} } });
+            let _ = write.send(Message::Text(sub_msg.to_string().into())).await;
+            let _ = write.send(Message::Text(get_msg.to_string().into())).await;
+
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        if let Some(intent) = parse_debridge_ws_message(&text, &mut seen) {
+                            info!("⚡ deBridge WS orderId={} {}→{} give={}",
+                                intent.order_id.as_deref().unwrap_or("?"),
+                                intent.src_chain, intent.dst_chain, intent.amount);
+                            if intent_tx.send(intent).await.is_err() { return; }
+                        }
+                    }
+                    Ok(Message::Ping(data)) => {
+                        let _ = write.send(Message::Pong(data)).await;
+                    }
+                    Ok(Message::Close(_)) => {
+                        warn!("deBridge WS closed, reconnecting...");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("deBridge WS error: {}, reconnecting...", e);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+}
+
+/// Parse a deBridge WS message and emit an Intent if it's a new `Created` order.
+/// Returns None for Fulfilled/Cancelled/other status messages.
+fn parse_debridge_ws_message(
+    text: &str,
+    seen: &mut std::collections::HashSet<String>,
+) -> Option<Intent> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let order_event = v.get("Order")?;
+    let order_info = order_event.get("order_info")?;
+
+    // Only process Created and ArchivalCreated statuses.
+    let status = order_info.get("order_info_status")?;
+    let is_created = status.get("Created").is_some() || status.get("ArchivalCreated").is_some();
+    if !is_created { return None; }
+
+    let order_id_hex = order_info.get("order_id")?.as_str()?;
+    // order_id is a 32-byte hex string WITHOUT 0x prefix from the WS
+    let order_id = if order_id_hex.starts_with("0x") {
+        order_id_hex.to_string()
+    } else {
+        format!("0x{}", order_id_hex)
+    };
+
+    // Dedup
+    if !seen.insert(order_id.clone()) { return None; }
+
+    let order = order_info.get("order")?;
+
+    // Decode give (source) and take (dst) offers.
+    // Chain IDs and amounts are hex-encoded big-endian 32-byte strings.
+    let hex_to_u64 = |s: &str| -> u64 {
+        let clean = s.trim_start_matches("0x");
+        u64::from_str_radix(clean.trim_start_matches('0').get(..16).unwrap_or(clean), 16).unwrap_or(0)
+    };
+    let hex_to_u128 = |s: &str| -> u128 {
+        let clean = s.trim_start_matches("0x");
+        u128::from_str_radix(clean.trim_start_matches('0').get(..32).unwrap_or(clean), 16).unwrap_or(0)
+    };
+    let hex_to_addr = |s: &str| -> String {
+        // token/address fields are 32-byte hex; last 20 bytes = address
+        let clean = s.trim_start_matches("0x");
+        if clean.len() >= 40 {
+            format!("0x{}", &clean[clean.len()-40..])
+        } else {
+            format!("0x{}", clean)
+        }
+    };
+
+    let give = order.get("give")?;
+    let take = order.get("take")?;
+
+    let src_chain = hex_to_u64(give.get("chain_id")?.as_str()?);
+    let dst_chain = hex_to_u64(take.get("chain_id")?.as_str()?);
+    let give_amount = hex_to_u128(give.get("amount")?.as_str()?).to_string();
+    let take_amount = hex_to_u128(take.get("amount")?.as_str()?).to_string();
+    let src_token = hex_to_addr(give.get("token_address")?.as_str()?);
+    let dst_token = hex_to_addr(take.get("token_address")?.as_str()?);
+
+    // Skip exotic tokens (same filter as DeBridgePoller).
+    if !is_supported_fill_token(&dst_token) {
+        tracing::debug!("deBridge WS skip exotic dst_token={}", dst_token);
+        return None;
+    }
+
+    let maker_src = order.get("maker_src")?.as_str().unwrap_or("0x0");
+    let receiver = order.get("receiver_dst")?.as_str().unwrap_or("0x0");
+    let maker_nonce: u64 = order.get("maker_order_nonce")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let allowed_taker_raw = order.get("allowed_taker_dst").and_then(|v| v.as_str());
+    let allowed_taker = allowed_taker_raw.filter(|s| !s.is_empty() && *s != "0x").map(|s| {
+        if s.starts_with("0x") { s.to_string() } else { format!("0x{}", s) }
+    });
+
+    let give_patch = order.get("give_patch_authority_src").and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty()).map(|s| format!("0x{}", s.trim_start_matches("0x")));
+    let order_auth_dst = order.get("order_authority_address_dst").and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty()).map(|s| format!("0x{}", s.trim_start_matches("0x")));
+    let cancel_ben = order.get("allowed_cancel_beneficiary_src").and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && *s != "null").map(|s| format!("0x{}", s.trim_start_matches("0x")));
+
+    // Get tx_hash from finalization_info if present
+    let tx_hash = status.get("Created")
+        .and_then(|c| c.get("finalization_info"))
+        .and_then(|fi| {
+            fi.get("Finalized").or_else(|| fi.get("Confirmed"))
+        })
+        .and_then(|f| f.get("transaction_hash"))
+        .and_then(|h| h.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| order_id.clone());
+
+    let maker_src_addr = {
+        let clean = maker_src.trim_start_matches("0x");
+        if clean.len() >= 40 {
+            format!("0x{}", &clean[clean.len()-40..])
+        } else {
+            format!("0x{}", clean)
+        }
+    };
+    let receiver_addr = {
+        let clean = receiver.trim_start_matches("0x");
+        if clean.len() >= 40 {
+            format!("0x{}", &clean[clean.len()-40..])
+        } else {
+            format!("0x{}", clean)
+        }
+    };
+
+    Some(Intent {
+        id: format!("debridge_dln:{}", order_id),
+        protocol: "debridge_dln".to_string(),
+        src_chain,
+        dst_chain,
+        src_token,
+        dst_token,
+        amount: give_amount.clone(),
+        depositor: maker_src_addr,
+        recipient: receiver_addr,
+        tx_hash,
+        give_amount: Some(give_amount),
+        take_amount: Some(take_amount),
+        order_id: Some(order_id),
+        maker_order_nonce: Some(maker_nonce),
+        dln_give_patch_authority_src: give_patch,
+        dln_order_authority_address_dst: order_auth_dst,
+        dln_allowed_taker_dst: allowed_taker,
+        dln_allowed_cancel_beneficiary_src: cancel_ben,
+        detected_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        ..Default::default()
+    })
+}
+
 // ── Mayan Swift poller ────────────────────────────────────────────────────────
 
 /// Mayan Swift ORDER_CREATED poller.
@@ -1232,17 +1479,18 @@ impl GenomeClient {
         debridge_poller: Option<DeBridgePoller>,
     ) -> Result<()> {
         self.subscribe_with_all_pollers_and_mayan(
-            intent_tx, across_pollers, debridge_poller, Some(MayanPoller::default())
+            intent_tx, across_pollers, debridge_poller, Some(MayanPoller::default()), Some(DeBridgeWsPoller::default_mainnet())
         ).await
     }
 
-    /// Full poller suite: Across + deBridge + Mayan.
+    /// Full poller suite: Across + deBridge eth_getLogs + deBridge WS + Mayan.
     pub async fn subscribe_with_all_pollers_and_mayan(
         &self,
         intent_tx: mpsc::Sender<Intent>,
         across_pollers: Vec<AcrossPoller>,
         debridge_poller: Option<DeBridgePoller>,
         mayan_poller: Option<MayanPoller>,
+        debridge_ws: Option<DeBridgeWsPoller>,
     ) -> Result<()> {
         for poller in across_pollers {
             let tx = intent_tx.clone();
@@ -1251,6 +1499,10 @@ impl GenomeClient {
         if let Some(dp) = debridge_poller {
             let tx = intent_tx.clone();
             tokio::spawn(async move { dp.run(tx).await });
+        }
+        if let Some(ws) = debridge_ws {
+            let tx = intent_tx.clone();
+            tokio::spawn(async move { ws.run(tx).await });
         }
         if let Some(mp) = mayan_poller {
             let tx = intent_tx.clone();
@@ -1365,6 +1617,14 @@ impl GenomeClient {
             info!("🔎 UNKNOWN action='{}' entity='{}' protocol={:?} id={:?} addr={}",
                 genome_event.action, genome_event.entity,
                 genome_event.protocol, genome_event.id, genome_event.addr);
+            return None;
+        }
+
+        // Mayan Swift orders arrive via MayanPoller (REST API) with correct decimal
+        // amounts. The SSE stream puts the 32-byte order hash in input_amount, which
+        // parses as a ~$648T notional. Drop SSE Mayan events here; MayanPoller handles them.
+        let proto_hint = genome_event.protocol.as_deref().unwrap_or("");
+        if proto_hint.contains("mayan") || proto_hint.contains("swift") {
             return None;
         }
 
