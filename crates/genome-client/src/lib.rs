@@ -680,10 +680,11 @@ pub struct DeBridgePoller {
     pub blocks_per_batch: u64,
 }
 
-/// DlnDestination contract address (same on all EVM chains — this is where orders get relayed
-/// and where solvers must call fulfillOrder). Different from DlnSource (0xeF4fB24...).
-const DLN_SOURCE_ADDRESS: &str = "0xE7351Fd770A37282b91D153Ee690B63579D6dd7f";
-/// keccak256 of the DlnDestination CreatedOrder event — verified against live Base logs.
+/// DlnSource contract address (same on all EVM chains) — this is where users create orders
+/// and where the OrderCreated event is emitted. Solvers poll this for new fill opportunities.
+/// Different from DlnDestination (0xE7351Fd...) which is where solvers call fulfillOrder.
+const DLN_SOURCE_ADDRESS: &str = "0xeF4fB24aD0916217251F553c0596F8Edc630EB66";
+/// keccak256("CreatedOrder(...)") — emitted by DlnSource on every new cross-chain order.
 const ORDER_CREATED_TOPIC: &str = "0xfc8703fd57380f9dd234a89dce51333782d49c5902f307b02f03e014d18fe471";
 
 impl DeBridgePoller {
