@@ -10,7 +10,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     sol_types::SolCall,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
@@ -23,6 +23,7 @@ use crate::{
     load_deployments,
     order_monitor::T3rnOrder,
     LwcDeployment,
+    TxGuard,
 };
 use portfolio_sidecar::lwc_manager::LiquidityWellCompact;
 
@@ -217,6 +218,12 @@ impl SelfFill {
         // Build and broadcast the fill tx
         let rpc_url = resolve_rpc_url(dst_chain_id)
             .unwrap_or_else(|| dep.rpc.clone());
+
+        // Guard: to must be the LWC well on the destination chain
+        TxGuard::from_deployments(self.solver_addr)
+            .enforce(well, &calldata, &[self.solver_addr])
+            .context("tx_guard blocked self_fill order()")?;
+
         let wallet = EthereumWallet::from(self.signer.clone());
         let provider = ProviderBuilder::new()
             .wallet(wallet)

@@ -20,7 +20,7 @@ use std::{
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{info, warn};
 
-use crate::gas_razor::resolve_rpc_url;
+use crate::{gas_razor::resolve_rpc_url, TxGuard};
 use portfolio_sidecar::lwc_manager::{LwcChainState, LwcManager};
 
 // ── Across V3 depositV3 ABI (minimal) ────────────────────────────────────────
@@ -373,9 +373,16 @@ impl HopRebalancer {
 
         if current_allowance < amount {
             let approve_call = approveCall { spender: spoke, amount: U256::MAX };
+            let approve_calldata = approve_call.abi_encode();
+
+            // Guard: approve tx to a token contract must be in the known token list
+            TxGuard::from_deployments(self.solver_addr)
+                .enforce(input_token, &approve_calldata, &[])
+                .context("tx_guard blocked hop approve")?;
+
             let approve_req = alloy::rpc::types::TransactionRequest::default()
                 .to(input_token)
-                .input(approve_call.abi_encode().into());
+                .input(approve_calldata.into());
             let pending = provider.send_transaction(approve_req).await.context("approve failed")?;
             pending.get_receipt().await.context("approve receipt")?;
         }
@@ -396,9 +403,16 @@ impl HopRebalancer {
             message:              Bytes::new(),
         }.abi_encode();
 
+        let deposit_calldata = Bytes::from(calldata);
+
+        // Guard: depositV3 to Across spoke pool; recipient = solver_addr
+        TxGuard::from_deployments(self.solver_addr)
+            .enforce(spoke, &deposit_calldata, &[self.solver_addr])
+            .context("tx_guard blocked hop depositV3")?;
+
         let tx_req = alloy::rpc::types::TransactionRequest::default()
             .to(spoke)
-            .input(Bytes::from(calldata).into());
+            .input(deposit_calldata.into());
 
         let pending = provider.send_transaction(tx_req).await.context("depositV3 failed")?;
         let receipt = pending.get_receipt().await.context("depositV3 receipt")?;

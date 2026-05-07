@@ -43,6 +43,7 @@ pub mod inventory;
 pub mod lwc_manager;
 pub mod rebalancer;
 pub mod scanner;
+pub mod tx_guard;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};

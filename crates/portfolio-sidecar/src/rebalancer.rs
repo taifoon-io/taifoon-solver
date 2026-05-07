@@ -24,11 +24,13 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, warn};
 
 use crate::{
     inventory::{InventoryStatus, InventoryTarget},
     scanner::ChainSnapshot,
+    tx_guard::TxGuard,
 };
 
 sol! {
@@ -560,6 +562,11 @@ impl Rebalancer {
         //
         // Bootstrap mode: if the Solana wallet has 0 SOL we skip the reserve check and
         // bridge as long as Base holds at least SOLANA_BRIDGE_USD + MIN_BRIDGE_USD in raw balance.
+        //
+        // Cooldown: a 10-minute global minimum between bridge attempts so a single
+        // runaway sidecar loop cannot drain the wallet by firing on every tick.
+        static LAST_MAYAN_BRIDGE_SECS: AtomicU64 = AtomicU64::new(0);
+        const MAYAN_BRIDGE_COOLDOWN_SECS: u64 = 600; // 10 minutes
         if let Ok(solana_addr) = std::env::var("SOLANA_ADDRESS") {
             if !solana_addr.is_empty() {
                 let base_snap = snapshots.iter().find(|s| s.chain_id == HOME_CHAIN_ID);
@@ -589,11 +596,21 @@ impl Rebalancer {
 
                     // In bootstrap mode: require at least $5 — Mayan's auction network skips smaller
                     // orders and immediately refunds them (observed: $1.39 and $0.748 both refunded).
-                    let can_bridge = if needs_bootstrap {
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let last_bridge = LAST_MAYAN_BRIDGE_SECS.load(Ordering::Relaxed);
+                    let cooldown_ok = now_secs.saturating_sub(last_bridge) >= MAYAN_BRIDGE_COOLDOWN_SECS;
+                    let can_bridge = cooldown_ok && if needs_bootstrap {
                         send_usd >= 5.0
                     } else {
                         base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD && send_usd >= 0.50
                     };
+                    if !cooldown_ok && (send_usd >= 5.0 || (!needs_bootstrap && base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD)) {
+                        let secs_remaining = MAYAN_BRIDGE_COOLDOWN_SECS.saturating_sub(now_secs.saturating_sub(last_bridge));
+                        info!("⏳ Mayan bridge cooldown: {}s remaining before next bridge attempt", secs_remaining);
+                    }
                     if can_bridge {
                         if needs_bootstrap {
                             info!(
@@ -606,6 +623,7 @@ impl Rebalancer {
                                 send_usd, bridge_symbol, &solana_addr[..8.min(solana_addr.len())]
                             );
                         }
+                        LAST_MAYAN_BRIDGE_SECS.store(now_secs, Ordering::Relaxed);
                         let action = self.mayan_solana_bridge(base_snap, &solana_addr, send_raw, send_usd, bridge_addr, bridge_symbol).await;
                         *working_stable.entry(HOME_CHAIN_ID).or_insert(0.0) -= send_usd;
                         actions.push(action);
@@ -1228,10 +1246,16 @@ impl Rebalancer {
         };
         if existing >= amount { return Ok(()); }
 
+        let approve = approveCall { spender: spender_addr, amount: U256::MAX }.abi_encode();
+
+        // Guard: approve tx goes to a token contract — must be in the known token list.
+        TxGuard::from_deployments(self.solver_addr)
+            .enforce(token_addr, &approve, &[])
+            .context("tx_guard blocked ensure_allowance")?;
+
         let wallet = EthereumWallet::from(self.signer.clone());
         let wp = ProviderBuilder::new().with_recommended_fillers().wallet(wallet)
             .on_http(rpc.parse().context("parse rpc")?);
-        let approve = approveCall { spender: spender_addr, amount: U256::MAX }.abi_encode();
         let req = TransactionRequest::default().to(token_addr).input(Bytes::from(approve).into());
         let pending = wp.send_transaction(req).await.context("approve tx")?;
         pending.with_required_confirmations(1).get_receipt().await.context("approve receipt")?;
@@ -1243,11 +1267,22 @@ impl Rebalancer {
     }
 
     async fn send_raw_value(&self, rpc: &str, to: &str, data: &str, value: U256) -> Result<String> {
+        let to_addr: Address = to.parse().context("parse to")?;
+        let bytes = hex::decode(data.trim_start_matches("0x")).context("decode calldata")?;
+
+        // ── Pre-flight guard ─────────────────────────────────────────────────
+        // Block any tx whose destination is not a known LWC well, bridge contract,
+        // swap router, WETH, or the solver's own address.
+        // `recipient`/`depositor` fields must be solver_addr — enforced in callers
+        // that pass embedded_recipients; here we check only the `to` address.
+        TxGuard::from_deployments(self.solver_addr)
+            .enforce(to_addr, &bytes, &[])
+            .context("tx_guard blocked send_raw_value")?;
+        // ────────────────────────────────────────────────────────────────────
+
         let wallet = EthereumWallet::from(self.signer.clone());
         let provider = ProviderBuilder::new().with_recommended_fillers().wallet(wallet)
             .on_http(rpc.parse().context("parse rpc")?);
-        let to_addr: Address = to.parse().context("parse to")?;
-        let bytes = hex::decode(data.trim_start_matches("0x")).context("decode calldata")?;
         let mut req = TransactionRequest::default().to(to_addr).input(Bytes::from(bytes).into());
         if value > U256::ZERO { req = req.value(value); }
         let pending = provider.send_transaction(req).await.context("send tx")?;

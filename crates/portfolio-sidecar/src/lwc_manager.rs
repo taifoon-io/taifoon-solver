@@ -17,6 +17,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::tx_guard::TxGuard;
+
 // ── V4 LWC ABI — loaded from the canonical JSON shipped with portal-2026 ──────
 //
 // The JSON file is the single source of truth for all function signatures.
@@ -235,10 +237,17 @@ impl LwcManager {
 
         // Call addLiquidity
         let add_call = LiquidityWellCompact::addLiquidityCall { _asset: asset, _amount: amount_wei };
+        let calldata = add_call.abi_encode();
+
+        // Guard: to must be a known LWC well address
+        TxGuard::from_deployments(self.solver_addr)
+            .enforce(well, &calldata, &[])
+            .context("tx_guard blocked add_liquidity")?;
+
         let value = if asset == zero { amount_wei } else { U256::ZERO };
         let mut req = alloy::rpc::types::TransactionRequest::default()
             .to(well)
-            .input(add_call.abi_encode().into());
+            .input(calldata.into());
         if value > U256::ZERO {
             req = req.value(value);
         }
@@ -279,9 +288,16 @@ impl LwcManager {
             .on_http(rpc_url);
 
         let rm_call = LiquidityWellCompact::removeLiquidityCall { _asset: asset, _amount: amount_wei };
+        let calldata = rm_call.abi_encode();
+
+        // Guard: to must be a known LWC well address
+        TxGuard::from_deployments(self.solver_addr)
+            .enforce(well, &calldata, &[])
+            .context("tx_guard blocked remove_liquidity")?;
+
         let req = alloy::rpc::types::TransactionRequest::default()
             .to(well)
-            .input(rm_call.abi_encode().into());
+            .input(calldata.into());
 
         let pending = provider.send_transaction(req).await.context("removeLiquidity tx failed")?;
         let receipt = pending.get_receipt().await.context("removeLiquidity receipt failed")?;

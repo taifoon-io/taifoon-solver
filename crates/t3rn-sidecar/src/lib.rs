@@ -8,6 +8,8 @@ pub mod hop_rebalancer;
 pub mod order_monitor;
 pub mod self_fill;
 
+pub use portfolio_sidecar::tx_guard::TxGuard;
+
 pub use self_fill::destination_to_chain_id;
 
 
@@ -321,6 +323,14 @@ impl T3RNSidecar {
             maxReward: max_reward,
         };
         let calldata: alloy::primitives::Bytes = order_call.abi_encode().into();
+
+        // Guard: to must be the LWC well; recipient in calldata is the target account
+        // (the intent filler's address, not an arbitrary wallet — verified by Spinner permit).
+        // We pass solver_addr as the embedded_recipient check is for bridge paths;
+        // for order() fills the target_account is the intent beneficiary, not a fund drain.
+        crate::TxGuard::from_deployments(self.solver_addr)
+            .enforce(well, &calldata, &[])
+            .context("tx_guard blocked fill order()")?;
 
         let wallet = EthereumWallet::from(self.signer.clone());
         let provider = ProviderBuilder::new().wallet(wallet).on_http(rpc_url);
