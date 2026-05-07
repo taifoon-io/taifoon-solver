@@ -587,9 +587,10 @@ impl Rebalancer {
                     let send_usd = SOLANA_BRIDGE_USD.min(bridge_usd - 0.05).max(0.0);
                     let send_raw = usd_to_raw(send_usd, bridge_decimals);
 
-                    // In bootstrap mode: skip the aggregate-reserve check; just need enough bridge token.
+                    // In bootstrap mode: require at least $5 — Mayan's auction network skips smaller
+                    // orders and immediately refunds them (observed: $1.39 and $0.748 both refunded).
                     let can_bridge = if needs_bootstrap {
-                        send_usd >= 0.50
+                        send_usd >= 5.0
                     } else {
                         base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD && send_usd >= 0.50
                     };
@@ -611,7 +612,7 @@ impl Rebalancer {
                     } else if needs_bootstrap {
                         // Before spending ETH on a swap, check if any non-Base chain already has
                         // USDC stranded from a prior bootstrap attempt — bridge it directly.
-                        const MIN_DIRECT_BRIDGE_USD: f64 = 0.10; // min USDC to bridge directly
+                        const MIN_DIRECT_BRIDGE_USD: f64 = 5.0; // Mayan refunds orders < ~$5 immediately
                         const MIN_GAS_FOR_BRIDGE: f64 = 0.00003; // min ETH to pay for forwardERC20 call
                         let direct_src = {
                             let arb_snap = snapshots.iter().find(|s| s.chain_id == 42161);
@@ -656,9 +657,10 @@ impl Rebalancer {
                         // Stablecoin exhausted — try ETH→SOL bootstrap if we have spare ETH.
                         // Swap ETH→USDC via Uniswap on the best source chain, then bridge via Mayan.
                         // Bridge enough USDC that gasDrop=0.001 SOL (~$0.09) is economical for Mayan solvers.
-                        // 0.002 ETH ≈ $6 USDC — large enough for Mayan's external solver network.
-                        // Sub-$5 orders typically expire unfilled; keep 0.0002 ETH for gas.
-                        const ETH_BOOTSTRAP_WEI: u128 = 2_000_000_000_000_000; // 0.002 ETH
+                        // 0.0004 ETH ≈ $1.20 USDC — minimum viable for mode=2 Mayan orders.
+                        // mode=2 orders are filled by Mayan's registered solver network regardless
+                        // of amount; keep 0.0002 ETH for gas on L2.
+                        const ETH_BOOTSTRAP_WEI: u128 = 400_000_000_000_000; // 0.0004 ETH
                         const MIN_ETH_KEEP: f64 = 0.0002; // keep for gas
                         // Find the best ETH source: prefer Arb, then Optimism, then Base.
                         let eth_src = {
@@ -1086,7 +1088,10 @@ impl Rebalancer {
             .await.with_context(|| format!("approve MayanForwarder for {token_symbol}"))?;
 
         // Inner call: MayanSwift createOrderWithToken — encoded as protocolData for the Forwarder.
-        // auctionMode=0 (fulfillSimple) so any Mayan solver can fill without a private auction VAA.
+        // auctionMode=2: all real EVM→Solana orders in the wild use mode=2. mode=0 does NOT
+        // cause Mayan's relay to initialize a Solana state account, so the order sits permanently
+        // unfilled. With mode=2, Mayan's registered solver network picks it up via their private
+        // auction and delivers SOL to the dest address.
         let order = MayanSwiftCreate::Order {
             payloadType: 1,
             trader: trader_fixed,
@@ -1100,7 +1105,7 @@ impl Rebalancer {
             refundFee: 0,
             deadline,
             referrerBps: 0,
-            auctionMode: 0,
+            auctionMode: 2,
             random: random_fixed,
         };
 
@@ -1128,7 +1133,7 @@ impl Rebalancer {
         }.abi_encode();
 
         info!(
-            "📤 MayanForwarder forwardERC20 (chain {}): {} {} raw → native SOL on {}, min={} lamports (auctionMode=0)",
+            "📤 MayanForwarder forwardERC20 (chain {}): {} {} raw → native SOL on {}, min={} lamports (auctionMode=2)",
             chain_id, amount_raw, token_symbol, &solana_addr[..8.min(solana_addr.len())], min_sol_lamports
         );
 
