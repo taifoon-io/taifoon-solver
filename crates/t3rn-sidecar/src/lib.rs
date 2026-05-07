@@ -1,17 +1,14 @@
-//! t3rn-sidecar — LWC V4 fill provider + parallel delivery matrix.
+//! t3rn-sidecar — LWC V4 fill provider, order monitor, self-fill, hop rebalancer.
 //!
-//! Three public surfaces:
-//!
-//! 1. `T3RNSidecar::fill(intent)` — Priority-3 liquidity path in the executor
-//!    waterfall.  Checks canPerformInstantExecution, requests a Spinner permit,
-//!    runs eth_estimateGas, then broadcasts order().
-//!
-//! 2. `DeliveryMatrix::scan()` — Queries all deployed wells in parallel and
-//!    returns every (chain, asset) pair that currently has liquidity.
-//!
-//! 3. `DeliveryWorker::start_http(port)` — Axum server that open-mamba calls
-//!    via its scheduled webhooks.  Each schedule fires POST /lwc/deliver with a
-//!    chain_id+asset payload; the worker calls fill() and returns the result.
+//! Public surfaces:
+
+pub mod gas_razor;
+pub mod hop_rebalancer;
+pub mod order_monitor;
+pub mod self_fill;
+
+pub use self_fill::destination_to_chain_id;
+
 
 use alloy::{
     network::EthereumWallet,
