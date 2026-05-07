@@ -2,6 +2,7 @@
 //!
 //! Public surfaces:
 
+pub mod deposit_all;
 pub mod gas_razor;
 pub mod hop_rebalancer;
 pub mod order_monitor;
