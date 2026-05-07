@@ -1,5 +1,5 @@
 [package]
-name = "t3rn-sidecar"
+name = "solver-registry"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,10 +7,12 @@ authors.workspace = true
 [dependencies]
 alloy.workspace = true
 anyhow.workspace = true
-tracing.workspace = true
-serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
-genome-client = { path = "../genome-client" }
-hex = "0.4"
+tracing.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+hex.workspace = true

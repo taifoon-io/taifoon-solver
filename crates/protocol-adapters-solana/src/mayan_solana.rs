@@ -137,11 +137,21 @@ impl MayanSolanaIntent {
             .mayan_order_id
             .as_deref()
             .ok_or_else(|| anyhow!("Mayan Solana estimate requires intent.mayan_order_id"))?;
-        let trader = intent
-            .trader
-            .as_deref()
-            .or(Some(intent.depositor.as_str()))
-            .ok_or_else(|| anyhow!("Mayan Solana estimate requires intent.trader or intent.depositor"))?;
+        // For EVM→Solana fills the recipient (intent.recipient) is the Solana destination pubkey.
+        // For legacy Solana-source orders, intent.trader holds the Solana trader pubkey.
+        // Prefer intent.trader if it looks like a Solana pubkey (not 0x-prefixed).
+        let trader_raw = intent.trader.as_deref().unwrap_or(intent.depositor.as_str());
+        let is_solana_pubkey = |s: &str| !s.starts_with("0x") && !s.starts_with("0X") && s.len() > 40;
+        let trader = if is_solana_pubkey(trader_raw) {
+            trader_raw
+        } else if is_solana_pubkey(&intent.recipient) {
+            &intent.recipient
+        } else {
+            return Err(anyhow!(
+                "Mayan Solana: no Solana trader/recipient pubkey found (trader={}, recipient={})",
+                trader_raw, intent.recipient
+            ));
+        };
         let state = intent
             .state_account
             .as_deref()

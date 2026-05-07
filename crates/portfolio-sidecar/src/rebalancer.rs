@@ -46,43 +46,23 @@ sol! {
     function allowance(address owner, address spender) external view returns (uint256);
 }
 
-// Mayan Forwarder create-side — 0x337685fdab40d39bd02028545a4ffa7d287cc3e2
-sol! {
-    interface MayanForwarderCreate {
-        struct PermitParams {
-            uint256 value;
-            uint256 deadline;
-            uint8 v;
-            bytes32 r;
-            bytes32 s;
-        }
 
-        function forwardERC20(
-            address tokenIn,
-            uint256 amountIn,
-            PermitParams permit,
-            address swift,
-            bytes calldata createCalldata
-        ) external;
-    }
-}
-
-// MayanSwift V2 — createOrderWithToken selector 0xe4269fc4
-// Order struct field order matches on-chain ABI (payloadType first, verified from tx calldata)
+// MayanSwift V2 — createOrderWithToken selector 0xa3a30834
+// Field order matches Mayan SDK ABI (@mayanfinance/swap-sdk v13.3.0)
 sol! {
     interface MayanSwiftCreate {
         struct Order {
             uint8 payloadType;
             bytes32 trader;
-            bytes32 tokenOut;
-            uint16 destChainId;
             bytes32 destAddr;
+            uint16 destChainId;
+            bytes32 referrerAddr;
+            bytes32 tokenOut;
             uint64 minAmountOut;
             uint64 gasDrop;
             uint64 cancelFee;
             uint64 refundFee;
             uint64 deadline;
-            bytes32 referrerAddr;
             uint8 referrerBps;
             uint8 auctionMode;
             bytes32 random;
@@ -94,6 +74,34 @@ sol! {
             Order order,
             bytes calldata customPayload
         ) external;
+    }
+}
+
+// MayanForwarder (0x337685fd) — routes user deposits through Wormhole so Mayan indexers
+// can discover the order. Call forwardERC20 here with protocolData = MayanSwift calldata.
+// ABI verified from deployed contract on Ethereum mainnet.
+sol! {
+    interface MayanForwarder {
+        struct PermitParams {
+            uint256 value;
+            uint256 deadline;
+            uint8 v;
+            bytes32 r;
+            bytes32 s;
+        }
+
+        /// Deposit ERC-20 via the Forwarder. The Forwarder will:
+        ///   1. Pull `amountIn` tokenIn from msg.sender
+        ///   2. Approve `mayanProtocol` (MayanSwift) for the amount
+        ///   3. Call `mayanProtocol` with `protocolData` (encoded createOrderWithToken)
+        ///   4. Emit a Wormhole message so Mayan's indexer can discover the order
+        function forwardERC20(
+            address tokenIn,
+            uint256 amountIn,
+            PermitParams permitParams,
+            address mayanProtocol,
+            bytes calldata protocolData
+        ) external payable;
     }
 }
 
@@ -155,16 +163,20 @@ const WETH_OPT: &str = "0x4200000000000000000000000000000000000006";
 const MIN_BASE_ETH_FOR_OPS: f64 = 0.0008;
 const USDT_SWAP_AMOUNT_USD: f64 = 5.0;
 
-/// Mayan Forwarder (create side) — same address on all EVM chains.
-const MAYAN_FORWARDER_ADDR: &str = "0x337685fdab40d39bd02028545a4ffa7d287cc3e2";
-/// MayanSwift V2 contract on Base (8453). Same on most EVM chains.
-const MAYAN_SWIFT_BASE: &str = "0xC38d8a07D4d9E8BC1D32dF50D4b1eAEEbeAfdC1f";
+/// MayanSwift V2 contract (same address on all EVM chains).
+const MAYAN_SWIFT_BASE: &str = "0x40ffe85a28dc9993541449464d7529a922142960";
+const MAYAN_SWIFT: &str = "0x40ffe85a28dc9993541449464d7529a922142960";
+/// MayanForwarder contract (same address on all EVM chains).
+/// Routes through Wormhole so the order is indexed by Mayan explorer and solver network.
+const MAYAN_FORWARDER: &str = "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2";
 /// USDC on Base.
 const USDC_BASE: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 /// Mayan Wormhole chain ID for Solana.
 const MAYAN_SOLANA_CHAIN_ID: u16 = 1;
 /// Amount (USD) to bridge to Solana each cycle.
-const SOLANA_BRIDGE_USD: f64 = 3.0;
+/// Bootstrap orders need to be large enough for Mayan's external solver network to bother filling
+/// (~$5 minimum). Below $5 orders may sit unfilled until the deadline expires.
+const SOLANA_BRIDGE_USD: f64 = 5.0;
 
 /// A bridge action decided by the rebalancer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,10 +204,12 @@ pub enum BridgeKind {
     ClaimSweep,
     /// Swap native gas token (MATIC/ETH) on a src-only chain to USDC on home chain.
     NativeSweep,
-    /// Mayan Swift forwardERC20 → USDC on Solana.
+    /// Mayan Swift V2 createOrderWithToken → USDC + SOL gas drop on Solana.
     MayanSolana,
     /// Swap USDT→ETH or bridge WETH→Base to fund operations.
     EthBootstrap,
+    /// Bridge stranded USDC directly from Arb/OP to Solana when Base lacks stables.
+    SolanaBootstrap,
 }
 
 /// Chain ID of the canonical home chain — surplus repayments consolidate here.
@@ -205,6 +219,7 @@ pub const HOME_CHAIN_ID: u64 = 8453; // Base
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FeesResp {
+    #[serde(default)]
     relay_fee_total: String,
     #[serde(rename = "outputAmount")]
     output_amount: String,
@@ -325,27 +340,19 @@ impl Rebalancer {
             }
         }
 
-        // Phase -2: bridge WETH from Arb or Opt to Base if Base ETH still critical
+        // Phase -2: unwrap WETH on Arb/Opt in-place so that chain's native ETH can fuel
+        // the ETH bootstrap bridge. Across rejects small WETH amounts as AMOUNT_TOO_LOW,
+        // so unwrapping locally then using Uniswap ETH→USDC on that same chain is more reliable.
         let already_bootstrapping = actions.iter().any(|a| matches!(a.kind, BridgeKind::EthBootstrap));
         if !already_bootstrapping {
-            let base_snap = snapshots.iter().find(|s| s.chain_id == HOME_CHAIN_ID);
-            if let Some(base) = base_snap {
-                if base.gas_eth < MIN_BASE_ETH_FOR_OPS {
-                    let weth_src = snapshots.iter()
-                        .filter(|s| s.chain_id != HOME_CHAIN_ID && s.weth_raw > 0)
-                        .max_by(|a, b| a.weth_raw.partial_cmp(&b.weth_raw).unwrap_or(std::cmp::Ordering::Equal));
-                    if let Some(src) = weth_src {
-                        let keep_raw = (0.0001 * 1e18) as u128;
-                        if src.weth_raw > keep_raw {
-                            let send_raw = src.weth_raw - keep_raw;
-                            let send_usd = send_raw as f64 / 1e18 * 3000.0;
-                            info!("🌉 Bridging {:.6} WETH from chain {} → Base (ETH bootstrap)", send_raw as f64 / 1e18, src.chain_id);
-                            let weth_src_addr = if src.chain_id == 42161 { WETH_ARB } else { WETH_OPT };
-                            let action = self.bridge_weth_to_base(src, weth_src_addr, send_raw, send_usd).await;
-                            actions.push(action);
-                        }
-                    }
-                }
+            let weth_src = snapshots.iter()
+                .filter(|s| s.chain_id != HOME_CHAIN_ID && s.weth_raw > 0)
+                .max_by(|a, b| a.weth_raw.partial_cmp(&b.weth_raw).unwrap_or(std::cmp::Ordering::Equal));
+            if let Some(src) = weth_src {
+                let weth_addr = if src.chain_id == 42161 { WETH_ARB } else { WETH_OPT };
+                info!("🔓 Unwrapping {} WETH on chain {} → native ETH (ETH bootstrap prep)", src.weth_raw as f64 / 1e18, src.chain_id);
+                let action = self.unwrap_weth_on_chain(src.chain_id, weth_addr, src.weth_raw).await;
+                actions.push(action);
             }
         }
 
@@ -547,31 +554,154 @@ impl Rebalancer {
             }
         }
 
-        // Phase 4: Mayan Solana bridge — if SOLANA_ADDRESS is set and Base has surplus stables.
+        // Phase 4: Mayan Solana bridge — if SOLANA_ADDRESS is set and Base has enough stables.
         // Sends SOLANA_BRIDGE_USD worth of USDC from Base to the solver's Solana address
-        // via Mayan Forwarder forwardERC20 → MayanSwift createOrderWithToken.
+        // via MayanSwift V2 createOrderWithToken with gasDrop=0.01 SOL.
+        //
+        // Bootstrap mode: if the Solana wallet has 0 SOL we skip the reserve check and
+        // bridge as long as Base holds at least SOLANA_BRIDGE_USD + MIN_BRIDGE_USD in raw balance.
         if let Ok(solana_addr) = std::env::var("SOLANA_ADDRESS") {
             if !solana_addr.is_empty() {
                 let base_snap = snapshots.iter().find(|s| s.chain_id == HOME_CHAIN_ID);
                 let base_working = working_stable.get(&HOME_CHAIN_ID).copied().unwrap_or(0.0);
                 let base_target = targets.iter().find(|t| t.chain_id == HOME_CHAIN_ID);
                 let base_reserve = base_target.map(|t| if t.is_fill_chain { t.min_stable_usd } else { 0.0 }).unwrap_or(0.0);
-                let base_available = base_working - base_reserve;
+                let base_available_normal = base_working - base_reserve;
+
+                // Check Solana SOL balance to detect bootstrap condition.
+                let solana_lamports = check_solana_balance(&solana_addr).await;
+                let needs_bootstrap = solana_lamports < 5_000_000; // < 0.005 SOL → bootstrap
+
+                // In bootstrap mode, allow bridging if Base has enough raw (ignoring reserve).
+                let base_available = if needs_bootstrap { base_working } else { base_available_normal };
 
                 if let Some(base_snap) = base_snap {
-                    if base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD {
-                        let amount_raw = usd_to_raw(SOLANA_BRIDGE_USD, 6); // USDC 6 decimals
-                        info!(
-                            "🌞 Mayan bridge: ${:.2} USDC Base → Solana ({})",
-                            SOLANA_BRIDGE_USD, &solana_addr[..8.min(solana_addr.len())]
-                        );
-                        let action = self.mayan_solana_bridge(base_snap, &solana_addr, amount_raw, SOLANA_BRIDGE_USD).await;
-                        *working_stable.entry(HOME_CHAIN_ID).or_insert(0.0) -= SOLANA_BRIDGE_USD;
+                    // Use the bridge token (whichever of USDC/USDT has more) to avoid
+                    // "transfer amount exceeds balance" when USDC < SOLANA_BRIDGE_USD but USDT isn't.
+                    let bridge_usd = base_snap.bridge_token_usd;
+                    let bridge_addr = &base_snap.bridge_token_addr;
+                    let bridge_decimals = base_snap.bridge_token_decimals;
+                    let bridge_symbol = if bridge_addr.eq_ignore_ascii_case(USDC_BASE) { "USDC" } else { "USDT" };
+
+                    // Cap send amount to what the bridge token actually holds minus a small buffer.
+                    let send_usd = SOLANA_BRIDGE_USD.min(bridge_usd - 0.05).max(0.0);
+                    let send_raw = usd_to_raw(send_usd, bridge_decimals);
+
+                    // In bootstrap mode: skip the aggregate-reserve check; just need enough bridge token.
+                    let can_bridge = if needs_bootstrap {
+                        send_usd >= 0.50
+                    } else {
+                        base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD && send_usd >= 0.50
+                    };
+                    if can_bridge {
+                        if needs_bootstrap {
+                            info!(
+                                "🚀 Mayan bootstrap bridge: ${:.2} {} Base → Solana {} (sol_lamports={})",
+                                send_usd, bridge_symbol, &solana_addr[..8.min(solana_addr.len())], solana_lamports
+                            );
+                        } else {
+                            info!(
+                                "🌞 Mayan bridge: ${:.2} {} Base → Solana ({})",
+                                send_usd, bridge_symbol, &solana_addr[..8.min(solana_addr.len())]
+                            );
+                        }
+                        let action = self.mayan_solana_bridge(base_snap, &solana_addr, send_raw, send_usd, bridge_addr, bridge_symbol).await;
+                        *working_stable.entry(HOME_CHAIN_ID).or_insert(0.0) -= send_usd;
                         actions.push(action);
+                    } else if needs_bootstrap {
+                        // Before spending ETH on a swap, check if any non-Base chain already has
+                        // USDC stranded from a prior bootstrap attempt — bridge it directly.
+                        const MIN_DIRECT_BRIDGE_USD: f64 = 0.10; // min USDC to bridge directly
+                        const MIN_GAS_FOR_BRIDGE: f64 = 0.00003; // min ETH to pay for forwardERC20 call
+                        let direct_src = {
+                            let arb_snap = snapshots.iter().find(|s| s.chain_id == 42161);
+                            let opt_snap = snapshots.iter().find(|s| s.chain_id == 10);
+                            [arb_snap, opt_snap].into_iter().flatten()
+                                .filter(|s| s.bridge_token_usd >= MIN_DIRECT_BRIDGE_USD && s.gas_eth >= MIN_GAS_FOR_BRIDGE)
+                                .max_by(|a, b| a.bridge_token_usd.partial_cmp(&b.bridge_token_usd).unwrap_or(std::cmp::Ordering::Equal))
+                        };
+                        if let Some(src) = direct_src {
+                            let chain_name = if src.chain_id == 42161 { "Arbitrum" } else { "Optimism" };
+                            info!(
+                                "🚀 Direct USDC bridge (stranded): ${:.2} {} {} → Solana {} (sol_lamports={})",
+                                src.bridge_token_usd, src.bridge_token_addr.get(..10).unwrap_or("?"), chain_name,
+                                &solana_addr[..8.min(solana_addr.len())], solana_lamports
+                            );
+                            let (usdc_addr, _weth_addr, _router_addr) = match src.chain_id {
+                                42161 => ("0xaf88d065e77c8cC2239327C5EDb3A432268e5831", WETH_ARB, "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"),
+                                10    => ("0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", WETH_OPT, "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"),
+                                _     => (USDC_BASE, WETH_BASE, UNISWAP_SWAP_ROUTER_BASE),
+                            };
+                            let action = match self.execute_mayan_solana_bridge_on_chain(
+                                src.bridge_token_raw, &solana_addr, usdc_addr, "USDC", src.chain_id
+                            ).await {
+                                Ok(h) => BridgeAction {
+                                    src_chain: src.chain_id, dst_chain: 0,
+                                    token_symbol: "USDC".into(), amount_usd: src.bridge_token_usd,
+                                    kind: BridgeKind::SolanaBootstrap, tx_hash: Some(h),
+                                    status: "sent".into(),
+                                },
+                                Err(e) => {
+                                    warn!("Direct USDC bridge from {} failed: {e:#}", chain_name);
+                                    BridgeAction {
+                                        src_chain: src.chain_id, dst_chain: 0,
+                                        token_symbol: "USDC".into(), amount_usd: src.bridge_token_usd,
+                                        kind: BridgeKind::SolanaBootstrap, tx_hash: None,
+                                        status: format!("error: {e:#}"),
+                                    }
+                                }
+                            };
+                            actions.push(action);
+                        } else {
+                        // Stablecoin exhausted — try ETH→SOL bootstrap if we have spare ETH.
+                        // Swap ETH→USDC via Uniswap on the best source chain, then bridge via Mayan.
+                        // Bridge enough USDC that gasDrop=0.001 SOL (~$0.09) is economical for Mayan solvers.
+                        // 0.002 ETH ≈ $6 USDC — large enough for Mayan's external solver network.
+                        // Sub-$5 orders typically expire unfilled; keep 0.0002 ETH for gas.
+                        const ETH_BOOTSTRAP_WEI: u128 = 2_000_000_000_000_000; // 0.002 ETH
+                        const MIN_ETH_KEEP: f64 = 0.0002; // keep for gas
+                        // Find the best ETH source: prefer Arb, then Optimism, then Base.
+                        let eth_src = {
+                            let threshold = MIN_ETH_KEEP + (ETH_BOOTSTRAP_WEI as f64 / 1e18);
+                            let arb_snap = snapshots.iter().find(|s| s.chain_id == 42161);
+                            let arb_eth = arb_snap.map(|s| s.gas_eth).unwrap_or(0.0);
+                            let opt_snap = snapshots.iter().find(|s| s.chain_id == 10);
+                            let opt_eth = opt_snap.map(|s| s.gas_eth).unwrap_or(0.0);
+                            if arb_eth > threshold {
+                                arb_snap.map(|s| (s, "Arbitrum", 42161u64))
+                            } else if opt_eth > threshold {
+                                opt_snap.map(|s| (s, "Optimism", 10u64))
+                            } else {
+                                let base_eth = base_snap.gas_eth;
+                                if base_eth > threshold {
+                                    Some((base_snap, "Base", HOME_CHAIN_ID))
+                                } else {
+                                    None
+                                }
+                            }
+                        };
+                        if let Some((eth_snap, eth_chain_name, eth_chain_id)) = eth_src {
+                            info!(
+                                "🚀 ETH bootstrap bridge: {} wei ETH {} → Solana {} (sol_lamports={}, stables depleted)",
+                                ETH_BOOTSTRAP_WEI, eth_chain_name, &solana_addr[..8.min(solana_addr.len())], solana_lamports
+                            );
+                            let action = if eth_chain_id == HOME_CHAIN_ID {
+                                self.mayan_solana_bridge_eth(eth_snap, &solana_addr, ETH_BOOTSTRAP_WEI).await
+                            } else {
+                                self.mayan_solana_bridge_eth_from_chain(eth_snap, &solana_addr, ETH_BOOTSTRAP_WEI, eth_chain_id).await
+                            };
+                            actions.push(action);
+                        } else {
+                            info!(
+                                "⏭ Mayan Solana bridge skipped: Base available=${:.2} (bridge_token={} ${:.2}) < needed, ETH too low on all chains",
+                                base_available, bridge_symbol, bridge_usd
+                            );
+                        }
+                        } // closes the `else` of the direct_src check
                     } else {
                         info!(
-                            "⏭ Mayan Solana bridge skipped: Base available=${:.2} < ${:.2} needed",
-                            base_available, SOLANA_BRIDGE_USD + MIN_BRIDGE_USD
+                            "⏭ Mayan Solana bridge skipped: Base available=${:.2} (bridge_token={} ${:.2}) < ${:.2} needed",
+                            base_available, bridge_symbol, bridge_usd, SOLANA_BRIDGE_USD + MIN_BRIDGE_USD,
                         );
                     }
                 }
@@ -683,19 +813,21 @@ impl Rebalancer {
         action
     }
 
-    /// Bridge USDC from Base to Solana via Mayan Swift forwardERC20.
+    /// Bridge USDC from Base to Solana via MayanSwift V2 createOrderWithToken (direct, no Forwarder).
     async fn mayan_solana_bridge(
         &self,
         src: &ChainSnapshot,
         solana_addr: &str,
         amount_raw: u128,
         amount_usd: f64,
+        token_in_addr: &str,
+        token_symbol: &str,
     ) -> BridgeAction {
         // Use chain_id 0 for Solana as a sentinel (Solana has no EVM chain ID).
         let mut action = BridgeAction {
             src_chain: src.chain_id,
             dst_chain: 0, // Solana sentinel
-            token_symbol: "USDC".into(),
+            token_symbol: token_symbol.into(),
             amount_usd,
             kind: BridgeKind::MayanSolana,
             tx_hash: None,
@@ -704,13 +836,13 @@ impl Rebalancer {
 
         if self.dry_run {
             info!(
-                "[DRY RUN] Would Mayan-bridge ${:.2} USDC Base → Solana ({})",
-                amount_usd, &solana_addr[..8.min(solana_addr.len())]
+                "[DRY RUN] Would Mayan-bridge ${:.2} {} Base → Solana ({})",
+                amount_usd, token_symbol, &solana_addr[..8.min(solana_addr.len())]
             );
             return action;
         }
 
-        match self.execute_mayan_solana_bridge(amount_raw, solana_addr).await {
+        match self.execute_mayan_solana_bridge(amount_raw, solana_addr, token_in_addr, token_symbol).await {
             Ok(hash) => { action.tx_hash = Some(hash); action.status = "sent".into(); }
             Err(e) => {
                 warn!("Mayan Solana bridge failed: {e:#}");
@@ -720,124 +852,287 @@ impl Rebalancer {
         action
     }
 
-    /// Execute the Mayan forwardERC20 transaction to bridge USDC from Base to Solana.
-    ///
-    /// Flow:
-    ///   1. approve(MAYAN_FORWARDER, amount_raw) on USDC/Base if needed
-    ///   2. forwardERC20(USDC, amount_raw, zeroPermit, MayanSwift, createOrderCalldata)
-    async fn execute_mayan_solana_bridge(&self, amount_raw: u128, solana_addr: &str) -> Result<String> {
-        let rpc = rpc_for(HOME_CHAIN_ID);
+    /// Bridge native ETH from Base to SOL on Solana via MayanSwift V2 createOrder (payable).
+    async fn mayan_solana_bridge_eth(
+        &self,
+        src: &ChainSnapshot,
+        solana_addr: &str,
+        eth_wei: u128,
+    ) -> BridgeAction {
+        let eth_usd = eth_wei as f64 / 1e18 * 2500.0; // rough ETH price
+        let mut action = BridgeAction {
+            src_chain: src.chain_id,
+            dst_chain: 0,
+            token_symbol: "ETH".into(),
+            amount_usd: eth_usd,
+            kind: BridgeKind::MayanSolana,
+            tx_hash: None,
+            status: if self.dry_run { "dry_run".into() } else { "pending".into() },
+        };
+        if self.dry_run {
+            info!("[DRY RUN] Would Mayan-bridge {} wei ETH Base → Solana SOL ({})", eth_wei, &solana_addr[..8.min(solana_addr.len())]);
+            return action;
+        }
+        match self.execute_mayan_solana_bridge_eth(eth_wei, solana_addr).await {
+            Ok(hash) => { action.tx_hash = Some(hash); action.status = "sent".into(); }
+            Err(e) => { warn!("Mayan ETH→SOL bridge failed: {e:#}"); action.status = format!("error: {e:#}"); }
+        }
+        action
+    }
+
+    /// Bridge ETH from a non-Base chain (e.g. Arbitrum) → USDC via Uniswap → Solana via Mayan.
+    async fn mayan_solana_bridge_eth_from_chain(
+        &self,
+        src: &ChainSnapshot,
+        solana_addr: &str,
+        eth_wei: u128,
+        chain_id: u64,
+    ) -> BridgeAction {
+        let eth_usd = eth_wei as f64 / 1e18 * 2500.0;
+        let mut action = BridgeAction {
+            src_chain: chain_id,
+            dst_chain: 0,
+            token_symbol: "ETH".into(),
+            amount_usd: eth_usd,
+            kind: BridgeKind::MayanSolana,
+            tx_hash: None,
+            status: if self.dry_run { "dry_run".into() } else { "pending".into() },
+        };
+        if self.dry_run {
+            info!("[DRY RUN] Would Mayan-bridge {} wei ETH (chain {}) → Solana SOL ({})", eth_wei, chain_id, &solana_addr[..8.min(solana_addr.len())]);
+            return action;
+        }
+        // Determine USDC address and Uniswap router for this chain
+        let (usdc_addr, weth_addr, router_addr) = match chain_id {
+            42161 => (
+                "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // USDC on Arb
+                "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", // WETH on Arb
+                "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // SwapRouter02 on Arb
+            ),
+            10 => (
+                "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // USDC on Optimism
+                "0x4200000000000000000000000000000000000006", // WETH on Optimism
+                "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // SwapRouter02 on Optimism
+            ),
+            _ => {
+                warn!("ETH bootstrap from chain {} not supported", chain_id);
+                action.status = "error: unsupported chain for ETH bootstrap".into();
+                return action;
+            }
+        };
+        match self.execute_mayan_solana_bridge_eth_chain(eth_wei, solana_addr, chain_id, usdc_addr, weth_addr, router_addr).await {
+            Ok(hash) => { action.tx_hash = Some(hash); action.status = "sent".into(); }
+            Err(e) => { warn!("Mayan ETH→SOL bridge from chain {} failed: {e:#}", chain_id); action.status = format!("error: {e:#}"); }
+        }
+        let _ = src; // used for type inference only
+        action
+    }
+
+    /// ETH→USDC via Uniswap exactInputSingle, then bridge USDC to Solana via createOrderWithToken.
+    /// Swift V2 does not support native ETH input (createOrderWithEth), so we swap first.
+    async fn execute_mayan_solana_bridge_eth(&self, eth_wei: u128, solana_addr: &str) -> Result<String> {
+        self.execute_mayan_solana_bridge_eth_chain(eth_wei, solana_addr, HOME_CHAIN_ID, USDC_BASE, WETH_BASE, UNISWAP_SWAP_ROUTER_BASE).await
+    }
+
+    async fn execute_mayan_solana_bridge_eth_chain(
+        &self,
+        eth_wei: u128,
+        solana_addr: &str,
+        chain_id: u64,
+        usdc_addr: &str,
+        weth_addr: &str,
+        router_addr: &str,
+    ) -> Result<String> {
+        let rpc = rpc_for(chain_id);
+        let eth_u256 = U256::from(eth_wei);
+
+        // Step 1: wrap ETH → WETH, then swap WETH → USDC via Uniswap exactInputSingle.
+        // Uniswap SwapRouter02 accepts ETH directly via exactInputSingle when tokenIn=WETH and value>0.
+        let eth_price_usd = 2500.0_f64;
+        // USDC has 6 decimals: 1 USDC = 1_000_000 raw. Apply 10% slippage floor.
+        let usdc_expected = (eth_wei as f64 / 1e18 * eth_price_usd * 0.90 * 1e6) as u128;
+        let min_usdc_out = U256::from(usdc_expected.max(1)); // min 1 raw to avoid div-by-zero
+
+        let swap_params = UniswapSwapRouter::ExactInputSingleParams {
+            tokenIn: weth_addr.parse().context("parse WETH")?,
+            tokenOut: usdc_addr.parse().context("parse USDC")?,
+            fee: alloy::primitives::Uint::<24, 1>::from(500u32), // 0.05% pool
+            recipient: self.solver_addr,
+            amountIn: eth_u256,
+            amountOutMinimum: min_usdc_out,
+            sqrtPriceLimitX96: alloy::primitives::Uint::<160, 3>::ZERO,
+        };
+        let swap_calldata = UniswapSwapRouter::exactInputSingleCall { params: swap_params }.abi_encode();
+
+        info!("📤 Uniswap ETH→USDC (chain {}): {} wei ETH (expect ≥{} USDC raw)", chain_id, eth_wei, usdc_expected);
+
+        // Send ETH with the swap (router accepts ETH and wraps it internally)
+        let router: Address = router_addr.parse().context("parse router")?;
+        let wallet = EthereumWallet::from(self.signer.clone());
+        let wp = ProviderBuilder::new().with_recommended_fillers().wallet(wallet.clone())
+            .on_http(rpc.parse().context("parse rpc")?);
+
+        let swap_req = TransactionRequest::default()
+            .to(router)
+            .input(Bytes::from(swap_calldata).into())
+            .value(eth_u256);
+        let pending = wp.send_transaction(swap_req).await.context("uniswap swap tx")?;
+        let receipt = pending.with_required_confirmations(1).get_receipt().await.context("swap receipt")?;
+        if !receipt.status() {
+            anyhow::bail!("Uniswap ETH→USDC swap reverted on chain {}", chain_id);
+        }
+        info!("✅ Uniswap ETH→USDC swap confirmed (chain {})", chain_id);
+
+        // Step 2: read actual USDC balance and bridge entire amount to Solana.
+        let usdc_token: Address = usdc_addr.parse().context("parse USDC")?;
+        let provider = ProviderBuilder::new().on_http(rpc.parse().context("parse rpc")?);
+        // balanceOf selector: 0x70a08231
+        let bal_calldata = {
+            let mut d = vec![0x70u8, 0xa0u8, 0x82u8, 0x31u8];
+            d.extend_from_slice(&[0u8; 12]);
+            d.extend_from_slice(self.solver_addr.as_slice());
+            d
+        };
+        let req = TransactionRequest::default()
+            .to(usdc_token)
+            .input(Bytes::from(bal_calldata).into());
+        let bal_raw: U256 = match provider.call(&req).await {
+            Ok(b) if b.len() >= 32 => U256::from_be_slice(&b[b.len()-32..]),
+            _ => U256::from(usdc_expected),
+        };
+        // Bridge at most usdc_expected (the new amount), leave existing balance intact.
+        let bridge_amount = bal_raw.min(U256::from((usdc_expected as u128).saturating_add(1_000_000)));
+        if bridge_amount.is_zero() {
+            anyhow::bail!("USDC balance is zero after swap on chain {}", chain_id);
+        }
+        info!("💰 USDC balance after swap: {} raw, bridging {} raw to Solana (via chain {})", bal_raw, bridge_amount, chain_id);
+
+        // Bridge from the source chain's MayanSwift (same address on all chains)
+        self.execute_mayan_solana_bridge_on_chain(bridge_amount.to::<u128>(), solana_addr, usdc_addr, "USDC", chain_id).await
+    }
+
+    /// Direct path: approve tokenIn to Swift V2, call createOrderWithToken.
+    /// gasDrop=0.01 SOL (10_000_000 lamports) airdropped to Solana recipient.
+    /// auctionMode=2 → auction mode, Mayan solvers compete to fill on Solana.
+    async fn execute_mayan_solana_bridge(&self, amount_raw: u128, solana_addr: &str, token_in_addr: &str, token_symbol: &str) -> Result<String> {
+        self.execute_mayan_solana_bridge_on_chain(amount_raw, solana_addr, token_in_addr, token_symbol, HOME_CHAIN_ID).await
+    }
+
+    async fn execute_mayan_solana_bridge_on_chain(&self, amount_raw: u128, solana_addr: &str, token_in_addr: &str, token_symbol: &str, chain_id: u64) -> Result<String> {
+        let rpc = rpc_for(chain_id);
         let amount_u256 = U256::from(amount_raw);
 
-        // Decode the Solana base58 pubkey into 32 bytes.
+        // Decode Solana base58 pubkey → 32-byte destAddr
         let sol_bytes = bs58::decode(solana_addr)
             .into_vec()
             .context("invalid Solana base58 address")?;
         if sol_bytes.len() != 32 {
             anyhow::bail!("Solana address must be 32 bytes, got {}", sol_bytes.len());
         }
-        let mut dest_addr = [0u8; 32];
-        dest_addr.copy_from_slice(&sol_bytes);
-        let dest_addr_fixed: alloy::primitives::FixedBytes<32> = dest_addr.into();
+        let mut dest_arr = [0u8; 32];
+        dest_arr.copy_from_slice(&sol_bytes);
+        let dest_addr_fixed: alloy::primitives::FixedBytes<32> = dest_arr.into();
 
-        // Trader is the solver EVM address, left-padded to 32 bytes.
-        let solver_bytes: [u8; 32] = {
+        // Trader = solver EVM address, left-padded to bytes32
+        let trader_fixed: alloy::primitives::FixedBytes<32> = {
             let mut b = [0u8; 32];
             b[12..].copy_from_slice(self.solver_addr.as_slice());
-            b
+            b.into()
         };
-        let trader_fixed: alloy::primitives::FixedBytes<32> = solver_bytes.into();
 
-        // tokenOut on Solana: USDC is EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-        // Encoded as bytes32: right-aligned (Wormhole convention for Solana token addresses)
-        let usdc_solana = bs58::decode("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-            .into_vec()
-            .unwrap_or_default();
-        let mut token_out = [0u8; 32];
-        if usdc_solana.len() == 32 { token_out.copy_from_slice(&usdc_solana); }
-        let token_out_fixed: alloy::primitives::FixedBytes<32> = token_out.into();
+        // tokenOut = native SOL (So11111111111111111111111111111111111111112) as bytes32
+        // We request native SOL output so the Solana wallet receives lamports directly.
+        // gasDrop=0 because we're receiving SOL directly (no extra gas drop needed).
+        let token_out_fixed: alloy::primitives::FixedBytes<32> = {
+            let bytes = bs58::decode("So11111111111111111111111111111111111111112")
+                .into_vec()
+                .unwrap_or_default();
+            let mut arr = [0u8; 32];
+            if bytes.len() == 32 { arr.copy_from_slice(&bytes); }
+            arr.into()
+        };
 
-        // referrerAddr = zero bytes32
         let zero_fixed: alloy::primitives::FixedBytes<32> = [0u8; 32].into();
 
-        // random = 32 random bytes for uniqueness
-        let random_bytes: [u8; 32] = {
+        // random = timestamp-seeded bytes32 for order uniqueness
+        let random_fixed: alloy::primitives::FixedBytes<32> = {
             use std::time::{SystemTime, UNIX_EPOCH};
             let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-            let lo = ts as u64;
-            let hi = (ts >> 64) as u64;
             let mut r = [0u8; 32];
-            r[16..24].copy_from_slice(&hi.to_be_bytes());
-            r[24..].copy_from_slice(&lo.to_be_bytes());
-            r
+            r[16..24].copy_from_slice(&((ts >> 64) as u64).to_be_bytes());
+            r[24..].copy_from_slice(&(ts as u64).to_be_bytes());
+            r.into()
         };
-        let random_fixed: alloy::primitives::FixedBytes<32> = random_bytes.into();
 
-        // deadline = now + 30 minutes
         let deadline = {
             use std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 1800
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + 14400 // 4 hours
         };
 
-        // minAmountOut = 95% of input (5% slippage allowance)
-        let min_amount_out = (amount_raw as f64 * 0.95) as u64;
+        // minAmountOut in SOL lamports (9 decimals): 85% of input USDC value converted to SOL.
+        // Lower slippage tolerance (85%) gives Mayan solvers more margin to fill without reverting.
+        // SOL price ~$170 as of May 2026; using conservative $160 to avoid order rejection on dips.
+        let sol_price_usd = 160.0_f64;
+        let usdc_usd = amount_raw as f64 / 1e6;
+        let min_sol_lamports = (usdc_usd / sol_price_usd * 0.85 * 1e9) as u64;
 
-        let swift: Address = MAYAN_SWIFT_BASE.parse().context("parse swift addr")?;
-        let usdc_base: Address = USDC_BASE.parse().context("parse usdc addr")?;
+        let token_in: Address = token_in_addr.parse().context("parse tokenIn addr")?;
+        let forwarder: Address = MAYAN_FORWARDER.parse().context("parse forwarder addr")?;
+        let forwarder_hex = format!("{forwarder:#x}");
+        let mayan_swift: Address = MAYAN_SWIFT.parse().context("parse MayanSwift addr")?;
 
-        // Build inner createOrderWithToken calldata
+        // Approve Forwarder to pull USDC from solver — Forwarder re-approves MayanSwift internally.
+        self.ensure_allowance(token_in_addr, &forwarder_hex, amount_u256, rpc)
+            .await.with_context(|| format!("approve MayanForwarder for {token_symbol}"))?;
+
+        // Inner call: MayanSwift createOrderWithToken — encoded as protocolData for the Forwarder.
+        // auctionMode=0 (fulfillSimple) so any Mayan solver can fill without a private auction VAA.
         let order = MayanSwiftCreate::Order {
+            payloadType: 1,
             trader: trader_fixed,
-            tokenOut: token_out_fixed,
-            minAmountOut: min_amount_out,
-            gasDrop: 0,
-            cancelFee: 0,
-            refundFee: 0,
-            deadline,
             destAddr: dest_addr_fixed,
             destChainId: MAYAN_SOLANA_CHAIN_ID,
             referrerAddr: zero_fixed,
+            tokenOut: token_out_fixed,
+            minAmountOut: min_sol_lamports,
+            gasDrop: 0u64,
+            cancelFee: 2000,
+            refundFee: 0,
+            deadline,
             referrerBps: 0,
-            auctionMode: 0, // fulfillSimple — no auction VAA needed
+            auctionMode: 0,
             random: random_fixed,
-            payloadType: 0,
         };
-        let create_calldata = MayanSwiftCreate::createOrderWithTokenCall {
-            tokenIn: usdc_base,
-            amountIn: U256::from(amount_raw),
+
+        let protocol_data = MayanSwiftCreate::createOrderWithTokenCall {
+            tokenIn: token_in,
+            amountIn: amount_u256,
             order,
             customPayload: Bytes::new(),
         }.abi_encode();
 
-        let forwarder: Address = MAYAN_FORWARDER_ADDR.parse().context("parse forwarder")?;
-
-        // Approve Mayan Forwarder for USDC
-        self.ensure_allowance(USDC_BASE, MAYAN_FORWARDER_ADDR, amount_u256, rpc)
-            .await.context("approve Mayan Forwarder")?;
-
-        // Zero permit (no EIP-2612 permit)
-        let zero_permit = MayanForwarderCreate::PermitParams {
+        // Outer call: Forwarder.forwardERC20 — pulls USDC, calls MayanSwift, emits Wormhole VAA.
+        let empty_permit = MayanForwarder::PermitParams {
             value: U256::ZERO,
             deadline: U256::ZERO,
-            v: 0,
+            v: 0u8,
             r: [0u8; 32].into(),
             s: [0u8; 32].into(),
         };
-
-        let calldata = MayanForwarderCreate::forwardERC20Call {
-            tokenIn: usdc_base,
-            amountIn: U256::from(amount_raw),
-            permit: zero_permit,
-            swift,
-            createCalldata: Bytes::from(create_calldata),
+        let forward_calldata = MayanForwarder::forwardERC20Call {
+            tokenIn: token_in,
+            amountIn: amount_u256,
+            permitParams: empty_permit,
+            mayanProtocol: mayan_swift,
+            protocolData: Bytes::from(protocol_data),
         }.abi_encode();
 
         info!(
-            "📤 Mayan forwardERC20: {} USDC raw → Solana, swift={}, forwarder={}",
-            amount_raw, MAYAN_SWIFT_BASE, MAYAN_FORWARDER_ADDR
+            "📤 MayanForwarder forwardERC20 (chain {}): {} {} raw → native SOL on {}, min={} lamports (auctionMode=0)",
+            chain_id, amount_raw, token_symbol, &solana_addr[..8.min(solana_addr.len())], min_sol_lamports
         );
 
-        self.send_raw(rpc, &format!("{forwarder:#x}"), &hex::encode(&calldata)).await
+        self.send_raw(rpc, &forwarder_hex, &hex::encode(&forward_calldata)).await
     }
 
     async fn execute_gas_topup(&self, src: &ChainSnapshot, dst_chain: u64, amount_raw: u128) -> Result<String> {
@@ -875,9 +1170,13 @@ impl Rebalancer {
             "https://app.across.to/api/suggested-fees?originChainId={}&destinationChainId={}&token={:#x}&amount={}",
             src.chain_id, dst_chain, src_token, amount_raw
         );
-        let fees: FeesResp = self.http.get(&fee_url).send().await
-            .context("Across suggested-fees")?
-            .json().await
+        let fees_resp = self.http.get(&fee_url).send().await
+            .context("Across suggested-fees")?;
+        if !fees_resp.status().is_success() {
+            let body = fees_resp.text().await.unwrap_or_default();
+            anyhow::bail!("Across fees API error: {}", body);
+        }
+        let fees: FeesResp = fees_resp.json().await
             .context("parse fees response")?;
 
         let output_amount: U256 = fees.output_amount.parse().unwrap_or(U256::ZERO);
@@ -953,21 +1252,25 @@ impl Rebalancer {
     }
 
     async fn unwrap_weth_on_base(&self, weth_raw: u128) -> BridgeAction {
+        self.unwrap_weth_on_chain(HOME_CHAIN_ID, WETH_BASE, weth_raw).await
+    }
+
+    async fn unwrap_weth_on_chain(&self, chain_id: u64, weth_addr: &str, weth_raw: u128) -> BridgeAction {
         let mut action = BridgeAction {
-            src_chain: HOME_CHAIN_ID, dst_chain: HOME_CHAIN_ID,
+            src_chain: chain_id, dst_chain: chain_id,
             token_symbol: "WETH".into(), amount_usd: weth_raw as f64 / 1e18 * 3000.0,
             kind: BridgeKind::EthBootstrap, tx_hash: None,
             status: if self.dry_run { "dry_run".into() } else { "pending".into() },
         };
         if self.dry_run {
-            info!("[DRY RUN] Would unwrap {} WETH → ETH on Base", weth_raw as f64 / 1e18);
+            info!("[DRY RUN] Would unwrap {} WETH → ETH on chain {}", weth_raw as f64 / 1e18, chain_id);
             return action;
         }
-        let rpc = rpc_for(HOME_CHAIN_ID);
+        let rpc = rpc_for(chain_id);
         let calldata = WETH::withdrawCall { wad: U256::from(weth_raw) }.abi_encode();
-        match self.send_raw(rpc, WETH_BASE, &hex::encode(&calldata)).await {
+        match self.send_raw(rpc, weth_addr, &hex::encode(&calldata)).await {
             Ok(h) => { action.tx_hash = Some(h); action.status = "sent".into(); }
-            Err(e) => { warn!("WETH unwrap failed: {e:#}"); action.status = format!("error: {e:#}"); }
+            Err(e) => { warn!("WETH unwrap chain {} failed: {e:#}", chain_id); action.status = format!("error: {e:#}"); }
         }
         action
     }
@@ -1034,93 +1337,6 @@ impl Rebalancer {
         self.send_raw(rpc, UNISWAP_SWAP_ROUTER_BASE, &hex::encode(multicall_calldata)).await
     }
 
-    async fn bridge_weth_to_base(
-        &self,
-        src: &ChainSnapshot,
-        weth_addr: &str,
-        weth_raw: u128,
-        amount_usd: f64,
-    ) -> BridgeAction {
-        let mut action = BridgeAction {
-            src_chain: src.chain_id,
-            dst_chain: 8453,
-            token_symbol: "WETH".into(),
-            amount_usd,
-            kind: BridgeKind::EthBootstrap,
-            tx_hash: None,
-            status: if self.dry_run { "dry_run".into() } else { "pending".into() },
-        };
-
-        if self.dry_run {
-            info!(
-                "[DRY RUN] Would bridge {} WETH raw from chain {} → Base via Across",
-                weth_raw, src.chain_id
-            );
-            return action;
-        }
-
-        match self.execute_weth_bridge(src.chain_id, weth_addr, weth_raw).await {
-            Ok(hash) => { action.tx_hash = Some(hash); action.status = "sent".into(); }
-            Err(e) => {
-                warn!("WETH bridge {} → Base failed: {e:#}", src.chain_id);
-                action.status = format!("error: {e:#}");
-            }
-        }
-        action
-    }
-
-    async fn execute_weth_bridge(&self, src_chain: u64, weth_addr: &str, weth_raw: u128) -> Result<String> {
-        let src_rpc = rpc_for(src_chain);
-        let weth_src: Address = weth_addr.parse().context("parse src WETH")?;
-        let weth_base: Address = WETH_BASE.parse().context("parse dst WETH")?;
-        let amount_u256 = U256::from(weth_raw);
-
-        let fee_url = format!(
-            "https://app.across.to/api/suggested-fees?originChainId={}&destinationChainId=8453&token={:#x}&amount={}",
-            src_chain, weth_src, weth_raw
-        );
-        let fees: FeesResp = self.http.get(&fee_url).send().await
-            .context("Across suggested-fees for WETH")?
-            .json().await
-            .context("parse WETH fees response")?;
-
-        let output_amount: U256 = fees.output_amount.parse().unwrap_or(U256::ZERO);
-        let exclusive_relayer: Address = fees.exclusive_relayer.parse().unwrap_or(Address::ZERO);
-        let quote_ts: u32 = fees.timestamp.parse().unwrap_or(0);
-
-        let spoke = spoke_pool(src_chain)
-            .ok_or_else(|| anyhow::anyhow!("No SpokePool for chain {}", src_chain))?;
-
-        self.ensure_allowance(
-            weth_addr,
-            &format!("{:#x}", spoke),
-            amount_u256,
-            src_rpc,
-        ).await.context("approve SpokePool for WETH")?;
-
-        let calldata = depositV3Call {
-            depositor: self.solver_addr,
-            recipient: self.solver_addr,
-            inputToken: weth_src,
-            outputToken: weth_base,
-            inputAmount: amount_u256,
-            outputAmount: output_amount,
-            destinationChainId: U256::from(8453u64),
-            exclusiveRelayer: exclusive_relayer,
-            quoteTimestamp: quote_ts,
-            fillDeadline: fees.fill_deadline,
-            exclusivityDeadline: fees.exclusivity_deadline,
-            message: Bytes::new(),
-        }.abi_encode();
-
-        info!(
-            "📤 Across depositV3: {} WETH raw chain {} → Base",
-            weth_raw, src_chain
-        );
-
-        self.send_raw(src_rpc, &format!("{:#x}", spoke), &hex::encode(&calldata)).await
-    }
-
     /// Sweep native gas token (e.g. MATIC) from a src-only chain to USDC on Base
     /// via the Across swap API (inputToken=native, outputToken=USDC on Base).
     /// The swap tx attaches native value — no ERC-20 approval needed.
@@ -1179,4 +1395,23 @@ fn best_surplus_source(
 
 fn usd_to_raw(usd: f64, decimals: u32) -> u128 {
     (usd * 10f64.powi(decimals as i32)) as u128
+}
+
+/// Query the Solana mainnet RPC for the lamport balance of a Solana address (base58).
+/// Returns 0 on any error.
+async fn check_solana_balance(address: &str) -> u64 {
+    let solana_rpc = std::env::var("SOLANA_RPC_URL")
+        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "getBalance",
+        "params": [address]
+    });
+    let Ok(resp) = client.post(&solana_rpc).json(&body).send().await else { return 0 };
+    let Ok(parsed) = resp.json::<serde_json::Value>().await else { return 0 };
+    parsed.pointer("/result/value").and_then(|v| v.as_u64()).unwrap_or(0)
 }

@@ -1544,51 +1544,54 @@ impl MayanPoller {
                 }
 
                 let dst_chain_mayan = order.get("destChain").and_then(|v| v.as_str()).unwrap_or("0");
-                let dst_chain = match mayan_chain_to_evm(dst_chain_mayan) {
-                    Some(c) => c,
-                    None => {
-                        tracing::debug!("MayanPoller skip non-EVM dest chain {}", dst_chain_mayan);
-                        continue;
+                // destChain="1" means Solana destination — use sentinel chain id.
+                // All other non-EVM dest chains are skipped.
+                let is_solana_dest = dst_chain_mayan == "1";
+                let dst_chain = if is_solana_dest {
+                    1_399_811_149u64
+                } else {
+                    match mayan_chain_to_evm(dst_chain_mayan) {
+                        Some(c) => c,
+                        None => {
+                            tracing::debug!("MayanPoller skip non-EVM dest chain {}", dst_chain_mayan);
+                            continue;
+                        }
                     }
                 };
 
                 let src_chain_mayan = order.get("sourceChain").and_then(|v| v.as_str()).unwrap_or("0");
-                // swapChain=1 means the order routes via Solana; swapChain=2 means direct EVM-EVM
                 let swap_chain = order.get("swapChain").and_then(|v| v.as_str()).unwrap_or("0");
                 let src_chain = mayan_chain_to_evm(src_chain_mayan).unwrap_or(0);
 
                 let from_token = order.get("fromTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
                 let to_token = order.get("toTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
-                let dest_addr = order.get("destAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
-                // Skip any order where token addresses or recipient are Solana base58 (not 0x-prefixed).
-                // Covers: Solana-source orders (fromTokenAddress = Solana mint), EVM→Solana-token
-                // orders (toTokenAddress = Solana mint), and orders with Solana recipient wallet.
-                let is_evm_addr = |s: &str| s.starts_with("0x") || s.starts_with("0X");
-                if !is_evm_addr(&from_token) || !is_evm_addr(&to_token) || !is_evm_addr(&dest_addr) {
-                    tracing::debug!("MayanPoller skip non-EVM addresses on order {}", &order_hash[..20.min(order_hash.len())]);
-                    continue;
-                }
+                let dest_addr = order.get("destAddress").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let trader = order.get("trader").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+
+                // For EVM-destination orders: skip if any address is non-EVM (base58 Solana mint).
+                // For Solana-destination orders: dest_addr is a Solana pubkey (base58) — allow it.
+                if !is_solana_dest {
+                    let is_evm_addr = |s: &str| s.starts_with("0x") || s.starts_with("0X");
+                    if !is_evm_addr(&from_token) || !is_evm_addr(&to_token) || !is_evm_addr(&dest_addr) {
+                        tracing::debug!("MayanPoller skip non-EVM addresses on order {}", &order_hash[..20.min(order_hash.len())]);
+                        continue;
+                    }
+                }
+
                 let source_tx = order.get("sourceTxHash").and_then(|v| v.as_str()).unwrap_or("0x").to_string();
                 let state_addr = order.get("stateAddr").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-                // fromAmount is a human-readable decimal string like "0.009"
-                // We store it as-is in the amount field; lambda_controller handles the
-                // conversion when building fulfillOrder calldata.
                 let from_amount_str = order.get("fromAmount").and_then(|v| v.as_str()).unwrap_or("0");
                 let to_amount_str = order.get("toAmount").and_then(|v| v.as_str());
 
-                // Auction mode from Mayan API: 0=no-auction (fulfillSimple, no VAA needed),
-                // 2=auction (fulfillOrder, requires auction VAA from chain 42069).
                 let auction_mode_api = order.get("auctionMode").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
-                // is_solana_source: swapChain=1 means Solana intermediary
-                let is_solana_src = swap_chain == "1" && src_chain == 0;
+                // is_solana_source flag: true only when destination is Solana (fill happens on Solana).
+                // Solana-source→EVM orders (swap_chain==1, src_chain==0) are filled on EVM,
+                // so they must NOT trigger the Solana broadcast path.
+                let is_solana_src = is_solana_dest;
 
-                // Decode OrderParams from source tx calldata (non-blocking best-effort).
-                // This gives us `random`, `cancelFee`, `refundFee`, `gasDrop`, `deadline`,
-                // and other fields needed to reconstruct the exact OrderParams for fulfillOrder.
-                // Only attempt for EVM-source orders where we have a tx hash.
-                let order_params = if !is_solana_src && !source_tx.is_empty() && source_tx != "0x" {
+                // Decode OrderParams from source tx calldata for EVM-source orders.
+                let order_params = if !is_solana_src && src_chain != 0 && !source_tx.is_empty() && source_tx != "0x" {
                     fetch_mayan_order_params(&client, src_chain, &source_tx).await
                 } else {
                     MayanOrderParams::default()
@@ -1596,13 +1599,14 @@ impl MayanPoller {
 
                 let effective_auction_mode = order_params.auction_mode.unwrap_or(auction_mode_api);
 
-                info!("📡 MayanPoller ORDER_CREATED orderHash={} src={}({}) dst={}({}) {}→{} mode={} random={}",
+                info!("📡 MayanPoller ORDER_CREATED orderHash={} src={}({}) dst={}({}) {}→{} mode={} sol_fill={} random={}",
                     &order_hash[..20.min(order_hash.len())],
                     src_chain_mayan, src_chain,
                     dst_chain_mayan, dst_chain,
                     order.get("fromTokenSymbol").and_then(|v| v.as_str()).unwrap_or("?"),
                     order.get("toTokenSymbol").and_then(|v| v.as_str()).unwrap_or("?"),
                     effective_auction_mode,
+                    is_solana_src,
                     if order_params.random.is_some() { "✅" } else { "missing" });
 
                 let intent = Intent {

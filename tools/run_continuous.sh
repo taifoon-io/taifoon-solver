@@ -34,6 +34,7 @@ if [[ -z "$SOLVER_PRIVATE_KEY" ]]; then
     echo "ERROR: no private key" >&2; exit 1
 fi
 SOLANA_PRIVATE_KEY="${SOLANA_PRIVATE_KEY:-$(security find-generic-password -s mamba-messiah-solana-key -w 2>/dev/null || true)}"
+SOLANA_ADDRESS="${SOLANA_ADDRESS:-DUDgHSeM1KU9W8WyiMpEP7HtQKY22fRmpjxKViLEBQQF}"
 
 RUN=0
 trap 'echo "Stopping continuous runner..."; exit 0' INT TERM
@@ -49,6 +50,7 @@ while true; do
     env \
         SOLVER_PRIVATE_KEY="$SOLVER_PRIVATE_KEY" \
         SOLANA_PRIVATE_KEY="$SOLANA_PRIVATE_KEY" \
+        SOLANA_ADDRESS="$SOLANA_ADDRESS" \
         DRY_RUN="$DRY_RUN" \
         SIMULATION_MODE="$DRY_RUN" \
         MAX_NOTIONAL_USD="$MAX_NOTIONAL_USD" \

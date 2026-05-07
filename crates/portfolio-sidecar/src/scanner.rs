@@ -109,6 +109,23 @@ pub struct ChainSnapshot {
     pub bridge_token_decimals: u32,
     pub bridge_token_raw: u128,
     pub bridge_token_usd: f64,
+
+    // ── LWC (LiquidityWellCompact V4) fields — zero-valued if T3RN_LWC_ENABLED is false ──
+    /// Stables available in the t3rn well on this chain (USD).
+    #[serde(default)]
+    pub lwc_pool_available_usd: f64,
+    /// Total stables in the well (USD).
+    #[serde(default)]
+    pub lwc_pool_total_usd: f64,
+    /// Solver's own LP share in the well (USD).
+    #[serde(default)]
+    pub lwc_lp_usd: f64,
+    /// Whether the well's ingress or egress is halted.
+    #[serde(default)]
+    pub lwc_is_halted: bool,
+    /// Whether the well can execute a $1 instant fill (last probe result).
+    #[serde(default)]
+    pub lwc_can_instant_exec: bool,
 }
 
 /// Read all chain snapshots in parallel.
@@ -184,6 +201,13 @@ async fn scan_chain(http: &reqwest::Client, ct: &ChainTokens, solver: Address) -
         bridge_token_decimals,
         bridge_token_raw,
         bridge_token_usd,
+        // LWC fields are populated separately by PortfolioSidecar::tick()
+        // via LwcManager::scan_all() and merged in by chain_id.
+        lwc_pool_available_usd: 0.0,
+        lwc_pool_total_usd: 0.0,
+        lwc_lp_usd: 0.0,
+        lwc_is_halted: false,
+        lwc_can_instant_exec: false,
     }
 }
 

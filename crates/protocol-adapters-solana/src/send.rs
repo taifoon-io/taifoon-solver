@@ -83,6 +83,10 @@ impl SolanaBroadcaster {
 
         let tx_b64 = BASE64.encode(&tx_bytes);
         let sig = self.send_raw_transaction(&tx_b64).await
+            .map_err(|e| {
+                tracing::error!("sendTransaction failed: {:#}", e);
+                e
+            })
             .context("sendTransaction RPC")?;
 
         Ok(SolanaSendResult { signature: sig })
@@ -184,10 +188,10 @@ impl SolanaBroadcaster {
         let parsed: serde_json::Value = resp.json().await
             .context("sendTransaction parse")?;
         if let Some(err) = parsed.get("error") {
-            return Err(anyhow!("sendTransaction RPC error: {}", err));
+            return Err(anyhow!("sendTransaction RPC error: {}", serde_json::to_string(err).unwrap_or_else(|_| err.to_string())));
         }
         if !status.is_success() {
-            return Err(anyhow!("sendTransaction HTTP {}: {:?}", status, parsed));
+            return Err(anyhow!("sendTransaction HTTP {}: {}", status, serde_json::to_string(&parsed).unwrap_or_default()));
         }
         let sig = parsed.get("result")
             .and_then(|v| v.as_str())

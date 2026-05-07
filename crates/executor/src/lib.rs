@@ -168,7 +168,7 @@ impl Executor {
 
         // Priority 3: Fallback to T3RN LWC
         if let Some(ref t3rn) = self.t3rn_sidecar {
-            if t3rn.can_provide_liquidity(intent).await? {
+            if t3rn.can_provide_liquidity(intent).await {
                 return Ok(LiquiditySource::T3RNSidecar);
             }
         }
@@ -263,21 +263,14 @@ impl Executor {
             });
         }
 
-        // Create LWC order
-        let lwc_order = t3rn.create_order(intent).await?;
-        info!("📦 T3RN LWC order created: {}", lwc_order.order_id);
+        // Create LWC order (not yet implemented)
+        drop(t3rn); // avoid unused warning
 
         // TODO: Wait for LWC to provide liquidity on destination
         // TODO: Execute fill transaction
         // TODO: LWC will automatically claim from source
 
-        Ok(ExecutionResult {
-            intent_id: intent.id.clone(),
-            fill_tx: lwc_order.tx_hash,
-            claim_tx: None,
-            gas_used: 300_000,
-            actual_profit_usd: profit.net_profit_usd * 0.90,
-        })
+        Err(anyhow!("T3RN LWC execution not yet implemented"))
     }
 }
 

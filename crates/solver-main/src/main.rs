@@ -459,8 +459,8 @@ async fn main() -> Result<()> {
                 // Patch the child intent with the actual deposit tx from the LiFi API.
                 // The genome event carries the LiFi Diamond tx; enrichment needs the
                 // underlying Across/deBridge deposit tx to decode relay parameters.
-                if let Some(stx) = api_sending_tx {
-                    child.tx_hash = stx;
+                if let Some(ref stx) = api_sending_tx {
+                    child.tx_hash = stx.clone();
                 } else if child.deposit_id.is_none() {
                     // li.quest didn't return a sending tx yet — the Diamond tx is in-flight.
                     // Remove from dispatched so the next genome event (placed/executed) can retry.
@@ -470,6 +470,37 @@ async fn main() -> Result<()> {
                 }
                 if let Some(sc) = api_sending_chain {
                     child.src_chain = sc;
+                }
+                // For LiFi→Mayan: query Mayan explorer to populate mayan_order_id and
+                // OrderParams fields (auction_mode, random, etc.) needed to build calldata.
+                if bridge == "mayan" || bridge == "mayan_swift" {
+                    let lookup_tx = api_sending_tx.as_deref().unwrap_or(&child.tx_hash);
+                    if lookup_tx.starts_with("0x") && lookup_tx.len() == 66 {
+                        if let Some(mayan_intent) = resolve_lifi_mayan_order(lookup_tx).await {
+                            child.mayan_order_id = mayan_intent.mayan_order_id;
+                            child.mayan_auction_mode = mayan_intent.mayan_auction_mode;
+                            child.mayan_random = mayan_intent.mayan_random;
+                            child.mayan_cancel_fee = mayan_intent.mayan_cancel_fee;
+                            child.mayan_refund_fee = mayan_intent.mayan_refund_fee;
+                            child.mayan_gas_drop = mayan_intent.mayan_gas_drop;
+                            child.mayan_referrer_addr = mayan_intent.mayan_referrer_addr;
+                            child.mayan_referrer_bps = mayan_intent.mayan_referrer_bps;
+                            child.deadline = mayan_intent.deadline;
+                            if child.output_amount.is_none() {
+                                child.output_amount = mayan_intent.output_amount;
+                            }
+                            if child.trader.is_none() {
+                                child.trader = mayan_intent.trader;
+                            }
+                            info!("🔍 LiFi→Mayan enriched: order_id={:?} mode={:?}",
+                                child.mayan_order_id.as_deref().map(|s| &s[..s.len().min(20)]),
+                                child.mayan_auction_mode);
+                        } else {
+                            info!("⚠️  LiFi→Mayan: could not resolve Mayan order for tx {} — skip", &lookup_tx[..18]);
+                            dispatched.remove(&dedup_key);
+                            continue;
+                        }
+                    }
                 }
                 info!("🔀 LiFi→{} projection: {} intent id={} src_chain={} tx={}",
                     bridge, intent.id, child.id, child.src_chain, &child.tx_hash[..child.tx_hash.len().min(18)]);
@@ -681,4 +712,48 @@ async fn debridge_claim_retry_tick(
 // LiFi status-API resolver moved to `solver_main::lifi_resolver` so the
 // response-parser is unit-testable without spinning up a network mock. Call
 // site is unchanged: `resolve_lifi_bridge(hash).await` above.
+
+/// Query the Mayan explorer API for an order whose `sourceTxHash` matches `tx_hash`.
+/// Returns a partial Intent with Mayan-specific fields populated, or `None` if the
+/// order isn't found or is not in ORDER_CREATED state.
+async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
+    let url = format!(
+        "https://explorer-api.mayan.finance/v3/swaps?sourceTxHash={}&service=SWIFT_V2",
+        tx_hash
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent("taifoon-solver/1.0")
+        .build()
+        .ok()?;
+    let body: serde_json::Value = client.get(&url).send().await.ok()?.json().await.ok()?;
+    let orders = body.get("data")?.as_array()?;
+    for order in orders {
+        let status = order.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "ORDER_CREATED" {
+            continue;
+        }
+        let order_hash = order.get("orderHash").and_then(|v| v.as_str())?;
+        let auction_mode = order.get("auctionMode").and_then(|v| v.as_u64()).map(|v| v as u8);
+        let trader = order.get("trader").and_then(|v| v.as_str()).map(String::from);
+        let to_amount = order.get("toAmount").and_then(|v| v.as_str()).map(String::from);
+        // Decode OrderParams from source tx to get random, fees, deadline, etc.
+        let src_chain_mayan = order.get("sourceChain").and_then(|v| v.as_str()).unwrap_or("0");
+        let src_chain = match src_chain_mayan {
+            "2" => 1u64, "4" => 56, "5" => 137, "6" => 43114,
+            "23" => 42161, "24" => 10, "30" => 8453, _ => 0,
+        };
+        return Some(Intent {
+            id: format!("lifi→mayan_enriched:{}", order_hash),
+            protocol: "mayan_swift".into(),
+            mayan_order_id: Some(order_hash.to_string()),
+            mayan_auction_mode: auction_mode,
+            output_amount: to_amount,
+            trader,
+            src_chain,
+            ..Default::default()
+        });
+    }
+    None
+}
 

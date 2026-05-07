@@ -1,0 +1,74 @@
+[
+  {
+    "chain_id": 1,
+    "chain_key": "ethereum",
+    "well_v4": "0xfC9f42b3462251F0eE069003aF161E31EC2489a5",
+    "rpc": "https://ethereum-rpc.publicnode.com",
+    "primary_stable": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "stable_decimals": 6
+  },
+  {
+    "chain_id": 42161,
+    "chain_key": "arbitrum",
+    "well_v4": "0xDF84cbCFc9eF2089c67BfC794A012ea3b30c3DE9",
+    "rpc": "https://arb1.arbitrum.io/rpc",
+    "primary_stable": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+    "stable_decimals": 6
+  },
+  {
+    "chain_id": 8453,
+    "chain_key": "base",
+    "well_v4": "0xb590266eCdbc389A35831dDc672Ea0C5f45500EF",
+    "rpc": "https://mainnet.base.org",
+    "primary_stable": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "stable_decimals": 6
+  },
+  {
+    "chain_id": 10,
+    "chain_key": "optimism",
+    "well_v4": "0xa15feB1Ca6d1203bdee823F44ddF4715c35398E6",
+    "rpc": "https://mainnet.optimism.io",
+    "primary_stable": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+    "stable_decimals": 6
+  },
+  {
+    "chain_id": 137,
+    "chain_key": "polygon",
+    "well_v4": "0xB92B2Ea67A2ED9463dDD02E86F1D09E354525C20",
+    "rpc": "https://polygon-rpc.com",
+    "primary_stable": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+    "stable_decimals": 6
+  },
+  {
+    "chain_id": 56,
+    "chain_key": "binance",
+    "well_v4": "0xca474c806E4cBd6c7AE6a28D07FA010229839F1A",
+    "rpc": "https://bsc-dataseed.binance.org",
+    "primary_stable": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+    "stable_decimals": 18
+  },
+  {
+    "chain_id": 59144,
+    "chain_key": "linea",
+    "well_v4": "0x98abB9B65345B2b148e965aD017963F481f9aEFD",
+    "rpc": "https://rpc.linea.build",
+    "primary_stable": "0x176211869cA2b568f2A7D4EE941E073a821EE1ff",
+    "stable_decimals": 6
+  },
+  {
+    "chain_id": 130,
+    "chain_key": "unichain",
+    "well_v4": "0x93535fC2cc52f6EbE2b854971A1BDbbdb43A5316",
+    "rpc": "https://mainnet.unichain.org",
+    "primary_stable": "0x078D782b760474a361dDA7Ff6e249887dDF39eB0",
+    "stable_decimals": 6
+  },
+  {
+    "chain_id": 999,
+    "chain_key": "hyperevm",
+    "well_v4": "0x79AE646b3C24Df5553A89E60A4Bd176Dd966A21f",
+    "rpc": "https://api.hyperliquid.xyz/evm",
+    "primary_stable": "0x0000000000000000000000000000000000000000",
+    "stable_decimals": 6
+  }
+]

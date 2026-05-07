@@ -551,7 +551,7 @@ impl LambdaController {
                     });
                 }
                 Err(e) => {
-                    let err = format!("solana_send_transaction:{e}");
+                    let err = format!("solana_send_transaction:{e:#}");
                     self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
                     return Ok(LambdaExecuteOutcome::Failed { stage: "broadcast", error: err });
                 }
