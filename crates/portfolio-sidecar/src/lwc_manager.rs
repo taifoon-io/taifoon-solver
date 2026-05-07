@@ -17,33 +17,20 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-// ── V4 LWC ABI (compact subset we actually call) ─────────────────────────────
+// ── V4 LWC ABI — loaded from the canonical JSON shipped with portal-2026 ──────
+//
+// The JSON file is the single source of truth for all function signatures.
+// We keep a minimal sol! block here only for the ERC-20 helpers (approve /
+// allowance) which are not in the LWC ABI file.
 
 sol! {
-    interface LiquidityWellCompact {
-        function canPerformInstantExecution(
-            address asset,
-            uint256 amount
-        ) external view returns (bool canExecute, uint256 availableAmount, uint256 reservedAmount);
+    #[sol(rpc)]
+    #[derive(Debug)]
+    LiquidityWellCompact,
+    "src/lwc_abi.json"
+}
 
-        function getAvailableLiquidity(address _asset) external view returns (uint256);
-
-        function getCurrentLiquidityInWell() external view returns (uint256);
-
-        function getLPTokenBalance(
-            uint32 _assetId,
-            address _account
-        ) external view returns (uint256);
-
-        function mapAssetToId(address _asset) external view returns (uint32);
-
-        function isEgressHalted() external view returns (bool);
-        function isIngressHalted() external view returns (bool);
-
-        function addLiquidity(address _asset, uint256 _amount) external payable;
-        function removeLiquidity(address _asset, uint256 _amount) external;
-    }
-
+sol! {
     function approve(address spender, uint256 amount) external returns (bool);
     function allowance(address owner, address spender) external view returns (uint256);
 }
@@ -342,7 +329,7 @@ async fn scan_well(
     let ingress_halted = eth_call_bool(&provider, well, LiquidityWellCompact::isIngressHaltedCall {}.abi_encode()).await;
     let is_halted = egress_halted || ingress_halted;
 
-    // getAvailableLiquidity
+    // getAvailableLiquidity — the primary_stable balance available for fills.
     let available_raw = if asset != Address::ZERO {
         eth_call_u256(&provider, well, LiquidityWellCompact::getAvailableLiquidityCall { _asset: asset }.abi_encode()).await
     } else {
@@ -350,9 +337,11 @@ async fn scan_well(
     };
     let pool_available_usd = u256_to_usd(available_raw, dec);
 
-    // getCurrentLiquidityInWell (total)
-    let total_raw = eth_call_u256(&provider, well, LiquidityWellCompact::getCurrentLiquidityInWellCall {}.abi_encode()).await;
-    let pool_total_usd = u256_to_usd(total_raw, dec);
+    // getCurrentLiquidityInWell returns an internal accounting unit (not USD).
+    // We intentionally set pool_total_usd = pool_available_usd as the best
+    // approximation we can get without a price oracle, keeping the field
+    // consistent across all chains.
+    let pool_total_usd = pool_available_usd;
 
     // getLPTokenBalance — need assetId first
     let lp_balance_usd = if asset != Address::ZERO {
@@ -370,16 +359,27 @@ async fn scan_well(
         0.0
     };
 
-    // canPerformInstantExecution for $1 probe
+    // canPerformInstantExecution — probe with $1 to get (canExec, available, reserved).
+    // The `available` return value is authoritative; use it to override pool_available_usd
+    // when it's more precise (e.g. when getAvailableLiquidity returns 0 due to rounding).
     let one_dollar_wei = U256::from(10u64.pow(dec));
-    let can_instant_exec = if asset != Address::ZERO && !is_halted {
+    let (can_instant_exec, pool_available_usd) = if asset != Address::ZERO && !is_halted {
         let result = eth_call_bytes(
             &provider, well,
             LiquidityWellCompact::canPerformInstantExecutionCall { asset, amount: one_dollar_wei }.abi_encode()
         ).await;
-        result.first().copied().unwrap_or(0) != 0
+        let can_exec = result.first().copied().unwrap_or(0) != 0;
+        // Second word (bytes 32..64) is the available amount from the contract.
+        let contract_available = if result.len() >= 64 {
+            u256_to_usd(U256::from_be_slice(&result[32..64]), dec)
+        } else {
+            pool_available_usd
+        };
+        // Use whichever is larger — getAvailableLiquidity sometimes misses reserved amounts.
+        let best_available = if contract_available > pool_available_usd { contract_available } else { pool_available_usd };
+        (can_exec, best_available)
     } else {
-        false
+        (false, pool_available_usd)
     };
 
     LwcChainState {
@@ -387,7 +387,7 @@ async fn scan_well(
         chain_key: dep.chain_key.clone(),
         well_address: dep.well_v4.clone(),
         pool_available_usd,
-        pool_total_usd,
+        pool_total_usd: pool_available_usd, // keep in sync
         lp_balance_usd,
         is_halted,
         can_instant_exec,
