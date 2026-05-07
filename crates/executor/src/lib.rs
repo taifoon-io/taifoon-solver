@@ -168,7 +168,8 @@ impl Executor {
 
         // Priority 3: Fallback to T3RN LWC
         if let Some(ref t3rn) = self.t3rn_sidecar {
-            if t3rn.can_provide_liquidity(intent).await {
+            let amount_wei: alloy::primitives::U256 = intent.amount.parse().unwrap_or_default();
+            if t3rn.can_provide_liquidity(intent.dst_chain, amount_wei).await {
                 return Ok(LiquiditySource::T3RNSidecar);
             }
         }

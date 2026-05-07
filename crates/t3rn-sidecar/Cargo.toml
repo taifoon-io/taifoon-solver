@@ -12,5 +12,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
+axum.workspace = true
+futures.workspace = true
+hex.workspace = true
 genome-client = { path = "../genome-client" }
-hex = "0.4"
+portfolio-sidecar = { path = "../portfolio-sidecar" }

@@ -15,10 +15,11 @@ use solver_main::lifi_resolver::{resolve_lifi_bridge, LifiBridgeResult};
 use std::collections::HashSet;
 use std::sync::Arc;
 use taifoon_arb_bridge::{BalanceHighHandler, StubBridge, ThresholdHandler};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Semaphore};
 use tracing::{error, info, warn};
 use tracing_subscriber::Layer;
 use wallet_manager::WalletManager;
+use t3rn_sidecar::{delivery_router, spawn_delivery_loop, DeliveryMatrix, T3RNSidecar};
 
 /// A tracing layer that forwards formatted log lines to a broadcast channel.
 struct BroadcastLogLayer {
@@ -122,6 +123,41 @@ async fn main() -> Result<()> {
             error!("API server error: {}", e);
         }
     });
+
+    // ── LWC delivery worker (open-mamba webhook target) ───────────────────────
+    if std::env::var("T3RN_LWC_ENABLED").map(|v| v == "true" || v == "1").unwrap_or(false) {
+        let lwc_port: u16 = std::env::var("LWC_WORKER_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8091);
+        let private_key = std::env::var("SOLVER_PRIVATE_KEY").unwrap_or_default();
+        let scan_interval_secs: u64 = std::env::var("LWC_SCAN_INTERVAL_SECS")
+            .ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+        let mamba_url = std::env::var("MAMBA_LAKE_URL").ok();
+        match private_key.parse::<alloy::signers::local::PrivateKeySigner>() {
+            Ok(signer) => {
+                let sidecar = Arc::new(T3RNSidecar::new(signer));
+                let matrix  = Arc::new(DeliveryMatrix::new());
+                let router  = delivery_router(sidecar.clone(), matrix.clone());
+
+                // Parallel scan-and-report loop — posts matrix snapshot to open-mamba
+                t3rn_sidecar::spawn_delivery_loop(matrix.clone(), scan_interval_secs, mamba_url);
+
+                tokio::spawn(async move {
+                    match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", lwc_port)).await {
+                        Ok(listener) => {
+                            info!("✅ LWC delivery worker on :{}", lwc_port);
+                            if let Err(e) = axum::serve(listener, router).await {
+                                error!("LWC worker error: {}", e);
+                            }
+                        }
+                        Err(e) => error!("LWC worker bind {}: {}", lwc_port, e),
+                    }
+                });
+            }
+            Err(e) => warn!("T3RN_LWC_ENABLED=true but SOLVER_PRIVATE_KEY invalid: {} — LWC worker skipped", e),
+        }
+    }
 
     // ── Profit calc (used as a sanity check beside Spinner test-run) ──────────
     let mut profit_calc = ProfitCalculator::new(min_profit_usd);
@@ -308,6 +344,11 @@ async fn main() -> Result<()> {
     // cross-chain transfer; we only want to act on `placed` (first time
     // a deposit_id is resolvable). TTL is session-scoped — no persistence needed.
     let mut dispatched: HashSet<String> = HashSet::new();
+
+    // Concurrency cap: at most 2 fills in-flight simultaneously.
+    // Each spawned fill holds a permit for its full lifecycle (execute + claim),
+    // so a third intent waits until one of the two completes its claim.
+    let fill_semaphore = Arc::new(Semaphore::new(2));
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     while let Some(intent) = intent_rx.recv().await {
@@ -550,6 +591,8 @@ async fn main() -> Result<()> {
             };
             // Spawn each intent execution concurrently so the main loop stays free
             // to receive new intents (critical for short-lived Mayan Swift orders).
+            // A semaphore limits to MAX 2 fills in-flight; the permit is held for the
+            // entire fill+claim lifecycle so a third fill only starts after one is fully claimed.
             let ctrl = Arc::clone(ctrl);
             let api = solver_api.clone();
             let intent_owned = intent_ref.to_owned();
@@ -557,7 +600,13 @@ async fn main() -> Result<()> {
             let is_debridge_spawn = effective_is_debridge;
             let is_mayan_spawn = effective_is_mayan;
             let is_lifi_spawn = is_lifi;
+            let sem = Arc::clone(&fill_semaphore);
             tokio::spawn(async move {
+                // Acquire permit — blocks until a slot is free (max 2 concurrent fills).
+                let _permit = match sem.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => return, // semaphore closed (shutdown)
+                };
                 match ctrl.lambda_execute(&intent_owned).await {
                     Ok(LambdaExecuteOutcome::Confirmed { tx_hash, gas_used }) => {
                         let proto_tag = if is_debridge_spawn { "deBridge" } else if is_mayan_spawn { "Mayan" } else if is_lifi_spawn { "LiFi" } else { "Across" };

@@ -23,6 +23,7 @@ profit-calc = { path = "../profit-calc" }
 executor = { path = "../executor" }
 protocol-adapters = { path = "../protocol-adapters" }
 solver-api = { path = "../solver-api" }
+t3rn-sidecar = { path = "../t3rn-sidecar" }
 taifoon-arb-bridge = { path = "../taifoon-arb-bridge" }
 wallet-manager = { path = "../wallet-manager" }
 tokio.workspace = true
