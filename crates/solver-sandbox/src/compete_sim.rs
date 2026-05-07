@@ -92,6 +92,7 @@ impl CompeteSim {
         let mut sim = WellSimulator::new();
         for &chain_id in &config.well_chains {
             sim.seed(chain_id, "USDC", config.well_seed_usd, "t3rn_protocol");
+            sim.seed(chain_id, "ETH",  config.well_seed_usd * 0.5, "t3rn_protocol");
         }
         Self {
             config,

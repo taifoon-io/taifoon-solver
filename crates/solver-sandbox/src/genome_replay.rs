@@ -53,20 +53,28 @@ impl ReplayState {
     }
 
     pub fn from_synthetic(count: usize) -> Self {
-        let events = (0..count).map(|i| GenomeEvent {
-            id: format!("0x{:064x}", i + 1),
-            kind: "order".to_string(),
-            summary: format!("ETH→USDC fill #{}", i + 1),
-            meta: serde_json::json!({
-                "src_chain": 1,
-                "dst_chain": 8453,
-                "amount": "1000000",
-                "src_token": "0x0000000000000000000000000000000000000000",
-                "dst_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-                "max_reward": "1050000",
-                "recipient": "0x0000000000000000000000000000000000000001",
-            }),
-            ts: 1700000000 + (i as u64 * 30),
+        // Vary amounts across 3 sizes: $500, $1200, $3000 (in USDC 6-decimals)
+        let amounts = ["500000000", "1200000000", "3000000000"];
+        let dst_chains = [8453u64, 42161, 10];
+        let events = (0..count).map(|i| {
+            let amount = amounts[i % amounts.len()];
+            let max_reward_usd = amount.parse::<u128>().unwrap() + amount.parse::<u128>().unwrap() / 100; // +1%
+            GenomeEvent {
+                id: format!("0x{:064x}", i + 1),
+                kind: "order".to_string(),
+                summary: format!("ETH→USDC fill #{} (${:.0})", i + 1,
+                    amount.parse::<u128>().unwrap_or(0) as f64 / 1_000_000.0),
+                meta: serde_json::json!({
+                    "src_chain": 1,
+                    "dst_chain": dst_chains[i % dst_chains.len()],
+                    "amount": amount,
+                    "src_token": "0x0000000000000000000000000000000000000000",
+                    "dst_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                    "max_reward": max_reward_usd.to_string(),
+                    "recipient": "0x0000000000000000000000000000000000000001",
+                }),
+                ts: 1700000000 + (i as u64 * 30),
+            }
         }).collect();
         Self { events, speed_multiplier: 10.0, loop_playback: false }
     }
