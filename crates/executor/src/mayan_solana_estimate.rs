@@ -150,7 +150,10 @@ impl EstimateAdapter for MayanSolanaEstimateAdapter {
         let svm_outcome = sim.estimate(&solana_intent).await;
         let outcome = svm_to_parent(svm_outcome);
 
-        let calldata_bytes = base64_decode(&tx_b64).unwrap_or_default();
+        let calldata_bytes = base64_decode(&tx_b64).unwrap_or_else(|| {
+            tracing::warn!("mayan_solana_estimate: failed to base64-decode tx for intent {}", intent.id);
+            vec![]
+        });
         emit_attempt(&self.spinner_base, intent, &outcome, &calldata_bytes).await;
         outcome
     }

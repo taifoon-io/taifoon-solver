@@ -375,7 +375,7 @@ pub fn build_across_adapter_calldata(intent: &Intent) -> Result<Vec<u8>> {
     // event, not a local clock estimate. Across enforces exact match on-chain.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
     let fill_deadline = intent.fill_deadline.unwrap_or_else(|| {
         tracing::warn!(
@@ -477,7 +477,7 @@ pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_ad
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
     let fill_deadline = intent.fill_deadline.unwrap_or_else(|| {
         tracing::warn!("intent {} missing fill_deadline — using now+3600", intent.id);
@@ -512,7 +512,7 @@ pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_ad
         inputAmount: input_amount,
         outputAmount: output_amount,
         originChainId: U256::from(intent.src_chain),
-        depositId: U256::from(deposit_id as u64),
+        depositId: U256::from(deposit_id.max(0) as u64),
         fillDeadline: fill_deadline,
         exclusivityDeadline: exclusivity_deadline,
         message: message_bytes,
