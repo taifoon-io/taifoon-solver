@@ -125,6 +125,9 @@ impl LambdaController {
                 actual_profit_usd: None,
                 skip_reason: Some(reason.clone()),
                 error: None,
+                solver_id: None,
+                claim_tx_hash: None,
+                claim_fee_usd: None,
             });
             return Ok(LambdaExecuteOutcome::Skipped { reason });
         }
@@ -135,7 +138,10 @@ impl LambdaController {
         let wiring = match self.chains.get(&intent.dst_chain) {
             Some(w) => w.clone(),
             None => {
-                let reason = format!("no chain wiring for dst {}", intent.dst_chain);
+                let chain_name = debridge_non_evm_chain_name(intent.dst_chain)
+                    .map(|n| format!(" ({})", n))
+                    .unwrap_or_default();
+                let reason = format!("no chain wiring for dst {}{}", intent.dst_chain, chain_name);
                 info!("⏭️  {} — {}", intent.id, reason);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
@@ -239,6 +245,9 @@ impl LambdaController {
                     actual_profit_usd: None,
                     skip_reason: Some(reason.clone()),
                     error: None,
+                    solver_id: None,
+                    claim_tx_hash: None,
+                    claim_fee_usd: None,
                 });
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
@@ -491,6 +500,61 @@ impl LambdaController {
             }
         }
 
+        // 5c. CLAIM-INFO COMPLETENESS GUARD — hard rule: never broadcast a fill
+        // unless all information required to claim/recover the reward is present.
+        // Missing fields = we fill the user but cannot recover our funds.
+        //
+        //   Across:   output_amount + fill_deadline + recipient must be non-empty/non-zero.
+        //   deBridge: order_id (intent.id contains it) + dst_chain wiring → claim is
+        //             automatic via lambda_claim_debridge, which only needs the order hash
+        //             embedded in intent.id — always present at this point.
+        //   Mayan:    order_hash (intent.id contains it) — VAA redemption keyed on it;
+        //             recipient must be non-empty for the fulfillOrder calldata.
+        {
+            let proto_lower_guard = intent.protocol.to_lowercase();
+            let is_across_guard = proto_lower_guard.contains("across");
+            let is_mayan_guard = proto_lower_guard.contains("mayan");
+
+            if is_across_guard && direct_fill {
+                let missing_output = intent.output_amount.as_deref()
+                    .map(|s| s.is_empty() || s == "0").unwrap_or(true);
+                let missing_deadline = intent.fill_deadline.is_none();
+                let missing_recipient = intent.recipient.is_empty()
+                    || intent.recipient == "0x0000000000000000000000000000000000000000";
+
+                if missing_output || missing_deadline || missing_recipient {
+                    let reason = format!(
+                        "incomplete_claim_info:output={} deadline={} recipient={}",
+                        if missing_output { "missing" } else { "ok" },
+                        if missing_deadline { "missing" } else { "ok" },
+                        if missing_recipient { "missing" } else { "ok" },
+                    );
+                    warn!("🛑 {} — refusing fill, {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            }
+
+            if is_mayan_guard {
+                let missing_recipient = intent.recipient.is_empty()
+                    || intent.recipient == "0x0000000000000000000000000000000000000000";
+                let has_order_hash = intent.id.contains("0x") && intent.id.len() > 20;
+
+                if missing_recipient || !has_order_hash {
+                    let reason = format!(
+                        "incomplete_claim_info:recipient={} order_hash={}",
+                        if missing_recipient { "missing" } else { "ok" },
+                        if !has_order_hash { "missing" } else { "ok" },
+                    );
+                    warn!("🛑 {} — refusing fill, {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            }
+        }
+
         // 6. CALLDATA_BUILD.
         // Paths by protocol + chain:
         //   a) is_mayan + EVM → MayanSwift.fulfillOrder() on Swift contract
@@ -509,6 +573,17 @@ impl LambdaController {
         // Mayan Solana source: broadcast via ed25519-signed sendTransaction.
         // This path returns early — Solana intents never reach the EVM wiring section below.
         if is_mayan && is_solana_src {
+            // auctionMode != 0 requires Mayan's private auction VAA — skip immediately
+            // just like the EVM path does. We are not a registered Mayan solver.
+            let sol_auction_mode = intent.mayan_auction_mode.unwrap_or(2);
+            if sol_auction_mode != 0 {
+                let reason = "mayan_auction_mode_requires_registration";
+                info!("⏭️  {} — {} (mode={}, Solana dst)", intent.id, reason, sol_auction_mode);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+                let _ = self.wallet.release(&intent.id);
+                return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
+            }
+
             let solana_intent = match MayanSolanaIntent::from_intent(intent) {
                 Ok(s) => s,
                 Err(e) => {
@@ -570,31 +645,16 @@ impl LambdaController {
                 info!("✅ Mayan auctionMode=0: using fulfillSimple (no VAA needed) for {}", intent.id);
                 None
             } else {
-                let order_hash = match intent.mayan_order_id.as_deref() {
-                    Some(h) => h.to_string(),
-                    None => {
-                        let reason = "mayan_evm_missing_order_id";
-                        info!("⏭️  {} — {}", intent.id, reason);
-                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-                        let _ = self.wallet.release(&intent.id);
-                        return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
-                    }
-                };
-                info!("🔍 Fetching Wormhole VAA for Mayan EVM order {} (src_chain={} mode={})",
-                    order_hash, intent.src_chain, mayan_auction_mode);
-                match fetch_vaa_for_mayan_order(intent.src_chain, &order_hash).await {
-                    Some(vaa) => {
-                        info!("✅ Got Mayan VAA ({} bytes) for {}", vaa.len(), intent.id);
-                        Some(vaa)
-                    }
-                    None => {
-                        let reason = "mayan_vaa_not_found";
-                        info!("⏭️  {} — {}", intent.id, reason);
-                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
-                        let _ = self.wallet.release(&intent.id);
-                        return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
-                    }
-                }
+                // auctionMode != 0 → fulfillOrder requires Mayan's private auction VAA
+                // (chain 42069, type 0x01). This VAA is only issued to registered Mayan
+                // solvers. Public wormholescan only has the source Forwarder VAA (type 0x05)
+                // which is NOT accepted by fulfillOrder. Skip immediately to avoid a
+                // 12-minute VAA poll that always times out.
+                let reason = "mayan_auction_mode_requires_registration";
+                info!("⏭️  {} — {} (mode={})", intent.id, reason, mayan_auction_mode);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(reason));
+                let _ = self.wallet.release(&intent.id);
+                return Ok(LambdaExecuteOutcome::Skipped { reason: reason.to_string() });
             }
         } else {
             None
@@ -679,6 +739,8 @@ impl LambdaController {
         // ERC-20 balance pre-check for Across non-native fills.
         // Saves a round-trip estimate call when we obviously can't fund the fill.
         // Only fires for direct fills with a non-zero, non-native output token.
+        // Note: WETH is treated as ERC-20 here because Across SpokePool fillRelay
+        // pulls WETH ERC-20 from the filler — NOT native ETH via msg.value.
         if direct_fill && !is_debridge && !is_mayan {
             let dst_tok = intent.dst_token.trim().to_lowercase();
             let is_erc20 = !dst_tok.is_empty()
@@ -725,13 +787,21 @@ impl LambdaController {
             }
         }
 
-        // ETH/WETH fill value — applies to Across direct fills and Mayan native-out.
+        // ETH/WETH fill value — for Mayan fills, WETH output = native ETH (msg.value).
+        // For Across direct SpokePool fills, only the zero-address sentinel = native ETH;
+        // WETH address = ERC-20 WETH which must be pre-approved, not sent as msg.value.
         let eth_fill_value: Option<U256> = {
             let weth = weth_address_for_chain(wiring.chain_id);
             let dst = intent.dst_token.to_lowercase();
-            let is_native_out = weth.map(|w| w.to_lowercase() == dst).unwrap_or(false)
-                || dst == "0x0000000000000000000000000000000000000000"
-                || dst == "native";
+            let weth_matches = weth.map(|w| w.to_lowercase() == dst).unwrap_or(false);
+            let is_native_out = if is_mayan {
+                // Mayan fulfillSimple/fulfillOrder accept ETH for WETH-output fills
+                weth_matches || dst == "0x0000000000000000000000000000000000000000" || dst == "native"
+            } else {
+                // Across SpokePool: only zero-address sentinel = native ETH fill
+                // WETH-address output = ERC-20 pull, not msg.value
+                dst == "0x0000000000000000000000000000000000000000" || dst == "native"
+            };
             if is_native_out {
                 let out_amt = intent.output_amount.as_deref().and_then(|s| {
                     if s.starts_with("0x") || s.starts_with("0X") {
@@ -864,6 +934,9 @@ impl LambdaController {
                 actual_profit_usd: None,
                 skip_reason: Some("dry_run".into()),
                 error: None,
+                solver_id: None,
+                claim_tx_hash: None,
+                claim_fee_usd: None,
             });
             return Ok(LambdaExecuteOutcome::Skipped {
                 reason: "dry_run".into(),
@@ -1043,6 +1116,9 @@ impl LambdaController {
                 actual_profit_usd: None,
                 skip_reason: None,
                 error: Some(err.clone()),
+                solver_id: None,
+                claim_tx_hash: None,
+                claim_fee_usd: None,
             });
             return Ok(LambdaExecuteOutcome::Reverted {
                 tx_hash,
@@ -1077,6 +1153,9 @@ impl LambdaController {
             actual_profit_usd: test.as_ref().map(|t| t.net_profit_usd),
             skip_reason: None,
             error: None,
+            solver_id: None,
+            claim_tx_hash: None,
+            claim_fee_usd: None,
         });
 
         self.emit_genome_feedback(intent, &tx_hash, gas_used).await;
@@ -1672,6 +1751,26 @@ fn function_selector(sig: &str) -> [u8; 4] {
     [h[0], h[1], h[2], h[3]]
 }
 
+/// Human-readable names for deBridge non-EVM destination chain IDs.
+/// Returns `None` for normal EVM chains. Mirrors the same table in genome-client.
+fn debridge_non_evm_chain_name(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        100_000_001 => Some("Solana"),
+        100_000_002 => Some("NEAR"),
+        100_000_003 => Some("Tron"),
+        100_000_004 => Some("Ton"),
+        100_000_005 => Some("Aptos"),
+        100_000_006 => Some("Sui"),
+        100_000_007 => Some("Eclipse (Solana SVM)"),
+        100_000_022 => Some("Neon EVM on Solana"),
+        100_000_023 => Some("Sonic (Solana SVM)"),
+        100_000_027 => Some("Solana (alt chain ID)"),
+        100_000_030 => Some("Grass (Solana SVM)"),
+        100_000_031 => Some("Svm-Unknown-31"),
+        _ => None,
+    }
+}
+
 // ── Across pre-broadcast guard helpers ─────────────────────────────────────
 //
 // These pure helpers mirror the inlined skip logic in `lambda_execute` so the
@@ -1699,6 +1798,13 @@ pub(crate) fn across_spread_skip(
     let inp = amount.parse::<u128>().ok()?;
     let out = output_amount?.parse::<u128>().ok()?;
     if inp == 0 {
+        return None;
+    }
+    // Skip spread check when token decimals differ by >3 orders of magnitude
+    // (e.g., USDC 6-dec input → ETH 18-dec output). A raw comparison here
+    // would always trigger a false-positive "output exceeds input" rejection.
+    let likely_decimal_mismatch = out > inp.saturating_mul(1_000);
+    if likely_decimal_mismatch {
         return None;
     }
     if out > inp {

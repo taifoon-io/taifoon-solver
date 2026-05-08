@@ -494,6 +494,9 @@ pub struct AcrossPoller {
     pub poll_interval_secs: u64,
     /// Max deposits per chain per poll.
     pub limit: usize,
+    /// Solver EVM address (lowercase). When set, deposits where exclusiveRelayer == this
+    /// address are processed even while still in their exclusivity window.
+    pub solver_address: Option<String>,
 }
 
 impl AcrossPoller {
@@ -507,6 +510,7 @@ impl AcrossPoller {
             dst_chains: vec![10, 8453, 42161],
             poll_interval_secs: 30,
             limit: 50,
+            solver_address: None,
         }
     }
 
@@ -582,8 +586,12 @@ impl AcrossPoller {
                             .and_then(|v| v.as_str())
                             .and_then(|s| chrono_unix_from_iso(s))
                             .unwrap_or(0);
-                        if excl_deadline > now_secs {
-                            continue; // still exclusive — don't add to seen, retry when expired
+                        // Allow if we ARE the exclusive relayer — only skip if someone else is.
+                        let we_are_exclusive = self.solver_address.as_deref()
+                            .map(|sa| sa == excl.to_lowercase())
+                            .unwrap_or(false);
+                        if excl_deadline > now_secs && !we_are_exclusive {
+                            continue; // still exclusive to another relayer — retry when expired
                         }
                     }
 
@@ -807,6 +815,12 @@ impl DeBridgePoller {
                 for log in logs {
                     if let Some(intent) = decode_dln_order_created_log(&log, *chain_id) {
                         if !seen.insert(intent.id.clone()) { continue; }
+                        // Skip non-EVM destination chains — we have no fill path for them.
+                        if let Some(name) = debridge_non_evm_chain_name(intent.dst_chain) {
+                            info!("⏭️  DeBridgePoller skip non-EVM dst chain={} ({}) order={}",
+                                intent.dst_chain, name, intent.order_id.as_deref().unwrap_or("?"));
+                            continue;
+                        }
                         // Skip orders where the take-token is not a known stablecoin/WETH —
                         // exotic tokens cause 18-decimal mis-pricing and we have no inventory.
                         if !is_supported_fill_token(&intent.dst_token) {
@@ -826,6 +840,27 @@ impl DeBridgePoller {
 
             tokio::time::sleep(std::time::Duration::from_secs(self.poll_interval_secs)).await;
         }
+    }
+}
+
+/// Returns a human-readable name for known deBridge non-EVM destination chain IDs,
+/// or `None` for EVM chains we may be able to fill on.
+/// Source: https://debridge.finance/chains (non-EVM registry as of 2026-05)
+fn debridge_non_evm_chain_name(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        100_000_001 => Some("Solana"),
+        100_000_002 => Some("NEAR"),
+        100_000_003 => Some("Tron"),
+        100_000_004 => Some("Ton"),
+        100_000_005 => Some("Aptos"),
+        100_000_006 => Some("Sui"),
+        100_000_007 => Some("Eclipse (Solana SVM)"),
+        100_000_022 => Some("Neon EVM on Solana"),
+        100_000_023 => Some("Sonic (Solana SVM)"),
+        100_000_027 => Some("Solana (alt chain ID)"),
+        100_000_030 => Some("Grass (Solana SVM)"),
+        100_000_031 => Some("Svm-Unknown-31"),
+        _ => None,
     }
 }
 

@@ -37,6 +37,19 @@ pub struct OutcomeRecord {
     #[serde(default)]
     pub skip_reason: Option<String>,
     pub error: Option<String>,
+    /// Solver identifier — solver address hex or a short human name.
+    /// Allows per-solver filtering on rpc.taifoon.dev and in the dashboard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_id: Option<String>,
+    /// Source-chain `claimUnlock()` tx hash for protocols that require an
+    /// explicit claim (deBridge today). Populated by `update_claim` after
+    /// the claim receipt confirms; NULL while the claim is still pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_tx_hash: Option<String>,
+    /// USD value of the spread released by the claim. Co-populated with
+    /// `claim_tx_hash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_fee_usd: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -47,11 +60,14 @@ pub struct OutcomeLog {
 struct OutcomeLogInner {
     sqlite: Mutex<Connection>,
     mamba_url: Option<String>,
+    /// Mirror endpoint: POST fills to rpc.taifoon.dev/api/solver/fills
+    rpc_taifoon_url: Option<String>,
     http: reqwest::Client,
 }
 
 impl OutcomeLog {
-    /// Open / create a SQLite-backed log, optionally mirroring to mamba DuckDB.
+    /// Open / create a SQLite-backed log, optionally mirroring to mamba DuckDB
+    /// and to rpc.taifoon.dev.
     pub fn open(sqlite_path: &str, mamba_url: Option<String>) -> Result<Self> {
         let conn = Connection::open(sqlite_path)
             .with_context(|| format!("open {}", sqlite_path))?;
@@ -70,17 +86,26 @@ impl OutcomeLog {
                 predicted_profit_usd     REAL,
                 actual_profit_usd        REAL,
                 skip_reason              TEXT,
-                error                    TEXT
+                error                    TEXT,
+                solver_id                TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_outcomes_intent ON solver_outcomes(intent_id);
-            CREATE INDEX IF NOT EXISTS idx_outcomes_ts     ON solver_outcomes(ts);",
+            CREATE INDEX IF NOT EXISTS idx_outcomes_intent   ON solver_outcomes(intent_id);
+            CREATE INDEX IF NOT EXISTS idx_outcomes_ts       ON solver_outcomes(ts);
+            CREATE INDEX IF NOT EXISTS idx_outcomes_solver   ON solver_outcomes(solver_id);",
         )?;
-        // Older DBs created before X1: backfill the new columns. SQLite will
-        // error if the column already exists, so we ignore those errors.
-        let _ = conn.execute_batch(
-            "ALTER TABLE solver_outcomes ADD COLUMN predicted_gas INTEGER;
-             ALTER TABLE solver_outcomes ADD COLUMN skip_reason   TEXT;",
-        );
+        // Backfill columns added in later schema versions. SQLite errors if column
+        // already exists — those are intentionally ignored. Each ALTER is run
+        // standalone so a single column already being present doesn't block the
+        // others from applying.
+        for stmt in [
+            "ALTER TABLE solver_outcomes ADD COLUMN predicted_gas  INTEGER",
+            "ALTER TABLE solver_outcomes ADD COLUMN skip_reason    TEXT",
+            "ALTER TABLE solver_outcomes ADD COLUMN solver_id      TEXT",
+            "ALTER TABLE solver_outcomes ADD COLUMN claim_tx_hash  TEXT",
+            "ALTER TABLE solver_outcomes ADD COLUMN claim_fee_usd  REAL",
+        ] {
+            let _ = conn.execute(stmt, []);
+        }
 
         let mamba_url = match mamba_url {
             Some(url) if !url.is_empty() => {
@@ -90,10 +115,21 @@ impl OutcomeLog {
             _ => None,
         };
 
+        let rpc_taifoon_url = match std::env::var("TAIFOON_RPC_URL")
+            .or_else(|_| std::env::var("WARMBED_API_URL"))
+        {
+            Ok(url) if !url.is_empty() => {
+                info!("📡 OutcomeLog: rpc.taifoon.dev mirror at {}", url);
+                Some(url)
+            }
+            _ => None,
+        };
+
         Ok(Self {
             inner: Arc::new(OutcomeLogInner {
                 sqlite: Mutex::new(conn),
                 mamba_url,
+                rpc_taifoon_url,
                 http: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(3))
                     .build()
@@ -109,8 +145,9 @@ impl OutcomeLog {
                 "INSERT INTO solver_outcomes
                     (ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                      predicted_gas, gas_used, effective_gas_price_wei,
-                     predicted_profit_usd, actual_profit_usd, skip_reason, error)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
+                     claim_tx_hash, claim_fee_usd)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 params![
                     rec.ts.to_rfc3339(),
                     rec.intent_id,
@@ -126,21 +163,38 @@ impl OutcomeLog {
                     rec.actual_profit_usd,
                     rec.skip_reason,
                     rec.error,
+                    rec.solver_id,
+                    rec.claim_tx_hash,
+                    rec.claim_fee_usd,
                 ],
             )?;
         }
         debug!("💾 outcome logged: {} {}", rec.intent_id, rec.decision);
 
+        let http = self.inner.http.clone();
+        let payload = rec;
+
         if let Some(url) = self.inner.mamba_url.clone() {
-            let http = self.inner.http.clone();
-            let payload = rec;
+            let h = http.clone();
+            let p = payload.clone();
             tokio::spawn(async move {
                 let endpoint = format!("{}/api/solver/outcomes", url.trim_end_matches('/'));
-                if let Err(e) = http.post(&endpoint).json(&payload).send().await {
+                if let Err(e) = h.post(&endpoint).json(&p).send().await {
                     warn!("📊 mamba mirror failed: {}", e);
                 }
             });
         }
+
+        if let Some(url) = self.inner.rpc_taifoon_url.clone() {
+            let p = payload;
+            tokio::spawn(async move {
+                let endpoint = format!("{}/api/solver/fills", url.trim_end_matches('/'));
+                if let Err(e) = http.post(&endpoint).json(&p).send().await {
+                    warn!("📡 rpc.taifoon mirror failed: {}", e);
+                }
+            });
+        }
+
         Ok(())
     }
 
@@ -151,19 +205,33 @@ impl OutcomeLog {
     }
 
     /// Return the most recent N outcome records, newest first.
-    /// Used by the solver-api `/api/solver/outcomes` endpoint and by the
-    /// dashboard P&L panel.
+    /// If `solver_id` is Some, only return records for that solver.
     pub fn recent(&self, limit: i64) -> Result<Vec<OutcomeRecord>> {
+        self.recent_for(limit, None)
+    }
+
+    pub fn recent_for(&self, limit: i64, solver_id: Option<&str>) -> Result<Vec<OutcomeRecord>> {
         let conn = self.inner.sqlite.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let sql = if solver_id.is_some() {
             "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                     predicted_gas, gas_used, effective_gas_price_wei,
-                    predicted_profit_usd, actual_profit_usd, skip_reason, error
+                    predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
+                    claim_tx_hash, claim_fee_usd
+             FROM solver_outcomes
+             WHERE solver_id = ?1
+             ORDER BY ts DESC
+             LIMIT ?2"
+        } else {
+            "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
+                    predicted_gas, gas_used, effective_gas_price_wei,
+                    predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
+                    claim_tx_hash, claim_fee_usd
              FROM solver_outcomes
              ORDER BY ts DESC
-             LIMIT ?",
-        )?;
-        let rows = stmt.query_map(params![limit], |r| {
+             LIMIT ?2"
+        };
+
+        let parse_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<OutcomeRecord> {
             let ts_str: String = r.get(0)?;
             let ts = chrono::DateTime::parse_from_rfc3339(&ts_str)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -183,13 +251,103 @@ impl OutcomeLog {
                 actual_profit_usd: r.get(11)?,
                 skip_reason: r.get(12)?,
                 error: r.get(13)?,
+                solver_id: r.get(14)?,
+                claim_tx_hash: r.get(15)?,
+                claim_fee_usd: r.get(16)?,
             })
-        })?;
+        };
+
+        let mut out = Vec::new();
+        if let Some(sid) = solver_id {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(params![sid, limit], parse_row)?;
+            for r in rows { out.push(r?); }
+        } else {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(params![rusqlite::types::Null, limit], parse_row)?;
+            for r in rows { out.push(r?); }
+        }
+        Ok(out)
+    }
+
+    /// Mark the most recent fill row for `intent_id` as claimed. Issue #10:
+    /// after `claimUnlock()` confirms on the source chain, we write the claim
+    /// tx hash and the spread USD onto the executed-fill row so the dashboard
+    /// (`/api/solver/outcomes`) can render claim status without a separate
+    /// table, and the sidecar's retry loop can skip `claim_tx_hash IS NOT NULL`
+    /// rows on subsequent ticks.
+    ///
+    /// Targets the newest row carrying a non-NULL `tx_hash` for the intent —
+    /// matches the `executed` row written by `lambda_execute` and avoids the
+    /// `enrichment_failed` / `skip_*` rows that share the same `intent_id`
+    /// but have no tx_hash to claim against.
+    pub fn update_claim(
+        &self,
+        intent_id: &str,
+        claim_tx_hash: &str,
+        claim_fee_usd: f64,
+    ) -> Result<usize> {
+        let conn = self.inner.sqlite.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE solver_outcomes
+             SET claim_tx_hash = ?1, claim_fee_usd = ?2
+             WHERE rowid = (
+                SELECT rowid FROM solver_outcomes
+                WHERE intent_id = ?3 AND tx_hash IS NOT NULL
+                ORDER BY ts DESC LIMIT 1
+             )",
+            params![claim_tx_hash, claim_fee_usd, intent_id],
+        )?;
+        Ok(n)
+    }
+
+    /// Return intent_ids of fills (deBridge-protocol rows with a tx_hash)
+    /// that have not yet had `claim_tx_hash` populated. Used by the
+    /// `debridge_claim_retry_tick` loop to skip already-claimed fills
+    /// (Issue #10 acceptance criterion).
+    pub fn unclaimed_debridge_intents(&self, limit: i64) -> Result<Vec<String>> {
+        let conn = self.inner.sqlite.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT intent_id FROM solver_outcomes
+             WHERE claim_tx_hash IS NULL
+               AND tx_hash IS NOT NULL
+               AND (LOWER(protocol) LIKE '%debridge%' OR LOWER(protocol) LIKE '%dln%')
+               AND decision IN ('executed','confirmed','execute')
+             ORDER BY ts DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// Look up the most recent `tx_hash` for an intent across the outcome log.
+    /// Used by `/api/solver/claims` to recover the original fill tx after a
+    /// successful claim has overwritten `wallet.intents.tx_hash` with the
+    /// claim tx. Returns the newest non-NULL tx_hash for the intent — when
+    /// multiple decisions exist (e.g. `execute` then `claim_unlock`) the
+    /// newest fires first, so callers should prefer this only for fill-tx
+    /// recovery on rows whose wallet state is `CLAIMED`.
+    pub fn first_fill_tx_for(&self, intent_id: &str) -> Result<Option<String>> {
+        let conn = self.inner.sqlite.lock().unwrap();
+        let row: rusqlite::Result<Option<String>> = conn.query_row(
+            "SELECT tx_hash FROM solver_outcomes \
+             WHERE intent_id = ?1 \
+               AND tx_hash IS NOT NULL \
+               AND decision IN ('confirmed','execute','executed') \
+             ORDER BY ts ASC LIMIT 1",
+            params![intent_id],
+            |r| r.get::<_, Option<String>>(0),
+        );
+        // query_row returns NotFound as Err; normalize to Ok(None).
+        match row {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Aggregate P&L summary for the dashboard: realized USD totals, fill

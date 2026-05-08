@@ -163,6 +163,9 @@ impl AcrossExecutor {
                 actual_profit_usd: None,
                 skip_reason: Some("unprofitable".into()),
                 error: None,
+                solver_id: None,
+                claim_tx_hash: None,
+                claim_fee_usd: None,
             })?;
             return Ok(None);
         }
@@ -190,6 +193,9 @@ impl AcrossExecutor {
                     test.net_profit_usd, self.profit_threshold_usd
                 )),
                 error: None,
+                solver_id: None,
+                claim_tx_hash: None,
+                claim_fee_usd: None,
             })?;
             return Ok(None);
         }
@@ -242,6 +248,9 @@ impl AcrossExecutor {
                 actual_profit_usd: None,
                 skip_reason: Some("dry_run".into()),
                 error: None,
+                solver_id: None,
+                claim_tx_hash: None,
+                claim_fee_usd: None,
             })?;
             return Ok(None);
         }
@@ -303,6 +312,9 @@ impl AcrossExecutor {
             actual_profit_usd: Some(actual_profit),
             skip_reason: None,
             error: None,
+            solver_id: None,
+            claim_tx_hash: None,
+            claim_fee_usd: None,
         })?;
 
         Ok(Some(tx_hash))
@@ -634,34 +646,57 @@ pub async fn fetch_relay_data_from_tx(
             continue;
         }
         // ABI decode the non-indexed fields (32 bytes each):
-        // [0]:  inputToken (address, padded)
-        // [1]:  outputToken (address, padded)
-        // [2]:  inputAmount (uint256)
-        // [3]:  outputAmount (uint256)
+        // [0]:  inputToken  (address right-aligned, or bytes32 left-aligned on older spokes)
+        // [1]:  outputToken (same)
+        // [2]:  inputAmount  (uint256 right-aligned, or packed at slot[offset+16..+20] on older)
+        // [3]:  outputAmount (same)
         // [4]:  quoteTimestamp (uint32)
-        // [5]:  fillDeadline (uint32)
+        // [5]:  fillDeadline   (uint32)
         // [6]:  exclusivityDeadline (uint32)
-        // [7]:  recipient (address, padded)
-        // [8]:  exclusiveRelayer (address, padded)
+        // [7]:  recipient       (address, same encoding as tokens above)
+        // [8]:  exclusiveRelayer(address, same)
         // [9]:  message offset
-        // [10]: message length (if present)
+        //
+        // NOTE: Some Across SpokePool deployments (e.g. Polygon) use a non-standard layout:
+        //   - Address slots use bytes32 LEFT-aligned (20-byte address in bytes 0-19, zeros in 20-31)
+        //   - Numeric slots pack the value in bytes 16-19 of the 32-byte slot (4-byte window)
+        // Detect: if slot[0] has non-zero in bytes 0-19 and all-zero in bytes 20-31 → packed format.
+        let packed_format = data.len() >= 32
+            && data[20..32].iter().all(|&b| b == 0)
+            && data[0..20].iter().any(|&b| b != 0);
+
         let read_u256 = |offset: usize| -> Option<U256> {
             if offset + 32 > data.len() { return None; }
             Some(U256::from_be_slice(&data[offset..offset + 32]))
         };
+        // Read an address from a 32-byte slot (handles both right-aligned address and left-aligned bytes32)
         let read_addr = |offset: usize| -> Option<String> {
             if offset + 32 > data.len() { return None; }
-            Some(format!("0x{}", hex::encode(&data[offset + 12..offset + 32])))
+            if packed_format {
+                Some(format!("0x{}", hex::encode(&data[offset..offset + 20])))
+            } else {
+                Some(format!("0x{}", hex::encode(&data[offset + 12..offset + 32])))
+            }
+        };
+        // Read a uint value from a 32-byte slot (handles both standard right-aligned and packed format)
+        let read_uint_slot = |offset: usize| -> Option<U256> {
+            if offset + 32 > data.len() { return None; }
+            if packed_format {
+                // Packed format: value is in bytes 16-19 of the slot
+                Some(U256::from_be_slice(&data[offset + 16..offset + 20]))
+            } else {
+                Some(U256::from_be_slice(&data[offset..offset + 32]))
+            }
         };
 
         let input_token  = read_addr(0)?;
         let output_token = read_addr(32)?;
-        let input_amount = read_u256(64)?.to_string();
-        let output_amount = read_u256(96)?.to_string();
+        let input_amount = read_uint_slot(64)?.to_string();
+        let output_amount = read_uint_slot(96)?.to_string();
         // quoteTimestamp at 128, fillDeadline at 160, exclusivityDeadline at 192
-        let fill_deadline_u256 = read_u256(160)?;
+        let fill_deadline_u256 = read_uint_slot(160)?;
         let fill_deadline: u32 = fill_deadline_u256.to::<u32>();
-        let excl_deadline_u256 = read_u256(192)?;
+        let excl_deadline_u256 = read_uint_slot(192)?;
         let exclusivity_deadline: u32 = excl_deadline_u256.to::<u32>();
         let recipient = read_addr(224)?;
         let exclusive_relayer = read_addr(256)?;
@@ -677,7 +712,7 @@ pub async fn fetch_relay_data_from_tx(
         // Slot[9] contains the byte-offset from start of data to the length word.
         // Length at that offset, followed by the bytes themselves.
         let message: Option<String> = (|| -> Option<String> {
-            let msg_offset = read_u256(288)?.to::<usize>();
+            let msg_offset = read_uint_slot(288)?.to::<usize>();
             let len_offset = msg_offset;
             if len_offset + 32 > data.len() { return None; }
             let msg_len = U256::from_be_slice(&data[len_offset..len_offset + 32]).to::<usize>();

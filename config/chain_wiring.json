@@ -3,7 +3,7 @@
   "_updated": "2026-04-29",
   "1": {
     "_chain": "Ethereum",
-    "rpc_url": "https://ethereum-rpc.publicnode.com",
+    "rpc_url": "https://ethereum.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"
   },
@@ -21,7 +21,7 @@
   },
   "8453": {
     "_chain": "Base",
-    "rpc_url": "https://base-rpc.publicnode.com",
+    "rpc_url": "https://mainnet.base.org",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64"
   },
@@ -51,7 +51,7 @@
   },
   "1399811149": {
     "_chain": "Solana",
-    "rpc_url": "https://mainnet.helius-rpc.com/?api-key=b8dca1eb-aec9-4399-8906-c496da99db29",
+    "rpc_url": "https://api.mainnet-beta.solana.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x0000000000000000000000000000000000000000",
     "_note": "Solana uses this chain_id as a sentinel; rpc_url is the Solana JSON-RPC endpoint"

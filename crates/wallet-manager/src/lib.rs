@@ -460,6 +460,73 @@ impl WalletManager {
         }
         Ok(out)
     }
+
+    /// Read deBridge claim rows for the dashboard Claims tab. Returns one row
+    /// per intent that ever entered the claim lifecycle (CONFIRMED/CLAIM_PENDING/
+    /// CLAIMED/REVERTED) for any protocol whose name contains "debridge" or
+    /// "dln". The current `tx_hash` column is the latest broadcast on that
+    /// intent — for `CLAIMED` rows it's the claim tx; for `CONFIRMED` /
+    /// `CLAIM_PENDING` it's the fill tx. The caller (solver-api) joins
+    /// `solver_outcomes` to recover the original fill_tx_hash when the wallet
+    /// row has been overwritten by the claim transition.
+    ///
+    /// `claim_fee_usd` is read from the `revenue` table — only populated when
+    /// `lambda_claim_debridge` calls `record_revenue` on a successful claim.
+    pub fn list_debridge_claims(&self, limit: i64) -> Result<Vec<DebridgeClaimRow>, WalletError> {
+        let conn = self.conn.lock().unwrap();
+        let limit = limit.clamp(1, 1000);
+        let sql = "SELECT i.intent_id, i.protocol, i.src_chain, i.dst_chain, \
+                          i.amount_usd, i.state, i.created_at, i.updated_at, \
+                          i.tx_hash, i.error, r.profit_usd \
+                   FROM intents i \
+                   LEFT JOIN revenue r ON r.intent_id = i.intent_id \
+                   WHERE (lower(i.protocol) LIKE '%debridge%' OR lower(i.protocol) LIKE '%dln%') \
+                     AND i.state IN ('CONFIRMED','CLAIM_PENDING','CLAIMED','REVERTED') \
+                   ORDER BY i.updated_at DESC \
+                   LIMIT ?1";
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params![limit], |r| {
+            let created: String = r.get(6)?;
+            let updated: String = r.get(7)?;
+            Ok(DebridgeClaimRow {
+                intent_id: r.get(0)?,
+                protocol: r.get(1)?,
+                src_chain: r.get(2)?,
+                dst_chain: r.get(3)?,
+                amount_usd: r.get(4)?,
+                state: r.get(5)?,
+                created_at: parse_ts(&created),
+                updated_at: parse_ts(&updated),
+                wallet_tx_hash: r.get(8)?,
+                error: r.get(9)?,
+                claim_fee_usd: r.get(10)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+}
+
+/// Joined row used by the dashboard `/api/solver/claims` endpoint. The
+/// `wallet_tx_hash` field is the latest tx on the intent record — solver-api
+/// must classify it as fill_tx_hash or claim_tx_hash based on `state` and
+/// fall back to `solver_outcomes` for the fill tx after a claim transition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebridgeClaimRow {
+    pub intent_id: String,
+    pub protocol: String,
+    pub src_chain: i64,
+    pub dst_chain: i64,
+    pub amount_usd: f64,
+    pub state: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub wallet_tx_hash: Option<String>,
+    pub error: Option<String>,
+    pub claim_fee_usd: Option<f64>,
 }
 
 fn row_to_record(r: &rusqlite::Row<'_>) -> rusqlite::Result<IntentRecord> {
@@ -636,5 +703,94 @@ mod tests {
         assert_eq!(a.intent_id, b.intent_id);
         // Second insert is a no-op; original amount preserved.
         assert_eq!(b.amount_usd, 100.0);
+    }
+
+    fn debridge_intent(id: &str, amt: f64) -> NewIntent {
+        NewIntent {
+            intent_id: id.to_string(),
+            protocol: "debridge_dln".to_string(),
+            src_chain: 42161,
+            dst_chain: 8453,
+            amount_usd: amt,
+        }
+    }
+
+    #[test]
+    fn list_debridge_claims_filters_by_protocol_and_state() {
+        let m = mgr();
+        // Two debridge intents, one Across.
+        m.record_detected(debridge_intent("debridge_dln:0xabc", 50.0))
+            .unwrap();
+        m.record_detected(debridge_intent("debridge_dln:0xdef", 80.0))
+            .unwrap();
+        m.record_detected(intent("across_only", 30.0)).unwrap();
+
+        // Move first deBridge to CONFIRMED (claim pending), second to CLAIMED.
+        m.transition(
+            "debridge_dln:0xabc",
+            IntentState::Confirmed,
+            Some("0xfilltx_abc"),
+            None,
+        )
+        .unwrap();
+        // For the second: CONFIRMED → CLAIM_PENDING → CLAIMED. CLAIMED transition
+        // overwrites tx_hash with the claim tx (mirroring lambda_claim_debridge).
+        // We need a fresh non-terminal intent to walk the chain — use a
+        // throwaway record that simulates the in-flight broadcast.
+        m.transition(
+            "debridge_dln:0xdef",
+            IntentState::ClaimPending,
+            Some("0xfilltx_def"),
+            None,
+        )
+        .unwrap();
+        m.transition(
+            "debridge_dln:0xdef",
+            IntentState::Claimed,
+            Some("0xclaimtx_def"),
+            None,
+        )
+        .unwrap();
+        m.record_revenue("debridge_dln:0xdef", 0.42).unwrap();
+
+        // Across one stays in INTENT_DETECTED — must NOT be in claims output.
+        let claims = m.list_debridge_claims(100).unwrap();
+        let ids: Vec<&str> = claims.iter().map(|c| c.intent_id.as_str()).collect();
+        assert!(ids.contains(&"debridge_dln:0xabc"));
+        assert!(ids.contains(&"debridge_dln:0xdef"));
+        assert!(
+            !ids.contains(&"across_only"),
+            "Across must be filtered out by protocol"
+        );
+
+        let claimed = claims
+            .iter()
+            .find(|c| c.intent_id == "debridge_dln:0xdef")
+            .unwrap();
+        assert_eq!(claimed.state, "CLAIMED");
+        // wallet_tx_hash is the claim tx after the CLAIMED transition.
+        assert_eq!(claimed.wallet_tx_hash.as_deref(), Some("0xclaimtx_def"));
+        // Revenue join populates claim_fee_usd.
+        assert!((claimed.claim_fee_usd.unwrap_or(0.0) - 0.42).abs() < 1e-9);
+
+        let pending = claims
+            .iter()
+            .find(|c| c.intent_id == "debridge_dln:0xabc")
+            .unwrap();
+        assert_eq!(pending.state, "CONFIRMED");
+        // No revenue recorded yet — claim_fee_usd is None.
+        assert!(pending.claim_fee_usd.is_none());
+        // Wallet tx_hash is the fill tx.
+        assert_eq!(pending.wallet_tx_hash.as_deref(), Some("0xfilltx_abc"));
+    }
+
+    #[test]
+    fn list_debridge_claims_excludes_pre_claim_lifecycle_states() {
+        let m = mgr();
+        m.record_detected(debridge_intent("debridge_dln:0xnew", 10.0))
+            .unwrap();
+        // Stays in INTENT_DETECTED — pre-claim, must not appear in claims tab.
+        let claims = m.list_debridge_claims(100).unwrap();
+        assert!(claims.is_empty());
     }
 }

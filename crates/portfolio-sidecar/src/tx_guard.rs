@@ -36,6 +36,13 @@ pub const ACROSS_SPOKE_POOLS: &[&str] = &[
     "0x7e63a5f1a8f0b4d0934b2f2327daed3f6bb2ee75", // Linea
 ];
 
+/// deBridge DLN Source contract — same address on every supported chain.
+/// Used by the rebalancer's deBridge fallback (createOrder / claimUnlock).
+/// Recipient address is verified against `solver_addr` in calldata round-trip.
+pub const DEBRIDGE_DLN_CONTRACTS: &[&str] = &[
+    "0xef4fb24ad0916217251f553c0596f8edc630eb66", // DlnSource
+];
+
 /// Mayan Forwarder + MayanSwift (EVM contracts; Solana destination is off-chain).
 pub const MAYAN_CONTRACTS: &[&str] = &[
     "0x337685fdab40d39bd02028545a4ffa7d287cc3e2", // MayanForwarder
@@ -166,6 +173,11 @@ impl TxGuard {
 
         // Across SpokePool
         if ACROSS_SPOKE_POOLS.iter().any(|a| to_lower == *a) {
+            return Ok(());
+        }
+
+        // deBridge DLN (rebalancer fallback bridge)
+        if DEBRIDGE_DLN_CONTRACTS.iter().any(|a| to_lower == *a) {
             return Ok(());
         }
 

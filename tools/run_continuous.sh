@@ -35,6 +35,7 @@ if [[ -z "$SOLVER_PRIVATE_KEY" ]]; then
 fi
 SOLANA_PRIVATE_KEY="${SOLANA_PRIVATE_KEY:-$(security find-generic-password -s mamba-messiah-solana-key -w 2>/dev/null || true)}"
 SOLANA_ADDRESS="${SOLANA_ADDRESS:-DUDgHSeM1KU9W8WyiMpEP7HtQKY22fRmpjxKViLEBQQF}"
+LIFI_API_KEY="${LIFI_API_KEY:-$(security find-generic-password -s lifi-solver-key -w 2>/dev/null || true)}"
 
 RUN=0
 trap 'echo "Stopping continuous runner..."; exit 0' INT TERM
@@ -51,15 +52,17 @@ while true; do
         SOLVER_PRIVATE_KEY="$SOLVER_PRIVATE_KEY" \
         SOLANA_PRIVATE_KEY="$SOLANA_PRIVATE_KEY" \
         SOLANA_ADDRESS="$SOLANA_ADDRESS" \
+        LIFI_API_KEY="$LIFI_API_KEY" \
         DRY_RUN="$DRY_RUN" \
         SIMULATION_MODE="$DRY_RUN" \
         MAX_NOTIONAL_USD="$MAX_NOTIONAL_USD" \
         MIN_PROFIT_USD="$MIN_PROFIT_USD" \
         PROTOCOL_FILTER="$PROTOCOL_FILTER" \
+        T3RN_LWC_ENABLED=false \
         CHAIN_WIRING_FILE="$REPO_ROOT/config/chain_wiring.json" \
         OUTCOME_DB_PATH="$DB" \
         WALLET_DB_PATH="$LOG_DIR/wallet_mainnet.sqlite" \
-        SOLANA_RPC_URL="${SOLANA_RPC_URL:-https://mainnet.helius-rpc.com/?api-key=b8dca1eb-aec9-4399-8906-c496da99db29}" \
+        SOLANA_RPC_URL="${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}" \
         RUST_LOG="${RUST_LOG:-genome_client=info,executor=info,warn}" \
         "$SOLVER_BIN" 2>&1 | tee "$LOG" || true
 

@@ -1,102 +1,166 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavBar, Footer, Card, Button, Badge, StatTile, Tag } from '@/components/ui'
 import { protocolColors } from '@/lib/tokens'
 
-interface SolverRow {
-  id: string
-  name: string
-  status: 'live' | 'paused' | 'failing' | 'spinning_up'
-  protocols: string[]
-  chains: string[]
-  pnl_24h: number
-  fills_24h: number
-  latency_ms: number
-  success_rate: number
-  last_fill_ago: string
-  operator: string
+type SolverStatus = 'live' | 'offline' | 'connecting'
+
+interface PortfolioResponse {
+  solver_address: string
+  solana_address?: string | null
+  chains: Array<{ chain_id: number; chain_name: string }>
+  fills?: { confirmed: number; reverted: number }
 }
 
-const SOLVERS: SolverRow[] = [
-  {
-    id: 'b3e9a2',
-    name: 'colosseum-prod-01',
-    status: 'live',
-    protocols: ['Across', 'deBridge', 'Mayan', 'LiFi'],
-    chains: ['ETH', 'BASE', 'ARB', 'SOL'],
-    pnl_24h: 142.83,
-    fills_24h: 47,
-    latency_ms: 121,
-    success_rate: 0.96,
-    last_fill_ago: '12s ago',
-    operator: 'yawningmonsoon',
-  },
-  {
-    id: '7f2c11',
-    name: 'solana-only-shot',
-    status: 'live',
-    protocols: ['Mayan', 'deBridge', 'Wormhole'],
-    chains: ['SOL', 'BASE', 'ARB'],
-    pnl_24h: 38.92,
-    fills_24h: 21,
-    latency_ms: 87,
-    success_rate: 0.91,
-    last_fill_ago: '34s ago',
-    operator: 'colosseum-team',
-  },
-  {
-    id: 'a91d43',
-    name: 'dry-run-perfectionist',
-    status: 'paused',
-    protocols: ['Across', 'Stargate'],
-    chains: ['ETH', 'OP', 'BASE'],
-    pnl_24h: 0,
-    fills_24h: 0,
-    latency_ms: 0,
-    success_rate: 0,
-    last_fill_ago: '2h ago',
-    operator: 'maciej',
-  },
-  {
-    id: 'c6e2f8',
-    name: 'cctp-circle-lover',
-    status: 'failing',
-    protocols: ['CCTP', 'LiFi'],
-    chains: ['ETH', 'BASE', 'AVAX'],
-    pnl_24h: -1.12,
-    fills_24h: 4,
-    latency_ms: 412,
-    success_rate: 0.5,
-    last_fill_ago: '5m ago',
-    operator: 'taifoon-bot',
-  },
-  {
-    id: '8a44b1',
-    name: 'evm-everything',
-    status: 'spinning_up',
-    protocols: ['Across', 'deBridge', 'LiFi', 'Stargate', 'Hop'],
-    chains: ['ETH', 'BASE', 'ARB', 'OP', 'POL'],
-    pnl_24h: 0,
-    fills_24h: 0,
-    latency_ms: 0,
-    success_rate: 0,
-    last_fill_ago: '—',
-    operator: 'newcomer',
-  },
-]
+interface PnlSummary {
+  realized_usd_total: number
+  fills_total: number
+  last_24h_count: number
+  by_protocol: Record<string, { fills: number; realized_usd: number; avg_profit_usd: number }>
+}
 
-type Filter = 'all' | 'live' | 'paused' | 'failing'
+interface OutcomeRecord {
+  ts: string
+  protocol: string
+  decision: string
+  src_chain: number
+  dst_chain: number
+  tx_hash: string | null
+  actual_profit_usd: number | null
+}
+
+const SOLVER_API_BASE =
+  (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SOLVER_API_URL) || ''
+
+const POLL_INTERVAL_MS = 5000
+const SSE_OFFLINE_THRESHOLD_MS = 30_000
+const SSE_HEALTH_CHECK_MS = 5000
+
+const CHAIN_LABEL: Record<number, string> = {
+  1: 'ETH', 10: 'OP', 137: 'MATIC', 8453: 'BASE', 42161: 'ARB',
+  56: 'BSC', 59144: 'LINEA', 324: 'ZKSYNC', 1399811149: 'SOL',
+}
+
+function chainLabel(id: number): string {
+  return CHAIN_LABEL[id] ?? `c${id}`
+}
+
+function shortAddr(a: string): string {
+  if (a.length <= 12) return a
+  return `${a.slice(0, 6)}…${a.slice(-4)}`
+}
+
+function fmtAge(iso: string | null): string {
+  if (!iso) return '—'
+  const ms = Date.now() - new Date(iso).getTime()
+  if (Number.isNaN(ms) || ms < 0) return 'now'
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+type Filter = 'all' | 'live' | 'offline'
 
 export default function PortalPage() {
   const [filter, setFilter] = useState<Filter>('all')
-  const visible =
-    filter === 'all' ? SOLVERS : SOLVERS.filter((s) => s.status === filter)
+  const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null)
+  const [pnl, setPnl] = useState<PnlSummary | null>(null)
+  const [lastFill, setLastFill] = useState<OutcomeRecord | null>(null)
+  const [status, setStatus] = useState<SolverStatus>('connecting')
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  const live = SOLVERS.filter((s) => s.status === 'live').length
-  const totalPnl = SOLVERS.reduce((a, s) => a + s.pnl_24h, 0)
-  const totalFills = SOLVERS.reduce((a, s) => a + s.fills_24h, 0)
+  const lastSseAtRef = useRef<number>(Date.now())
+
+  useEffect(() => {
+    let cancelled = false
+
+    const refresh = async () => {
+      try {
+        const [pRes, plRes, oRes] = await Promise.all([
+          fetch(`${SOLVER_API_BASE}/api/solver/portfolio`, { cache: 'no-store' }),
+          fetch(`${SOLVER_API_BASE}/api/solver/pnl`, { cache: 'no-store' }),
+          fetch(`${SOLVER_API_BASE}/api/solver/outcomes?limit=1`, { cache: 'no-store' }),
+        ])
+        if (cancelled) return
+        if (pRes.ok) setPortfolio(await pRes.json())
+        if (plRes.ok) setPnl(await plRes.json())
+        if (oRes.ok) {
+          const recs = (await oRes.json()) as OutcomeRecord[]
+          setLastFill(recs[0] ?? null)
+        }
+        setLoadError(null)
+      } catch (e) {
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e))
+      }
+    }
+
+    refresh()
+    const poll = setInterval(refresh, POLL_INTERVAL_MS)
+
+    const es = new EventSource(`${SOLVER_API_BASE}/api/solver/stream`)
+    const markSeen = () => {
+      lastSseAtRef.current = Date.now()
+      setStatus('live')
+    }
+    es.onopen = markSeen
+    es.onmessage = markSeen
+    es.onerror = () => {
+      const age = Date.now() - lastSseAtRef.current
+      setStatus(age > SSE_OFFLINE_THRESHOLD_MS ? 'offline' : 'connecting')
+    }
+
+    const health = setInterval(() => {
+      const age = Date.now() - lastSseAtRef.current
+      if (age > SSE_OFFLINE_THRESHOLD_MS) setStatus('offline')
+    }, SSE_HEALTH_CHECK_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(poll)
+      clearInterval(health)
+      es.close()
+    }
+  }, [])
+
+  const solver = useMemo(() => {
+    if (!portfolio) return null
+    const protocols = pnl ? Object.keys(pnl.by_protocol) : []
+    const chainIds = portfolio.chains.map((c) => c.chain_id)
+    const totalPnl = pnl?.realized_usd_total ?? 0
+    return {
+      address: portfolio.solver_address,
+      solanaAddress: portfolio.solana_address ?? null,
+      status,
+      protocols,
+      chains: chainIds.map(chainLabel),
+      pnl_total: totalPnl,
+      fills_total: pnl?.fills_total ?? 0,
+      fills_24h: pnl?.last_24h_count ?? 0,
+      last_fill_ts: lastFill?.ts ?? null,
+      last_fill_protocol: lastFill?.protocol ?? null,
+      last_fill_tx: lastFill?.tx_hash ?? null,
+      last_fill_profit: lastFill?.actual_profit_usd ?? null,
+    }
+  }, [portfolio, pnl, lastFill, status])
+
+  const visible = useMemo(() => {
+    if (!solver) return []
+    if (filter === 'all') return [solver]
+    if (filter === 'live' && solver.status === 'live') return [solver]
+    if (filter === 'offline' && solver.status === 'offline') return [solver]
+    return []
+  }, [solver, filter])
+
+  const fleetCount = solver ? 1 : 0
+  const liveCount = solver?.status === 'live' ? 1 : 0
+  const fillsTotal = solver?.fills_total ?? 0
+  const totalPnl = solver?.pnl_total ?? 0
 
   return (
     <>
@@ -111,9 +175,9 @@ export default function PortalPage() {
                 Solver fleet.
               </h1>
               <p className="mt-3 text-sm text-[var(--text-secondary)] max-w-[560px] leading-relaxed">
-                Spin up new solvers, monitor existing ones, pause or scale
-                the fleet. Each solver runs as its own pod with its own
-                wallet — Taifoon&apos;s grid keeps the proofs.
+                Live state of the solver this dashboard is wired to. Address,
+                fill count, and P&amp;L come straight from the running solver.
+                LIVE/OFFLINE reflects the SSE event stream.
               </p>
             </div>
             <Button href="/onboard" variant="primary" size="lg">
@@ -123,11 +187,11 @@ export default function PortalPage() {
           </div>
 
           <div className="max-w-[1400px] mx-auto px-6 pb-10 grid grid-cols-2 sm:grid-cols-4 gap-x-12 gap-y-6">
-            <StatTile label="FLEET" value={SOLVERS.length} />
-            <StatTile label="LIVE" value={live} tone="mint" />
-            <StatTile label="FILLS / 24H" value={totalFills} tone="blue" />
+            <StatTile label="FLEET" value={fleetCount} />
+            <StatTile label="LIVE" value={liveCount} tone="mint" />
+            <StatTile label="FILLS" value={fillsTotal} tone="blue" />
             <StatTile
-              label="P&L / 24H"
+              label="P&L REALIZED"
               value={`$${totalPnl.toFixed(2)}`}
               tone={totalPnl >= 0 ? 'mint' : 'danger'}
             />
@@ -136,7 +200,7 @@ export default function PortalPage() {
 
         {/* Filters */}
         <div className="max-w-[1400px] mx-auto px-6 pt-8 flex items-center gap-4">
-          {(['all', 'live', 'paused', 'failing'] as Filter[]).map((f) => (
+          {(['all', 'live', 'offline'] as Filter[]).map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -153,7 +217,21 @@ export default function PortalPage() {
 
         {/* Solver list */}
         <div className="max-w-[1400px] mx-auto px-6 py-8 space-y-3">
-          {visible.length === 0 && (
+          {!solver && !loadError && (
+            <Card padding="lg" className="text-center">
+              <div className="text-[var(--text-secondary)]">
+                Loading solver state…
+              </div>
+            </Card>
+          )}
+          {loadError && (
+            <Card padding="lg" className="text-center">
+              <div className="text-[var(--danger)]">
+                Failed to reach solver API: {loadError}
+              </div>
+            </Card>
+          )}
+          {solver && visible.length === 0 && (
             <Card padding="lg" className="text-center">
               <div className="text-[var(--text-secondary)]">
                 No solvers match this filter.
@@ -161,7 +239,7 @@ export default function PortalPage() {
             </Card>
           )}
           {visible.map((s) => (
-            <SolverCard key={s.id} solver={s} />
+            <SolverCard key={s.address} solver={s} />
           ))}
         </div>
 
@@ -196,17 +274,32 @@ export default function PortalPage() {
   )
 }
 
-function SolverCard({ solver }: { solver: SolverRow }) {
+interface SolverDisplay {
+  address: string
+  solanaAddress: string | null
+  status: SolverStatus
+  protocols: string[]
+  chains: string[]
+  pnl_total: number
+  fills_total: number
+  fills_24h: number
+  last_fill_ts: string | null
+  last_fill_protocol: string | null
+  last_fill_tx: string | null
+  last_fill_profit: number | null
+}
+
+function SolverCard({ solver }: { solver: SolverDisplay }) {
   const statusMap = {
     live: { tone: 'mint' as const, label: 'LIVE', dot: true, pulse: true },
-    paused: { tone: 'warning' as const, label: 'PAUSED', dot: false, pulse: false },
-    failing: { tone: 'danger' as const, label: 'FAILING', dot: true, pulse: true },
-    spinning_up: { tone: 'info' as const, label: 'SPINNING UP', dot: true, pulse: true },
+    offline: { tone: 'danger' as const, label: 'OFFLINE', dot: true, pulse: false },
+    connecting: { tone: 'info' as const, label: 'CONNECTING', dot: true, pulse: true },
   }
   const s = statusMap[solver.status]
+  const id = solver.address.slice(2, 8).toLowerCase()
 
   return (
-    <Link href={`/portal/${solver.id}`} className="block group">
+    <Link href={`/portal/${id}`} className="block group">
       <Card
         padding="md"
         className="transition-all group-hover:border-[var(--brand-blue)]/40 group-hover:bg-[var(--bg-elevated)]"
@@ -214,63 +307,65 @@ function SolverCard({ solver }: { solver: SolverRow }) {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0">
             <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-[15px] text-[var(--text-primary)] tracking-[0.04em]">
-                {solver.name}
-              </span>
-              <span className="font-mono text-[10px] tracking-[0.16em] text-[var(--text-tertiary)]">
-                #{solver.id}
+              <span className="text-[15px] text-[var(--text-primary)] tracking-[0.04em] font-mono">
+                {shortAddr(solver.address)}
               </span>
               <Badge tone={s.tone} dot={s.dot} pulse={s.pulse}>
                 {s.label}
               </Badge>
             </div>
             <div className="mt-2.5 flex items-center gap-2 flex-wrap">
-              {solver.protocols.map((p) => {
-                const color = protocolColors[p.toLowerCase()] ?? '#94B0C4'
-                return (
-                  <span
-                    key={p}
-                    className="text-[10px] font-mono tracking-[0.12em] uppercase px-2 py-0.5 rounded-[2px] border"
-                    style={{
-                      color,
-                      borderColor: `${color}30`,
-                    }}
-                  >
-                    {p}
+              {solver.protocols.length === 0 ? (
+                <span className="text-[10px] text-[var(--text-tertiary)] font-mono tracking-[0.12em] uppercase">
+                  No fills yet
+                </span>
+              ) : (
+                solver.protocols.map((p) => {
+                  const color = protocolColors[p.toLowerCase()] ?? '#94B0C4'
+                  return (
+                    <span
+                      key={p}
+                      className="text-[10px] font-mono tracking-[0.12em] uppercase px-2 py-0.5 rounded-[2px] border"
+                      style={{
+                        color,
+                        borderColor: `${color}30`,
+                      }}
+                    >
+                      {p}
+                    </span>
+                  )
+                })
+              )}
+              {solver.chains.length > 0 && (
+                <>
+                  <span className="text-[var(--text-tertiary)] text-[10px]">·</span>
+                  <span className="text-[10px] text-[var(--text-tertiary)] font-mono tracking-[0.12em]">
+                    {solver.chains.join(' · ')}
                   </span>
-                )
-              })}
-              <span className="text-[var(--text-tertiary)] text-[10px]">·</span>
-              <span className="text-[10px] text-[var(--text-tertiary)] font-mono tracking-[0.12em]">
-                {solver.chains.join(' · ')}
-              </span>
+                </>
+              )}
             </div>
             <div className="mt-3 text-[11px] font-mono text-[var(--text-tertiary)] tracking-[0.08em]">
-              operator{' '}
-              <span className="text-[var(--text-secondary)]">{solver.operator}</span> · last fill{' '}
-              {solver.last_fill_ago}
+              last fill{' '}
+              <span className="text-[var(--text-secondary)]">
+                {fmtAge(solver.last_fill_ts)}
+              </span>
+              {solver.last_fill_protocol && (
+                <>
+                  {' '}· {solver.last_fill_protocol}
+                </>
+              )}
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-x-8 gap-y-2 shrink-0 min-w-[480px]">
+          <div className="grid grid-cols-3 gap-x-8 gap-y-2 shrink-0 min-w-[360px]">
             <Mini
-              label="P&L 24H"
-              value={`${solver.pnl_24h >= 0 ? '+' : ''}$${solver.pnl_24h.toFixed(2)}`}
-              tone={solver.pnl_24h >= 0 ? 'mint' : 'danger'}
+              label="P&L"
+              value={`${solver.pnl_total >= 0 ? '+' : ''}$${solver.pnl_total.toFixed(2)}`}
+              tone={solver.pnl_total >= 0 ? 'mint' : 'danger'}
             />
-            <Mini label="FILLS" value={solver.fills_24h.toString()} tone="blue" />
-            <Mini
-              label="LATENCY"
-              value={solver.status === 'live' ? `${solver.latency_ms}ms` : '—'}
-            />
-            <Mini
-              label="SUCCESS"
-              value={
-                solver.status === 'live' || solver.status === 'failing'
-                  ? `${(solver.success_rate * 100).toFixed(0)}%`
-                  : '—'
-              }
-            />
+            <Mini label="FILLS" value={solver.fills_total.toString()} tone="blue" />
+            <Mini label="24H" value={solver.fills_24h.toString()} />
           </div>
 
           <div className="font-mono text-[var(--text-tertiary)] group-hover:text-[var(--brand-blue)] transition-colors">

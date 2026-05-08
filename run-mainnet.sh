@@ -25,17 +25,46 @@ DRY_RUN="${DRY_RUN:-true}"
 SIMULATION_MODE="${SIMULATION_MODE:-$DRY_RUN}"
 MAX_NOTIONAL_USD="${MAX_NOTIONAL_USD:-200}"
 MIN_PROFIT_USD="${MIN_PROFIT_USD:-0.50}"
-PROTOCOL_FILTER="${PROTOCOL_FILTER:-across,debridge,lifi,mayan}"
+PROTOCOL_FILTER="${PROTOCOL_FILTER:-across,lifi}"
+
+# Portfolio-capacity filters (narrow scope to what the wallet can actually fill).
+#
+# DST_CHAIN_FILTER — only process intents whose OUTPUT chain is in this list.
+#   Current wallet: USDC on Base (8453) only.
+#   Fill on Base for Across; Arbitrum (42161) / Optimism (10) when funded.
+#   Empty string = accept all wired chains.
+DST_CHAIN_FILTER="${DST_CHAIN_FILTER:-8453}"
+#
+# MAX_INPUT_USD — drop intents above this amount at intake (before li.quest API call).
+#   Set to wallet's fillable capacity with a small safety margin.
+#   Override: MAX_INPUT_USD=50 ./run-mainnet.sh
+MAX_INPUT_USD="${MAX_INPUT_USD:-15}"
+#
+# MIN_INPUT_USD — ignore dust intents below this floor (saves enrichment RPC calls).
+MIN_INPUT_USD="${MIN_INPUT_USD:-0.50}"
+
 # Rebalancer + deBridge claim-retry run inside solver-main every SIDECAR_INTERVAL_SECS.
 SIDECAR_INTERVAL_SECS="${SIDECAR_INTERVAL_SECS:-300}"
 GENOME_SSE_URL="${GENOME_SSE_URL:-https://api.taifoon.dev/api/genome/subscribe/sse}"
 SPINNER_API_URL="${SPINNER_API_URL:-https://api.taifoon.dev}"
-SOLANA_RPC_URL="${SOLANA_RPC_URL:-https://mainnet.helius-rpc.com/?api-key=b8dca1eb-aec9-4399-8906-c496da99db29}"
+SOLANA_RPC_URL="${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}"
+
+# Warn loudly if the operator is relying on the public Solana RPC. It works for
+# dry-run and low-volume probing, but rate limits will throttle real fills.
+if [[ "$SOLANA_RPC_URL" == "https://api.mainnet-beta.solana.com" ]]; then
+    echo "WARN: Using public Solana RPC — rate limits apply. Set SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY for production." >&2
+fi
 OUTCOME_DB_PATH="${OUTCOME_DB_PATH:-$REPO_ROOT/outcomes/mainnet_$(date +%Y%m%d_%H%M%S).sqlite}"
 WALLET_DB_PATH="${WALLET_DB_PATH:-$REPO_ROOT/outcomes/wallet_mainnet.sqlite}"
 RUST_LOG="${RUST_LOG:-taifoon_solver=info,executor=info,genome_client=info,warn}"
 
-# --- Load EVM key from keychain if not set ---
+# --- Load EVM + Solana keys ---
+# macOS: keys are read from Keychain (entries: mamba-messiah-key, mamba-messiah-solana-key).
+# Linux / CI: inject via secrets manager before running this script, e.g.:
+#   GitHub Actions : env: SOLVER_PRIVATE_KEY: ${{ secrets.SOLVER_PRIVATE_KEY }}
+#   HashiCorp Vault: export SOLVER_PRIVATE_KEY="$(vault kv get -field=evm_key secret/taifoon-solver)"
+#   AWS Secrets Mgr: export SOLVER_PRIVATE_KEY="$(aws secretsmanager get-secret-value --secret-id taifoon-solver/evm-key --query SecretString --output text)"
+# See SECURITY_ONBOARDING.md §2.2.1 for full patterns.
 if [[ -z "${SOLVER_PRIVATE_KEY:-}" ]]; then
     SOLVER_PRIVATE_KEY=$(security find-generic-password -s mamba-messiah-key -w 2>/dev/null || true)
     if [[ -z "$SOLVER_PRIVATE_KEY" ]]; then
@@ -91,6 +120,8 @@ echo " Solana address: ${SOLANA_ADDRESS:-not set}"
 echo " Max notional:   \$$MAX_NOTIONAL_USD per fill"
 echo " Min profit:     \$$MIN_PROFIT_USD per fill"
 echo " Protocols:      $PROTOCOL_FILTER"
+echo " Dst chains:     ${DST_CHAIN_FILTER:-all}"
+echo " Amount range:   \$${MIN_INPUT_USD}–\$${MAX_INPUT_USD} input"
 echo " Outcome DB:     $OUTCOME_DB_PATH"
 echo " Genome SSE:     $GENOME_SSE_URL"
 echo "==================================================================="
@@ -143,6 +174,9 @@ exec env \
     MAX_NOTIONAL_USD="$MAX_NOTIONAL_USD" \
     MIN_PROFIT_USD="$MIN_PROFIT_USD" \
     PROTOCOL_FILTER="$PROTOCOL_FILTER" \
+    DST_CHAIN_FILTER="$DST_CHAIN_FILTER" \
+    MAX_INPUT_USD="$MAX_INPUT_USD" \
+    MIN_INPUT_USD="$MIN_INPUT_USD" \
     SIDECAR_INTERVAL_SECS="$SIDECAR_INTERVAL_SECS" \
     GENOME_SSE_URL="$GENOME_SSE_URL" \
     SPINNER_API_URL="$SPINNER_API_URL" \

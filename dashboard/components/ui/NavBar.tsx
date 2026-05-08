@@ -6,6 +6,7 @@ import { cn } from './cn'
 const links = [
   { href: '/', label: 'HOME' },
   { href: '/portal', label: 'PORTAL' },
+  { href: '/t3rn', label: 'LWC' },
   { href: '/onboard', label: 'ONBOARD' },
   { href: '/docs', label: 'DOCS' },
 ]

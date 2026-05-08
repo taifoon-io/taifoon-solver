@@ -12,7 +12,7 @@ use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
 use solver_main::lifi_resolver::{resolve_lifi_bridge, LifiBridgeResult};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use taifoon_arb_bridge::{BalanceHighHandler, StubBridge, ThresholdHandler};
 use tokio::sync::{broadcast, mpsc, Semaphore};
@@ -95,11 +95,41 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "all".to_string())
         .to_lowercase();
 
+    // DST_CHAIN_FILTER: comma-separated chain IDs we will fill on (e.g. "8453,42161").
+    // Empty / unset = accept all wired chains.
+    let dst_chain_filter: Vec<u64> = std::env::var("DST_CHAIN_FILTER")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    // MAX_INPUT_USD: drop intents whose input amount exceeds this (portfolio capacity cap).
+    // Defaults to MAX_NOTIONAL_USD which is checked again at execution, but pre-filtering
+    // here avoids wasting a li.quest API call and enrichment RPC on unfillable orders.
+    let max_notional_usd_global: f64 = std::env::var("MAX_NOTIONAL_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(200.0);
+    let max_input_usd: f64 = std::env::var("MAX_INPUT_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(max_notional_usd_global);
+    let min_input_usd: f64 = std::env::var("MIN_INPUT_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+
     info!("🚀 Taifoon Solver Starting...");
     info!("📡 Genome SSE: {}", genome_sse_url);
     info!("🔌 Spinner API: {}", spinner_base);
     info!("🎯 Protocol filter: {}", protocol_filter);
     info!("💰 Min Profit: ${}", min_profit_usd);
+    if !dst_chain_filter.is_empty() {
+        info!("⛓️  DST_CHAIN_FILTER: {:?}", dst_chain_filter);
+    }
+    if min_input_usd > 0.0 || max_input_usd < max_notional_usd_global {
+        info!("💵 Input range: ${:.2}–${:.2}", min_input_usd, max_input_usd);
+    }
     info!("🧪 DRY_RUN: {}", dry_run);
     let api_port: u16 = std::env::var("API_PORT")
         .ok()
@@ -107,6 +137,15 @@ async fn main() -> Result<()> {
         .unwrap_or(DEFAULT_API_PORT);
     info!("💾 Outcome DB: {}", outcome_db_path);
     info!("🌐 API Port: {}", api_port);
+
+    // ── Solver API auth token (issue #8) ──────────────────────────────────────
+    // SOLVER_API_TOKEN gates every /api/solver/* route. If unset at boot we
+    // generate a 32-byte hex token, set it in this process's env so the auth
+    // middleware can read it back, and print it once to stdout. Operators
+    // running under systemd/Docker should pre-set it; the auto-generated
+    // path is the dev/local fallback so a fresh checkout doesn't lock its
+    // own dashboard out by default.
+    ensure_solver_api_token();
 
     // ── Solver event API (SSE for dashboard) ──────────────────────────────────
     let api_router = solver_api.router();
@@ -209,6 +248,7 @@ async fn main() -> Result<()> {
         WalletManager::open(&wallet_db_path, wallet_budget_usd)
             .map_err(|e| anyhow!("wallet-manager open: {e}"))?,
     );
+    solver_api.set_wallet_manager(wallet_manager.clone());
     info!(
         "💼 Wallet manager: db={} budget=${}",
         wallet_db_path, wallet_budget_usd
@@ -229,7 +269,12 @@ async fn main() -> Result<()> {
                 "✅ Lambda controller live — solver={:?}",
                 ctrl.signer.address()
             );
-            Some(Arc::new(ctrl))
+            let arc = Arc::new(ctrl);
+            // Register with solver-api so /api/solver/claims/:id/retry can fire
+            // claimUnlock from the dashboard against the same controller the
+            // background tick uses.
+            solver_api.set_lambda_controller(arc.clone());
+            Some(arc)
         }
         Ok(None) => {
             warn!(
@@ -259,11 +304,17 @@ async fn main() -> Result<()> {
         dry_run,
     ) {
         info!("♻️  Rebalancer background task started (interval={}s dry_run={})", sidecar_interval_secs, dry_run);
+        let sidecar = Arc::new(sidecar);
+        sidecar.set_interval_secs(sidecar_interval_secs);
+        // Register with solver-api so /api/solver/rebalance and
+        // /api/solver/rebalancer/status can drive the same instance.
+        solver_api.set_portfolio_sidecar(sidecar.clone());
+        let sidecar_loop = sidecar.clone();
         tokio::spawn(async move {
             // Stagger first tick by 10s so fill loop logs settle first.
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             loop {
-                sidecar.tick().await;
+                sidecar_loop.tick().await;
                 tokio::time::sleep(std::time::Duration::from_secs(sidecar_interval_secs)).await;
             }
         });
@@ -276,12 +327,18 @@ async fn main() -> Result<()> {
         let ctrl_claim = Arc::clone(ctrl);
         let wallet_db_claim = wallet_db_path.clone();
         let claim_interval = sidecar_interval_secs;
+        let outcome_log_for_claim = rule_skip_log.clone();
         info!("🔁 deBridge claim-retry background task started (interval={}s)", claim_interval);
         tokio::spawn(async move {
             // Stagger by 30s so rebalancer runs first.
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             loop {
-                debridge_claim_retry_tick(&wallet_db_claim, &ctrl_claim, dry_run).await;
+                debridge_claim_retry_tick(
+                    &wallet_db_claim,
+                    &ctrl_claim,
+                    outcome_log_for_claim.as_ref(),
+                    dry_run,
+                ).await;
                 tokio::time::sleep(std::time::Duration::from_secs(claim_interval)).await;
             }
         });
@@ -327,7 +384,12 @@ async fn main() -> Result<()> {
     let genome_client = GenomeClient::new(&genome_sse_url);
     let (intent_tx, mut intent_rx) = mpsc::channel(100);
     let debridge_poller = DeBridgePoller::default_mainnet();
-    let across_poller = AcrossPoller::default_mainnet();
+    let solver_evm_addr = lambda_controller.as_ref()
+        .map(|c| format!("{:?}", c.signer.address()).to_lowercase());
+    let across_poller = AcrossPoller {
+        solver_address: solver_evm_addr,
+        ..AcrossPoller::default_mainnet()
+    };
     let _genome_handle = tokio::spawn(async move {
         if let Err(e) = genome_client
             .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
@@ -345,13 +407,26 @@ async fn main() -> Result<()> {
     // a deposit_id is resolvable). TTL is session-scoped — no persistence needed.
     let mut dispatched: HashSet<String> = HashSet::new();
 
+    // LiFi retry channel: when li.quest returns Pending we spawn a task that
+    // sleeps 15s and re-queues the intent here instead of relying on genome
+    // to re-emit it (which may never happen or may be too slow).
+    let (lifi_retry_tx, mut lifi_retry_rx) = mpsc::channel::<Intent>(64);
+    // Per-intent retry counter — abandon after 5 attempts (~75s total).
+    let mut lifi_retry_counts: HashMap<String, u8> = HashMap::new();
+
     // Concurrency cap: at most 2 fills in-flight simultaneously.
     // Each spawned fill holds a permit for its full lifecycle (execute + claim),
     // so a third intent waits until one of the two completes its claim.
     let fill_semaphore = Arc::new(Semaphore::new(2));
 
     // ── Main loop ─────────────────────────────────────────────────────────────
-    while let Some(intent) = intent_rx.recv().await {
+    loop {
+    let intent = tokio::select! {
+        biased;
+        Some(i) = lifi_retry_rx.recv() => i,
+        Some(i) = intent_rx.recv() => i,
+        else => break,
+    };
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         info!("📥 {} ({}) {}→{} amt={}", intent.id, intent.protocol,
               intent.src_chain, intent.dst_chain, intent.amount);
@@ -384,6 +459,9 @@ async fn main() -> Result<()> {
                     actual_profit_usd: None,
                     skip_reason: Some(reason),
                     error: None,
+                    solver_id: None,
+                    claim_tx_hash: None,
+                    claim_fee_usd: None,
                 });
             }
             solver_api.emit_event(SolverEvent::IntentAttempted(AttemptData {
@@ -394,6 +472,58 @@ async fn main() -> Result<()> {
                 gas_cost_usd: 0.0,
                 decision: "skip".into(),
             }));
+            continue;
+        }
+
+        // ── Portfolio-capacity pre-filters ───────────────────────────────────────
+        // Drop intents outside the configured chain set or amount range *before*
+        // the li.quest API call and enrichment RPC, so we waste no resources on
+        // orders the wallet provably cannot fill.
+        if !dst_chain_filter.is_empty() && !dst_chain_filter.contains(&intent.dst_chain) {
+            info!("⏭️  chain_filter skip (dst={} not in {:?}): {}", intent.dst_chain, dst_chain_filter, intent.id);
+            continue;
+        }
+        // intent.amount is the raw token amount (wei / micro-USDC), but Mayan
+        // reports amounts as decimal ETH floats (e.g. "0.0011"). We do a rough
+        // USD estimate using the token address and decimal heuristic — good enough
+        // for coarse capacity gating.
+        let approx_usd = {
+            let s = intent.amount.trim_start_matches("0x");
+            let t = intent.src_token.to_lowercase();
+            let is_stable = t.contains("usdc") || t.contains("usdt")
+                || t == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                || t == "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
+                || t == "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+                || t == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+                || t == "0xdac17f958d2ee523a2206206994597c13d831ec7"
+                || t == "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"
+                || t == "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58"
+                || t == "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
+                || t == "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
+                || t == "0xc2132d05d31c914a87c6611c10748aeb04b58e8f";
+            // Mayan-style float (decimal point) — already human-readable token amount
+            if s.contains('.') {
+                let amt: f64 = s.parse().unwrap_or(0.0);
+                if is_stable { amt } else { amt * 3700.0 }
+            } else {
+                let raw: u128 = s.parse::<u128>()
+                    .or_else(|_| u128::from_str_radix(s, 16))
+                    .unwrap_or(0);
+                // Magnitude fallback: 6-dec range (100k–100M = $0.10–$100 as micro-USDC)
+                let is_6dec = is_stable || (raw >= 100_000 && raw <= 100_000_000);
+                if is_6dec {
+                    raw as f64 / 1_000_000.0
+                } else {
+                    (raw as f64 / 1e18) * 3700.0
+                }
+            }
+        };
+        if approx_usd > max_input_usd && max_input_usd > 0.0 {
+            info!("⏭️  amount_cap skip (≈${:.2}>max=${:.2}): {}", approx_usd, max_input_usd, intent.id);
+            continue;
+        }
+        if approx_usd < min_input_usd {
+            info!("⏭️  amount_floor skip (≈${:.2}<min=${:.2}): {}", approx_usd, min_input_usd, intent.id);
             continue;
         }
 
@@ -481,9 +611,45 @@ async fn main() -> Result<()> {
                         }
                         LifiBridgeResult::Pending => {
                             if bridge.is_empty() {
-                                // li.quest hasn't indexed the tx yet — retry on next genome event.
-                                dispatched.remove(&dedup_key);
-                                info!("⏭️  lifi retry-on-next (li.quest pending): {}", intent.id);
+                                // li.quest hasn't indexed the tx yet. Keep in `dispatched` so
+                                // duplicate genome events don't cause a double attempt, but spawn
+                                // a background retry after 15 s instead of relying on genome re-emit.
+                                let retry_count = lifi_retry_counts.entry(intent.id.clone()).or_insert(0);
+                                if *retry_count < 8 {
+                                    *retry_count += 1;
+                                    let attempt = *retry_count;
+                                    // Back-off: 15s for attempts 1-3, 30s for attempts 4-8.
+                                    // li.quest can take >75s to index some Across txs.
+                                    // Total window: 3×15 + 5×30 = 195s (~3.5 min).
+                                    let delay_secs = if attempt <= 3 { 15 } else { 30 };
+                                    let retry_intent = intent.clone();
+                                    let retry_tx = lifi_retry_tx.clone();
+                                    // Remove from dispatched so the retry attempt can re-enter the main loop.
+                                    dispatched.remove(&dedup_key);
+                                    // Issue #16: only log first attempt — avoids ≤8 records per intent.
+                                    if attempt == 1 {
+                                        log_enrichment_failure(
+                                            rule_skip_log.as_ref(),
+                                            &intent,
+                                            "lifi_bridge_pending",
+                                            None,
+                                        );
+                                    }
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                                        info!("🔄 LiFi retry #{} for {} (li.quest was pending, delay={}s)", attempt, retry_intent.id, delay_secs);
+                                        let _ = retry_tx.send(retry_intent).await;
+                                    });
+                                } else {
+                                    info!("⏭️  lifi give-up after 8 retries (li.quest still pending): {}", intent.id);
+                                    log_enrichment_failure(
+                                        rule_skip_log.as_ref(),
+                                        &intent,
+                                        "lifi_api_unavailable",
+                                        Some("li.quest still pending after 8 retries (~3.5min)".into()),
+                                    );
+                                    lifi_retry_counts.remove(&intent.id);
+                                }
                                 continue;
                             }
                         }
@@ -503,10 +669,25 @@ async fn main() -> Result<()> {
                 if let Some(ref stx) = api_sending_tx {
                     child.tx_hash = stx.clone();
                 } else if child.deposit_id.is_none() {
-                    // li.quest didn't return a sending tx yet — the Diamond tx is in-flight.
-                    // Remove from dispatched so the next genome event (placed/executed) can retry.
-                    dispatched.remove(&dedup_key);
-                    info!("⏭️  lifi retry-on-next (sending_tx pending): {}", intent.id);
+                    // li.quest resolved the bridge but hasn't returned sending.txHash yet.
+                    // Retry after 15 s rather than waiting for genome re-emit.
+                    let retry_count = lifi_retry_counts.entry(intent.id.clone()).or_insert(0);
+                    if *retry_count < 8 {
+                        *retry_count += 1;
+                        let attempt = *retry_count;
+                        let delay_secs = if attempt <= 3 { 15u64 } else { 30 };
+                        let retry_intent = intent.clone();
+                        let retry_tx = lifi_retry_tx.clone();
+                        dispatched.remove(&dedup_key);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                            info!("🔄 LiFi retry #{} for {} (sending_tx pending, delay={}s)", attempt, retry_intent.id, delay_secs);
+                            let _ = retry_tx.send(retry_intent).await;
+                        });
+                    } else {
+                        info!("⏭️  lifi give-up after 8 retries (sending_tx still pending): {}", intent.id);
+                        lifi_retry_counts.remove(&intent.id);
+                    }
                     continue;
                 }
                 if let Some(sc) = api_sending_chain {
@@ -545,6 +726,7 @@ async fn main() -> Result<()> {
                 }
                 info!("🔀 LiFi→{} projection: {} intent id={} src_chain={} tx={}",
                     bridge, intent.id, child.id, child.src_chain, &child.tx_hash[..child.tx_hash.len().min(18)]);
+                lifi_retry_counts.remove(&intent.id);
                 effective_intent = child;
                 &effective_intent
             }
@@ -601,6 +783,8 @@ async fn main() -> Result<()> {
             let is_mayan_spawn = effective_is_mayan;
             let is_lifi_spawn = is_lifi;
             let sem = Arc::clone(&fill_semaphore);
+            // Issue #16: enrichment-failure log handle for the spawned task.
+            let enrichment_log = rule_skip_log.clone();
             tokio::spawn(async move {
                 // Acquire permit — blocks until a slot is free (max 2 concurrent fills).
                 let _permit = match sem.acquire().await {
@@ -621,6 +805,23 @@ async fn main() -> Result<()> {
                             match ctrl.lambda_claim_debridge(&intent_owned).await {
                                 Ok(LambdaClaimOutcome::Claimed { tx_hash: claim_tx, fee_usd }) => {
                                     info!("💰 deBridge claimUnlock confirmed: {} (fee ~${:.4})", claim_tx, fee_usd);
+                                    // Issue #10: write claim_tx_hash + claim_fee_usd back onto
+                                    // the executed-fill row so the dashboard surfaces claim
+                                    // status and the retry loop can skip this intent.
+                                    if let Some(log) = enrichment_log.as_ref() {
+                                        let log = log.clone();
+                                        let intent_id_for_claim = intent_owned.id.clone();
+                                        let claim_tx_for_log = claim_tx.clone();
+                                        tokio::spawn(async move {
+                                            if let Err(e) = log.update_claim(
+                                                &intent_id_for_claim,
+                                                &claim_tx_for_log,
+                                                fee_usd,
+                                            ) {
+                                                warn!("outcome update_claim: {}", e);
+                                            }
+                                        });
+                                    }
                                 }
                                 Ok(LambdaClaimOutcome::NotEligible { reason }) => {
                                     warn!("⚠️  deBridge claim not eligible: {}", reason);
@@ -649,6 +850,25 @@ async fn main() -> Result<()> {
                     }
                     Ok(LambdaExecuteOutcome::Failed { stage, error: e }) => {
                         error!("❌ lambda_execute failed at {}: {}", stage, e);
+                        // Issue #16: persist enrichment failures with structured skip_reason.
+                        // `stage` values from lambda_controller that map to enrichment outages:
+                        //   "spinner_test_run" — POST /api/solver/test-run non-2xx / unreachable
+                        //   "proof_fetch"      — Across v5 proof bundle fetch (RPC-backed)
+                        //   "calldata_build"   — deBridge / Mayan adapter build incl. estimateGas
+                        // Anything else (broadcast, receipt) is post-enrichment, skip those.
+                        let skip_reason = match stage {
+                            "spinner_test_run" => Some("spinner_timeout"),
+                            "proof_fetch" | "calldata_build" => Some("gas_rpc_error"),
+                            _ => None,
+                        };
+                        if let Some(reason) = skip_reason {
+                            log_enrichment_failure(
+                                enrichment_log.as_ref(),
+                                &intent_owned,
+                                reason,
+                                Some(e),
+                            );
+                        }
                     }
                     Err(e) => error!("❌ lambda_execute fatal: {}", e),
                 }
@@ -697,12 +917,58 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Non-blocking enrichment-failure logger. Issue #16: when a pre-execute
+/// enrichment step (li.quest status, spinner /api/solver/test-run, gas-RPC)
+/// fails, we want a structured row in `solver_outcomes` so the dashboard /
+/// nemotron analyzer can surface enrichment outages without trawling stderr.
+/// The hot path must NOT pay for the SQLite write — clone the log handle
+/// (Arc-backed, micro-cheap) and `tokio::spawn` the actual `append`.
+fn log_enrichment_failure(
+    log: Option<&OutcomeLog>,
+    intent: &Intent,
+    skip_reason: &'static str,
+    error: Option<String>,
+) {
+    let Some(log) = log else { return };
+    let log = log.clone();
+    let rec = OutcomeRecord {
+        ts: Utc::now(),
+        intent_id: intent.id.clone(),
+        protocol: intent.protocol.clone(),
+        src_chain: intent.src_chain,
+        dst_chain: intent.dst_chain,
+        decision: "enrichment_failed".into(),
+        tx_hash: None,
+        predicted_gas: None,
+        gas_used: None,
+        effective_gas_price_wei: None,
+        predicted_profit_usd: None,
+        actual_profit_usd: None,
+        skip_reason: Some(skip_reason.into()),
+        error,
+        solver_id: None,
+        claim_tx_hash: None,
+        claim_fee_usd: None,
+    };
+    tokio::spawn(async move {
+        if let Err(e) = log.append(rec) {
+            warn!("enrichment_failed log append: {}", e);
+        }
+    });
+}
+
 /// Scan the wallet DB for deBridge fills in CONFIRMED state (fill tx landed but
 /// claimUnlock was never sent or failed) and fire claimUnlock for each.
 /// Runs every SIDECAR_INTERVAL_SECS as a background task inside solver-main.
+///
+/// Issue #10: when an `OutcomeLog` is configured, we cross-check the wallet's
+/// CONFIRMED list against `solver_outcomes.claim_tx_hash IS NULL` so already-
+/// claimed fills are skipped on subsequent ticks. After a successful
+/// `claimUnlock`, we write the claim tx + fee back onto the executed-fill row.
 async fn debridge_claim_retry_tick(
     wallet_db_path: &str,
     ctrl: &executor::LambdaController,
+    outcome_log: Option<&OutcomeLog>,
     dry_run: bool,
 ) {
     let wallet = match wallet_manager::WalletManager::open(wallet_db_path, 0.0) {
@@ -713,10 +979,34 @@ async fn debridge_claim_retry_tick(
         Ok(v) => v,
         Err(e) => { warn!("claim_retry: list_intents failed: {}", e); return; }
     };
-    let pending: Vec<_> = confirmed.iter().filter(|r| {
+    let mut pending: Vec<_> = confirmed.iter().filter(|r| {
         let p = r.protocol.to_lowercase();
         p.contains("debridge") || p.contains("dln")
     }).collect();
+
+    // Issue #10: filter out intents whose outcome row already has a
+    // claim_tx_hash. Skip-set is empty (no rows match) when the outcome
+    // log isn't configured or the query fails — fall through to the
+    // wallet-only behaviour rather than blocking the loop.
+    if let Some(log) = outcome_log {
+        match log.unclaimed_debridge_intents(1000) {
+            Ok(unclaimed) => {
+                use std::collections::HashSet;
+                let unclaimed_set: HashSet<&str> =
+                    unclaimed.iter().map(|s| s.as_str()).collect();
+                let before = pending.len();
+                pending.retain(|r| unclaimed_set.contains(r.intent_id.as_str()));
+                let skipped = before - pending.len();
+                if skipped > 0 {
+                    info!(
+                        "claim_retry: skipped {} already-claimed fill(s) via outcome log",
+                        skipped
+                    );
+                }
+            }
+            Err(e) => warn!("claim_retry: unclaimed_debridge_intents failed: {} — falling back to wallet-only filter", e),
+        }
+    }
 
     if pending.is_empty() { return; }
     info!("claim_retry: {} CONFIRMED deBridge fill(s) need claimUnlock", pending.len());
@@ -744,6 +1034,12 @@ async fn debridge_claim_retry_tick(
         match ctrl.lambda_claim_debridge(&intent).await {
             Ok(LambdaClaimOutcome::Claimed { tx_hash, fee_usd }) => {
                 info!("claim_retry: ✅ claimUnlock tx={} fee=${:.4} ({})", tx_hash, fee_usd, record.intent_id);
+                // Issue #10: persist claim outcome onto the executed-fill row.
+                if let Some(log) = outcome_log {
+                    if let Err(e) = log.update_claim(&record.intent_id, &tx_hash, fee_usd) {
+                        warn!("claim_retry: outcome update_claim failed for {}: {}", record.intent_id, e);
+                    }
+                }
             }
             Ok(LambdaClaimOutcome::NotEligible { reason }) => {
                 info!("claim_retry: not eligible {} — {}", record.intent_id, reason);
@@ -804,5 +1100,76 @@ async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
         });
     }
     None
+}
+
+// ─── Issue #8: Solver API bearer-token bootstrap ─────────────────────────────
+
+/// Resolve `SOLVER_API_TOKEN` for the current process. If the env var is set
+/// to a non-empty value, log a redacted notice and return. Otherwise generate
+/// a 32-byte hex token, set it in the process env (so the auth middleware
+/// reads it back), and print it once to stdout with a clearly-labelled line.
+fn ensure_solver_api_token() {
+    if let Ok(t) = std::env::var("SOLVER_API_TOKEN") {
+        if !t.trim().is_empty() {
+            info!(
+                "🔐 SOLVER_API_TOKEN: configured from env (len={})",
+                t.trim().len()
+            );
+            return;
+        }
+    }
+
+    let token = generate_hex_token_32();
+    // SAFETY: env mutation happens before we spawn the API task, so no
+    // concurrent reads race with this write. The auth middleware reads via
+    // std::env::var, which performs its own locking.
+    std::env::set_var("SOLVER_API_TOKEN", &token);
+
+    // Stdout, not tracing, so the line survives even if RUST_LOG is wonky.
+    // Format matches the brief: `SOLVER API TOKEN: <token>`.
+    println!(
+        "\n────────────────────────────────────────────────────────────────────\n\
+         SOLVER API TOKEN: {token}\n\
+         (auto-generated; set SOLVER_API_TOKEN to override before next start)\n\
+         ────────────────────────────────────────────────────────────────────\n"
+    );
+    info!("🔐 SOLVER_API_TOKEN: auto-generated (printed to stdout once)");
+}
+
+/// Read 32 random bytes from `/dev/urandom` and return them hex-encoded.
+/// `/dev/urandom` is the right primitive on macOS and Linux — both deliver
+/// cryptographically secure output. On read failure (extremely unlikely),
+/// fall back to a time-derived token *and log a warning* so an operator
+/// notices the degraded state.
+fn generate_hex_token_32() -> String {
+    use std::io::Read;
+
+    fn try_urandom() -> std::io::Result<[u8; 32]> {
+        let mut buf = [0u8; 32];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+
+    match try_urandom() {
+        Ok(bytes) => bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>(),
+        Err(e) => {
+            warn!(
+                "/dev/urandom read failed ({}) — falling back to time-derived token. \
+                 Set SOLVER_API_TOKEN explicitly in production.",
+                e
+            );
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let pid = std::process::id();
+            // Mix nanos + pid to at least vary the fallback across restarts.
+            // Not crypto-grade — that's why we logged a warning above.
+            format!("{:032x}{:032x}", now, pid as u128)
+        }
+    }
 }
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
+import { use, useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import {
   useSolverEvents,
@@ -16,6 +16,8 @@ import {
 } from '@/hooks/useSolverEvents'
 import { NavBar, Footer, Card, CardHeader, Badge, StatTile, Button, Tag } from '@/components/ui'
 import LivePnL from '@/components/LivePnL'
+import ClaimsPanel from '@/components/ClaimsPanel'
+import PortfolioPanel from '@/components/PortfolioPanel'
 
 // ── Chain badge ──────────────────────────────────────────────────────────────
 function Chain({ id }: { id: number }) {
@@ -248,6 +250,140 @@ function EventTicker({ events }: { events: LiveEvent[] }) {
   )
 }
 
+// ── Open Orders Panel ────────────────────────────────────────────────────────
+interface OpenIntent {
+  intent_id: string
+  protocol: string
+  state: string
+  amount_usd: number
+  src_chain: number
+  dst_chain: number
+  created_at: string
+  age_secs: number
+  tx_hash?: string
+  error?: string
+}
+
+const STATE_COLOR: Record<string, string> = {
+  CALLDATA_BUILD: '#FFB800',
+  BROADCAST: '#00BFFF',
+  PENDING_CONFIRMATION: '#00BFFF',
+  REVERTED: '#FF4444',
+  INTENT_DETECTED: '#555555',
+}
+
+// States where WE have committed capital — vs just observed the intent
+const WE_ARE_FILLING = new Set(['CALLDATA_BUILD', 'BROADCAST', 'PENDING_CONFIRMATION'])
+const STATE_LABEL: Record<string, string> = {
+  CALLDATA_BUILD:       '🔨 Building tx (capital reserved)',
+  BROADCAST:            '📡 Tx sent — waiting',
+  PENDING_CONFIRMATION: '⏳ Pending confirmation',
+  REVERTED:             '❌ Reverted — check error',
+  INTENT_DETECTED:      '👁 Observed only — not filling',
+}
+
+function OpenOrdersPanel() {
+  const [orders, setOrders] = useState<OpenIntent[]>([])
+  const [count, setCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+
+  const fetch_ = useCallback(async () => {
+    try {
+      const r = await fetch('/api/solver/open-intents')
+      if (r.ok) {
+        const d = await r.json()
+        setOrders(d.open_intents ?? [])
+        setCount(d.count ?? 0)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetch_()
+    const id = setInterval(fetch_, 5_000)
+    return () => clearInterval(id)
+  }, [fetch_])
+
+  const stateGroups: Record<string, number> = {}
+  orders.forEach((o) => { stateGroups[o.state] = (stateGroups[o.state] ?? 0) + 1 })
+
+  return (
+    <Card padding="none">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
+        <div className="flex items-center gap-2">
+          <Tag>Open Orders</Tag>
+          {orders.filter(o => WE_ARE_FILLING.has(o.state)).length > 0 && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FFB80022] text-[var(--warning)] animate-pulse">
+              {orders.filter(o => WE_ARE_FILLING.has(o.state)).length} WE ARE FILLING
+            </span>
+          )}
+          {orders.filter(o => o.state === 'REVERTED').length > 0 && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FF444422] text-[var(--danger)]">
+              {orders.filter(o => o.state === 'REVERTED').length} REVERTED
+            </span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {Object.entries(stateGroups).map(([s, n]) => (
+            <span key={s} className="text-[10px] font-mono" style={{ color: STATE_COLOR[s] ?? '#888' }}>
+              {n} {s.replace(/_/g, ' ').toLowerCase()}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="divide-y divide-[var(--border-subtle)] max-h-[400px] overflow-y-auto px-3 py-1">
+        {loading && (
+          <div className="text-[var(--text-tertiary)] text-xs text-center py-6">Loading…</div>
+        )}
+        {!loading && orders.length === 0 && (
+          <div className="text-[var(--success)] text-xs text-center py-6">✅ No open orders</div>
+        )}
+        {[...orders].sort((a, b) => {
+          const ap = WE_ARE_FILLING.has(a.state) ? 0 : a.state === 'REVERTED' ? 1 : 2
+          const bp = WE_ARE_FILLING.has(b.state) ? 0 : b.state === 'REVERTED' ? 1 : 2
+          return ap - bp
+        }).slice(0, 80).map((o) => {
+          const color = STATE_COLOR[o.state] ?? '#888'
+          const isReverted = o.state === 'REVERTED'
+          const ageMin = Math.floor(o.age_secs / 60)
+          return (
+            <div key={o.intent_id} className="py-2 border-l-2 pl-3 my-1 rounded-r"
+              style={{ borderLeftColor: color, background: isReverted ? '#FF444410' : `${color}08` }}>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 min-w-0">
+                  <ProtoPill proto={o.protocol} />
+                  <Chain id={o.src_chain} />
+                  <span className="text-[var(--text-tertiary)] text-xs">→</span>
+                  <Chain id={o.dst_chain} />
+                  <span className="font-mono text-xs text-[var(--text-secondary)]">
+                    ${o.amount_usd.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                    style={{ color, background: `${color}1a` }}>
+                    {STATE_LABEL[o.state] ?? o.state}
+                  </span>
+                  <span className="text-[10px] font-mono text-[var(--text-tertiary)]">
+                    {ageMin > 0 ? `${ageMin}m ago` : `${o.age_secs}s ago`}
+                  </span>
+                </div>
+              </div>
+              {o.error && (
+                <div className="text-[10px] text-[var(--danger)] font-mono mt-1 truncate">
+                  {o.error}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
 interface PageProps {
   params: Promise<{ solverId: string }>
 }
@@ -321,6 +457,16 @@ export default function SolverMonitorPage({ params }: PageProps) {
         {/* Realized P&L from outcome log (solver-api /api/solver/pnl + /outcomes) */}
         <section className="max-w-[1400px] mx-auto px-6 py-6">
           <LivePnL />
+        </section>
+
+        {/* Claims tab — deBridge claim lifecycle (solver-api /api/solver/claims) */}
+        <section className="max-w-[1400px] mx-auto px-6 pb-6">
+          <ClaimsPanel />
+        </section>
+
+        {/* Portfolio tab — per-chain inventory + rebalancer (solver-api /api/solver/portfolio) */}
+        <section className="max-w-[1400px] mx-auto px-6 pb-6">
+          <PortfolioPanel />
         </section>
 
         {/* Main content */}
@@ -406,6 +552,8 @@ export default function SolverMonitorPage({ params }: PageProps) {
                 )
               })}
             </Card>
+
+            <OpenOrdersPanel />
 
             <Card padding="md">
               <CardHeader title="Solver Logs" />

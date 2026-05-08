@@ -269,7 +269,13 @@ impl Executor {
 
         // TODO: Wait for LWC to provide liquidity on destination
         // TODO: Execute fill transaction
-        // TODO: LWC will automatically claim from source
+        //
+        // T3RN LWC fee distribution: fees are collected by the LiquidityWellCompact
+        // contract on the destination chain and the protocol distributes the solver
+        // reward to the signer address that called `order()`. No explicit claim call
+        // is required — `T3RNSidecar` exposes `can_provide_liquidity` and `fill` only,
+        // with no `claim`/`withdraw`/`settle` method. See README.md §"LWC Order Flow"
+        // step 4 ("LWC automatically claims from source chain").
 
         Err(anyhow!("T3RN LWC execution not yet implemented"))
     }

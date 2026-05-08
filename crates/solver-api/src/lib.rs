@@ -1,13 +1,19 @@
 use axum::{
     Router,
-    routing::get,
+    routing::{get, post},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse,
         Json,
+        Response,
     },
     extract::State,
+    http::{header, Request, StatusCode},
+    middleware::{self, Next},
+    body::Body,
 };
+use wallet_manager::WalletManager;
+use portfolio_sidecar::{ActionLogEntry, PortfolioSidecar, rebalancer::BridgeAction};
 use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -160,6 +166,8 @@ pub struct ApiState {
     razor_cache: Arc<RwLock<HashMap<u64, RazorGasPreset>>>,
     warmbed_api_url: String,
     http_client: reqwest::Client,
+    wallet_db_path: String,
+    wallet_manager: std::sync::OnceLock<Arc<WalletManager>>,
     /// Optional outcome log — when set, exposes /api/solver/outcomes and
     /// /api/solver/pnl endpoints reading realized P&L from rusqlite.
     /// `OnceLock` so solver-main can inject it after the router has already
@@ -167,6 +175,17 @@ pub struct ApiState {
     /// after a single set.
     outcome_log: std::sync::OnceLock<Arc<executor::OutcomeLog>>,
     pnl_cache: Arc<RwLock<PnlCache>>,
+    /// Optional portfolio sidecar — when set, exposes
+    /// `POST /api/solver/rebalance` (manual trigger) and
+    /// `GET  /api/solver/rebalancer/status`. `OnceLock` so solver-main can
+    /// inject after the router has been built and cloned to handlers.
+    sidecar: std::sync::OnceLock<Arc<PortfolioSidecar>>,
+    /// Optional Lambda controller — when set, exposes
+    /// `POST /api/solver/claims/{intent_id}/retry` so the dashboard Claims tab
+    /// can fire `claimUnlock` out-of-band. `OnceLock` so solver-main can
+    /// inject after the router is built.
+    lambda_controller:
+        std::sync::OnceLock<Arc<executor::LambdaController>>,
 }
 
 /// Main solver API
@@ -187,6 +206,8 @@ impl SolverApi {
 
         let warmbed_api_url = std::env::var("WARMBED_API_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string());
+        let wallet_db_path = std::env::var("WALLET_DB_PATH")
+            .unwrap_or_else(|_| "/tmp/taifoon_solver_wallet.sqlite".to_string());
 
         let log_buffer = Arc::new(RwLock::new(VecDeque::with_capacity(500)));
         // Keep log_buffer in sync with log_tx broadcasts
@@ -216,10 +237,34 @@ impl SolverApi {
                 })),
                 razor_cache: Arc::new(RwLock::new(HashMap::new())),
                 warmbed_api_url,
+                wallet_db_path,
+                wallet_manager: std::sync::OnceLock::new(),
                 http_client: reqwest::Client::new(),
                 outcome_log: std::sync::OnceLock::new(),
                 pnl_cache: Arc::new(RwLock::new(PnlCache::default())),
+                sidecar: std::sync::OnceLock::new(),
+                lambda_controller: std::sync::OnceLock::new(),
             }),
+        }
+    }
+
+    /// Inject the `LambdaController` so the Claims-tab retry endpoint can fire
+    /// `lambda_claim_debridge` out-of-band. First call wins.
+    pub fn set_lambda_controller(
+        &self,
+        ctrl: Arc<executor::LambdaController>,
+    ) {
+        if self.state.lambda_controller.set(ctrl).is_err() {
+            tracing::warn!("set_lambda_controller called twice — ignoring second call");
+        }
+    }
+
+    /// Inject the `PortfolioSidecar` so the rebalance trigger + status
+    /// endpoints can call `tick()` and read `state` out-of-band. First call
+    /// wins; subsequent calls log a warning and are ignored.
+    pub fn set_portfolio_sidecar(&self, sidecar: Arc<PortfolioSidecar>) {
+        if self.state.sidecar.set(sidecar).is_err() {
+            tracing::warn!("set_portfolio_sidecar called twice — ignoring second call");
         }
     }
 
@@ -235,9 +280,18 @@ impl SolverApi {
         }
     }
 
-    /// Get router for Axum server
+    pub fn set_wallet_manager(&self, wm: Arc<WalletManager>) {
+        let _ = self.state.wallet_manager.set(wm);
+    }
+
+    /// Get router for Axum server.
+    ///
+    /// Issue #8: every `/api/solver/*` route is gated by
+    /// `require_solver_api_token` (Bearer `SOLVER_API_TOKEN`). `/health` is
+    /// intentionally outside the gated subrouter so monitoring and load
+    /// balancers can probe without credentials.
     pub fn router(&self) -> Router {
-        Router::new()
+        let solver_api = Router::new()
             .route("/api/solver/stream", get(stream_handler))
             .route("/api/solver/logs", get(logs_handler))
             .route("/api/solver/stats", get(stats_handler))
@@ -248,8 +302,21 @@ impl SolverApi {
             .route("/api/solver/portfolio", get(portfolio_handler))
             .route("/api/solver/outcomes", get(outcomes_handler))
             .route("/api/solver/pnl", get(pnl_handler))
+            .route("/api/solver/open-intents", get(open_intents_handler))
+            .route("/api/solver/rebalance", post(rebalance_handler))
+            .route("/api/solver/rebalancer/status", get(rebalancer_status_handler))
+            .route("/api/solver/claims", get(claims_handler))
+            .route(
+                "/api/solver/claims/:intent_id/retry",
+                post(claim_retry_handler),
+            )
+            .route_layer(middleware::from_fn(require_solver_api_token))
+            .with_state(self.state.clone());
+
+        Router::new()
+            .route("/health", get(health_handler))
+            .merge(solver_api)
             .layer(tower_http::cors::CorsLayer::permissive())
-            .with_state(self.state.clone())
     }
 
     /// Get the log broadcast sender so main.rs can push tracing lines
@@ -597,6 +664,15 @@ pub struct PortfolioFillStats {
     pub realized_profit_usd: f64,
 }
 
+/// LWC well state for a single chain, as returned by /t3rn/status proxy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LwcChainInfo {
+    pub chain_id: u64,
+    pub chain_key: String,
+    pub available_usd: f64,
+    pub status: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PortfolioResponse {
     pub solver_address: String,
@@ -605,6 +681,19 @@ pub struct PortfolioResponse {
     pub chains: Vec<ChainInventory>,
     pub fills: PortfolioFillStats,
     pub as_of: DateTime<Utc>,
+    /// LWC well states from the t3rn solver (may be empty if solver is not running).
+    #[serde(default)]
+    pub lwc_chains: Vec<LwcChainInfo>,
+    /// Solver Solana wallet native balance, in SOL. `None` when SOLANA_ADDRESS
+    /// is unset or the Solana RPC was unreachable on this request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solana_sol_balance: Option<f64>,
+    /// Classification of the Solana wallet gas position. Mirrors the
+    /// `portfolio_sidecar::inventory::SolanaGasStatus` thresholds (LOW < 0.005,
+    /// WARN < 0.01). One of: "healthy" | "warn" | "low_gas" | "unknown".
+    /// Absent when SOLANA_ADDRESS is unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solana_gas_status: Option<String>,
 }
 
 async fn eth_balance_f64(client: &reqwest::Client, rpc: &str, addr: &str) -> Option<f64> {
@@ -802,8 +891,31 @@ async fn portfolio_handler(
             .map(|(_, _, rpc)| rpc.clone())
             .unwrap_or_else(|| "https://api.mainnet-beta.solana.com".to_string())
     };
+    // Solana SOL gas threshold mirrors portfolio_sidecar::inventory::MIN_SOLANA_SOL
+    // and WARN_SOLANA_SOL. Keep these in sync with inventory.rs.
+    const MIN_SOLANA_SOL: f64 = 0.005;
+    const WARN_SOLANA_SOL: f64 = 0.01;
+
+    let mut solana_sol_balance: Option<f64> = None;
+    let mut solana_gas_status: Option<String> = None;
     if let Some(ref pubkey) = solana_addr {
         let (sol, usdc) = sol_balances_f64(client, &sol_rpc, pubkey).await;
+        // Classify gas status. `None` from sol_balances_f64 means RPC was
+        // unreachable — surface as "unknown" rather than misreporting low_gas.
+        solana_gas_status = Some(match sol {
+            None => "unknown".to_string(),
+            Some(s) if s < MIN_SOLANA_SOL => "low_gas".to_string(),
+            Some(s) if s < WARN_SOLANA_SOL => "warn".to_string(),
+            Some(_) => "healthy".to_string(),
+        });
+        solana_sol_balance = sol;
+        if matches!(solana_gas_status.as_deref(), Some("low_gas")) {
+            tracing::warn!(
+                "Solana wallet low on SOL: have={:.6} sol need={:.3} sol",
+                sol.unwrap_or(0.0),
+                WARN_SOLANA_SOL
+            );
+        }
         chains.push(ChainInventory {
             chain_id: 1_399_811_149,
             chain_name: "Solana".into(),
@@ -825,12 +937,32 @@ async fn portfolio_handler(
     };
     drop(stats);
 
+    // Fetch LWC well states from the t3rn solver sidecar (best-effort).
+    let t3rn_port = std::env::var("T3RN_SOLVER_PORT")
+        .ok().and_then(|s| s.parse::<u16>().ok()).unwrap_or(8092);
+    let lwc_chains: Vec<LwcChainInfo> = match client
+        .get(format!("http://127.0.0.1:{}/t3rn/status", t3rn_port))
+        .timeout(std::time::Duration::from_secs(2))
+        .send().await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<serde_json::Value>().await
+                .ok()
+                .and_then(|v| v.get("chains").and_then(|c| serde_json::from_value::<Vec<LwcChainInfo>>(c.clone()).ok()))
+                .unwrap_or_default()
+        }
+        _ => vec![],
+    };
+
     Json(PortfolioResponse {
         solver_address: solver_addr,
         solana_address: solana_addr,
         chains,
         fills,
         as_of: Utc::now(),
+        lwc_chains,
+        solana_sol_balance,
+        solana_gas_status,
     })
 }
 
@@ -844,6 +976,9 @@ pub struct OutcomesQuery {
     /// Number of records to return, newest first. Default 50, max 500.
     #[serde(default)]
     pub limit: Option<i64>,
+    /// Filter by solver address or name (matches `solver_id` column).
+    #[serde(default)]
+    pub solver_id: Option<String>,
 }
 
 /// Single outcome record exposed via the dashboard API. Mirrors
@@ -867,6 +1002,21 @@ pub struct OutcomeApiRecord {
     pub actual_profit_usd: Option<f64>,
     pub skip_reason: Option<String>,
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_id: Option<String>,
+    /// Issue #10: source-chain `claimUnlock()` tx hash (deBridge). NULL until
+    /// the claim confirms. Front-end uses presence/absence to drive the
+    /// "Claim pending" badge in `ClaimsPanel`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_tx_hash: Option<String>,
+    /// Issue #10: USD value of the released spread, co-populated with
+    /// `claim_tx_hash`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_fee_usd: Option<f64>,
+    /// Source-chain explorer URL for `claim_tx_hash`, computed server-side
+    /// so the dashboard doesn't need per-chain explorer awareness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_explorer_url: Option<String>,
 }
 
 fn explorer_url_for(chain_id: u64, tx_hash: &str) -> Option<String> {
@@ -896,13 +1046,16 @@ async fn outcomes_handler(
     axum::extract::Query(q): axum::extract::Query<OutcomesQuery>,
 ) -> Json<Vec<OutcomeApiRecord>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let solver_id = q.solver_id.clone();
     let log = match state.outcome_log.get() {
         Some(l) => l.clone(),
         None => return Json(Vec::new()),
     };
 
     let log_clone = log.clone();
-    let recs = tokio::task::spawn_blocking(move || log_clone.recent(limit))
+    let recs = tokio::task::spawn_blocking(move || {
+        log_clone.recent_for(limit, solver_id.as_deref())
+    })
         .await
         .unwrap_or_else(|_| Ok(Vec::new()))
         .unwrap_or_default();
@@ -914,6 +1067,12 @@ async fn outcomes_handler(
                 .tx_hash
                 .as_deref()
                 .and_then(|tx| explorer_url_for(r.dst_chain, tx));
+            // Claim happens on the source chain (deBridge), so resolve the
+            // explorer URL against `src_chain`, not `dst_chain`.
+            let claim_explorer_url = r
+                .claim_tx_hash
+                .as_deref()
+                .and_then(|tx| explorer_url_for(r.src_chain, tx));
             OutcomeApiRecord {
                 ts: r.ts.to_rfc3339(),
                 intent_id: r.intent_id,
@@ -930,6 +1089,10 @@ async fn outcomes_handler(
                 actual_profit_usd: r.actual_profit_usd,
                 skip_reason: r.skip_reason,
                 error: r.error,
+                solver_id: r.solver_id,
+                claim_tx_hash: r.claim_tx_hash,
+                claim_fee_usd: r.claim_fee_usd,
+                claim_explorer_url,
             }
         })
         .collect();
@@ -989,4 +1152,569 @@ async fn pnl_handler(
     }
 
     Json(summary)
+}
+
+async fn open_intents_handler(
+    State(state): State<Arc<ApiState>>,
+) -> impl IntoResponse {
+    let now = chrono::Utc::now();
+    let wm = match state.wallet_manager.get() {
+        Some(w) => w.clone(),
+        None => return Json(serde_json::json!({ "open_intents": [], "count": 0, "error": "wallet_manager_not_wired" })),
+    };
+    let open_states = ["CALLDATA_BUILD", "BROADCAST", "PENDING_CONFIRMATION", "REVERTED", "INTENT_DETECTED"];
+    let mut all: Vec<serde_json::Value> = Vec::new();
+    for s in &open_states {
+        if let Ok(records) = wm.list_intents(Some(s), 100) {
+            for r in records {
+                let age_secs = (now - r.created_at).num_seconds();
+                all.push(serde_json::json!({
+                    "intent_id": r.intent_id,
+                    "protocol": r.protocol,
+                    "state": r.state,
+                    "amount_usd": r.amount_usd,
+                    "src_chain": r.src_chain,
+                    "dst_chain": r.dst_chain,
+                    "created_at": r.created_at.to_rfc3339(),
+                    "age_secs": age_secs,
+                    "tx_hash": r.tx_hash,
+                    "error": r.error,
+                }));
+            }
+        }
+    }
+    all.sort_by(|a, b| {
+        let ta = a["created_at"].as_str().unwrap_or("");
+        let tb = b["created_at"].as_str().unwrap_or("");
+        tb.cmp(ta)
+    });
+    let count = all.len();
+    Json(serde_json::json!({ "open_intents": all, "count": count }))
+}
+
+// =============================================================================
+// Rebalancer manual trigger + status (auth-gated)
+// =============================================================================
+
+/// Bearer-token auth for `/api/solver/*`. Reads `SOLVER_API_TOKEN` from the
+/// environment and compares it against the `Authorization: Bearer <token>`
+/// header.
+///
+/// Issue #8: any failure mode (missing env, missing header, wrong scheme,
+/// mismatched token) returns `401 Unauthorized` with body
+/// `{"error":"unauthorized"}` — the contract the brief specified.
+/// `SOLVER_API_TOKEN` unset is treated as fail-closed: callers cannot
+/// distinguish a misconfigured server from a wrong token, which is the
+/// correct posture for an authentication boundary.
+async fn require_solver_api_token(req: Request<Body>, next: Next) -> Response {
+    let unauthorized = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "unauthorized" })),
+        )
+            .into_response()
+    };
+
+    let expected = match std::env::var("SOLVER_API_TOKEN") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => return unauthorized(),
+    };
+
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::trim)
+        .unwrap_or("");
+
+    if provided.is_empty() || provided != expected {
+        return unauthorized();
+    }
+
+    next.run(req).await
+}
+
+/// `GET /health` — unauthenticated liveness probe. Returns `200 OK` with a
+/// small JSON envelope. Used by load balancers, orchestrators, and the
+/// dashboard's at-a-glance availability check. Intentionally outside the
+/// `require_solver_api_token` gate.
+async fn health_handler() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "taifoon-solver-api",
+    }))
+}
+
+/// Single bridge action surfaced by the rebalance trigger response. Mirrors
+/// the brief's contract: `src_chain`, `dst_chain`, `amount_usd`, `tx_hash`.
+#[derive(Debug, Serialize)]
+pub struct RebalanceActionApi {
+    pub src_chain: u64,
+    pub dst_chain: u64,
+    pub amount_usd: f64,
+    pub tx_hash: Option<String>,
+}
+
+impl From<&BridgeAction> for RebalanceActionApi {
+    fn from(a: &BridgeAction) -> Self {
+        Self {
+            src_chain: a.src_chain,
+            dst_chain: a.dst_chain,
+            amount_usd: a.amount_usd,
+            tx_hash: a.tx_hash.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct RebalanceTriggerResponse {
+    pub bridges: Vec<RebalanceActionApi>,
+    pub skipped_reason: Option<String>,
+}
+
+/// POST /api/solver/rebalance
+///
+/// Fires one rebalance cycle out-of-band, blocks until it completes, and
+/// returns the bridge actions taken. If the background loop is currently
+/// running a tick we surface `skipped_reason: "rebalance_in_progress"` rather
+/// than queuing a parallel scan.
+async fn rebalance_handler(
+    State(state): State<Arc<ApiState>>,
+) -> impl IntoResponse {
+    let sidecar = match state.sidecar.get() {
+        Some(s) => s.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(RebalanceTriggerResponse {
+                    bridges: Vec::new(),
+                    skipped_reason: Some("rebalancer_not_configured".to_string()),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Refuse to queue a second concurrent tick.
+    let guard = match sidecar.try_lock_tick() {
+        Some(g) => g,
+        None => {
+            return (
+                StatusCode::CONFLICT,
+                Json(RebalanceTriggerResponse {
+                    bridges: Vec::new(),
+                    skipped_reason: Some("rebalance_in_progress".to_string()),
+                }),
+            )
+                .into_response();
+        }
+    };
+    // Drop the guard before calling tick(); tick() takes the lock itself.
+    drop(guard);
+
+    tracing::info!("manual rebalance trigger via /api/solver/rebalance");
+    let actions = sidecar.tick().await;
+
+    let bridges: Vec<RebalanceActionApi> = actions.iter().map(Into::into).collect();
+    let skipped_reason = if bridges.is_empty() {
+        Some("no_actions_needed".to_string())
+    } else {
+        None
+    };
+
+    (
+        StatusCode::OK,
+        Json(RebalanceTriggerResponse {
+            bridges,
+            skipped_reason,
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Serialize)]
+pub struct RebalancerStatusResponse {
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub next_run_at: Option<DateTime<Utc>>,
+    pub last_actions: Vec<ActionLogEntry>,
+    pub blocked_reason: Option<String>,
+    pub interval_secs: u64,
+    pub cycle: u64,
+}
+
+/// GET /api/solver/rebalancer/status
+///
+/// Returns the most recent scan timestamp, the next scheduled tick (computed
+/// from `last_run_at + interval_secs`), the last 10 logged actions, and any
+/// blocked-state reason. Returns `503` when the sidecar isn't wired.
+async fn rebalancer_status_handler(
+    State(state): State<Arc<ApiState>>,
+) -> impl IntoResponse {
+    let sidecar = match state.sidecar.get() {
+        Some(s) => s.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "rebalancer_not_configured",
+                    "message": "PortfolioSidecar was not registered on this solver-api instance"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let interval_secs = sidecar.interval_secs();
+    let snapshot = sidecar.state.read().await;
+    let last_run_at = snapshot.last_scan;
+    let cycle = snapshot.cycle;
+
+    // Clone the most recent 10 entries so the response stays bounded.
+    let last_actions: Vec<ActionLogEntry> = snapshot
+        .action_log
+        .iter()
+        .rev()
+        .take(10)
+        .cloned()
+        .collect();
+
+    let next_run_at = match (last_run_at, interval_secs) {
+        (Some(t), n) if n > 0 => Some(t + chrono::Duration::seconds(n as i64)),
+        _ => None,
+    };
+
+    // The currently-locked rebalance loop is the only "blocked" state we can
+    // detect from outside the sidecar. Anything else (e.g. SOLVER_PRIVATE_KEY
+    // unset, RPC outage) is invisible from here without coupling solver-api
+    // to the rebalancer's internals.
+    let blocked_reason = if sidecar.try_lock_tick().is_none() {
+        Some("rebalance_in_progress".to_string())
+    } else {
+        None
+    };
+
+    drop(snapshot);
+
+    (
+        StatusCode::OK,
+        Json(RebalancerStatusResponse {
+            last_run_at,
+            next_run_at,
+            last_actions,
+            blocked_reason,
+            interval_secs,
+            cycle,
+        }),
+    )
+        .into_response()
+}
+
+// =============================================================================
+// Claims tab — deBridge claim lifecycle visibility + manual retry (auth-gated)
+// =============================================================================
+
+/// Single row returned by `GET /api/solver/claims`. The brief calls for
+/// `intent_id, fill_tx_hash, claim_tx_hash, claim_fee_usd, created_at,
+/// age_minutes` — see field-level docs for how each is derived.
+#[derive(Debug, Serialize)]
+pub struct ClaimRow {
+    pub intent_id: String,
+    pub protocol: String,
+    pub src_chain: i64,
+    pub dst_chain: i64,
+    pub amount_usd: f64,
+    /// Wallet state. One of `CONFIRMED` (claim never sent), `CLAIM_PENDING`
+    /// (claim broadcast, awaiting receipt), `CLAIMED` (terminal — claim tx
+    /// confirmed), or `REVERTED` (fill or claim reverted).
+    pub wallet_state: String,
+    /// "pending" | "claimed" | "reverted" — derived from `wallet_state` so
+    /// dashboards don't need to know the wallet state machine. Matches the
+    /// brief: Pending vs Claimed.
+    pub claim_status: String,
+    /// Original fill tx hash. Recovered from `solver_outcomes` because the
+    /// wallet `tx_hash` field is overwritten by the `Claimed` transition on
+    /// successful claim.
+    pub fill_tx_hash: Option<String>,
+    /// `null` when the claim is pending. Set to the wallet `tx_hash` on
+    /// `CLAIMED` rows (which is the claim tx after the transition).
+    pub claim_tx_hash: Option<String>,
+    /// Realized claim fee in USD. From `wallet.revenue.profit_usd`, populated
+    /// only after `lambda_claim_debridge` calls `record_revenue`.
+    pub claim_fee_usd: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    pub age_minutes: i64,
+    pub error: Option<String>,
+}
+
+/// GET /api/solver/claims
+/// Token-gated. Returns the rows from the wallet `intents` table where
+/// protocol matches `%debridge%`/`%dln%` and the intent has reached the claim
+/// lifecycle (CONFIRMED/CLAIM_PENDING/CLAIMED/REVERTED). The fill tx is
+/// recovered from `solver_outcomes` so the dashboard always sees the original
+/// fill even after the wallet row's `tx_hash` is overwritten by the claim.
+async fn claims_handler(
+    State(state): State<Arc<ApiState>>,
+) -> impl IntoResponse {
+    let wallet = match state.wallet_manager.get() {
+        Some(w) => w.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "wallet_manager_not_wired",
+                    "claims": [],
+                    "pending_count": 0,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let rows = match wallet.list_debridge_claims(500) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("claims_handler: list_debridge_claims failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("wallet read failed: {e}"),
+                    "claims": [],
+                    "pending_count": 0,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let outcome_log = state.outcome_log.get().cloned();
+    let now = Utc::now();
+    let mut claims: Vec<ClaimRow> = Vec::with_capacity(rows.len());
+    for r in rows {
+        let (claim_status, claim_tx_hash, fill_tx_hash) = match r.state.as_str() {
+            "CLAIMED" => {
+                // wallet.tx_hash was overwritten by the claim tx; recover the
+                // original fill tx from the outcome log.
+                let fill_tx = match outcome_log.as_ref() {
+                    Some(log) => log
+                        .first_fill_tx_for(&r.intent_id)
+                        .ok()
+                        .flatten(),
+                    None => None,
+                };
+                (
+                    "claimed".to_string(),
+                    r.wallet_tx_hash.clone(),
+                    fill_tx,
+                )
+            }
+            "REVERTED" => (
+                "reverted".to_string(),
+                None,
+                r.wallet_tx_hash.clone(),
+            ),
+            // CONFIRMED or CLAIM_PENDING — wallet.tx_hash is still the fill tx.
+            _ => (
+                "pending".to_string(),
+                None,
+                r.wallet_tx_hash.clone(),
+            ),
+        };
+
+        let age_minutes = ((now - r.created_at).num_seconds() / 60).max(0);
+        claims.push(ClaimRow {
+            intent_id: r.intent_id,
+            protocol: r.protocol,
+            src_chain: r.src_chain,
+            dst_chain: r.dst_chain,
+            amount_usd: r.amount_usd,
+            wallet_state: r.state,
+            claim_status,
+            fill_tx_hash,
+            claim_tx_hash,
+            claim_fee_usd: r.claim_fee_usd,
+            created_at: r.created_at,
+            age_minutes,
+            error: r.error,
+        });
+    }
+
+    let pending_count = claims
+        .iter()
+        .filter(|c| c.claim_status == "pending")
+        .count();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "claims": claims,
+            "pending_count": pending_count,
+            "as_of": now,
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClaimRetryResponse {
+    pub intent_id: String,
+    pub outcome: String,
+    pub claim_tx_hash: Option<String>,
+    pub fee_usd: Option<f64>,
+    pub error: Option<String>,
+}
+
+/// POST /api/solver/claims/:intent_id/retry
+/// Token-gated. Reconstructs a synthetic `Intent` (id, protocol, src/dst
+/// chain, order_id) from the wallet record — same approach as the periodic
+/// `debridge_claim_retry_tick` in solver-main — and calls
+/// `LambdaController::lambda_claim_debridge`. Returns the outcome variant.
+async fn claim_retry_handler(
+    State(state): State<Arc<ApiState>>,
+    axum::extract::Path(intent_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let wallet = match state.wallet_manager.get() {
+        Some(w) => w.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ClaimRetryResponse {
+                    intent_id,
+                    outcome: "service_unavailable".into(),
+                    claim_tx_hash: None,
+                    fee_usd: None,
+                    error: Some("wallet_manager_not_wired".into()),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let ctrl = match state.lambda_controller.get() {
+        Some(c) => c.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ClaimRetryResponse {
+                    intent_id,
+                    outcome: "service_unavailable".into(),
+                    claim_tx_hash: None,
+                    fee_usd: None,
+                    error: Some(
+                        "lambda_controller_not_wired (solver may be running without SOLVER_PRIVATE_KEY)"
+                            .into(),
+                    ),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Find the intent record. The retry only proceeds for protocols matching
+    // debridge/dln — same filter the background tick uses. We look up across
+    // all states because the dashboard may want to retry a CLAIM_PENDING that
+    // got stuck.
+    let candidates = match wallet.list_debridge_claims(1000) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ClaimRetryResponse {
+                    intent_id,
+                    outcome: "wallet_error".into(),
+                    claim_tx_hash: None,
+                    fee_usd: None,
+                    error: Some(format!("wallet list failed: {e}")),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let record = match candidates.into_iter().find(|r| r.intent_id == intent_id) {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ClaimRetryResponse {
+                    intent_id,
+                    outcome: "not_found".into(),
+                    claim_tx_hash: None,
+                    fee_usd: None,
+                    error: Some("intent not in deBridge claim lifecycle".into()),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // DeBridgePoller sets intent.id = "debridge_dln:0x<orderId>". Match the
+    // shape that `solver_main::debridge_claim_retry_tick` builds.
+    let order_id_hex = if record.intent_id.contains(':') {
+        record
+            .intent_id
+            .splitn(2, ':')
+            .nth(1)
+            .unwrap_or(&record.intent_id)
+            .to_string()
+    } else {
+        record.intent_id.clone()
+    };
+    let synthetic = genome_client::Intent {
+        id: record.intent_id.clone(),
+        protocol: record.protocol.clone(),
+        src_chain: record.src_chain as u64,
+        dst_chain: record.dst_chain as u64,
+        order_id: Some(order_id_hex),
+        ..genome_client::Intent::default()
+    };
+
+    tracing::info!(
+        "🔁 manual claim retry via /api/solver/claims/{}/retry",
+        intent_id
+    );
+    match ctrl.lambda_claim_debridge(&synthetic).await {
+        Ok(executor::LambdaClaimOutcome::Claimed { tx_hash, fee_usd }) => (
+            StatusCode::OK,
+            Json(ClaimRetryResponse {
+                intent_id,
+                outcome: "claimed".into(),
+                claim_tx_hash: Some(tx_hash),
+                fee_usd: Some(fee_usd),
+                error: None,
+            }),
+        )
+            .into_response(),
+        Ok(executor::LambdaClaimOutcome::NotEligible { reason }) => (
+            StatusCode::CONFLICT,
+            Json(ClaimRetryResponse {
+                intent_id,
+                outcome: "not_eligible".into(),
+                claim_tx_hash: None,
+                fee_usd: None,
+                error: Some(reason),
+            }),
+        )
+            .into_response(),
+        Ok(executor::LambdaClaimOutcome::Failed { error: e }) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ClaimRetryResponse {
+                intent_id,
+                outcome: "failed".into(),
+                claim_tx_hash: None,
+                fee_usd: None,
+                error: Some(e),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ClaimRetryResponse {
+                intent_id,
+                outcome: "fatal".into(),
+                claim_tx_hash: None,
+                fee_usd: None,
+                error: Some(e.to_string()),
+            }),
+        )
+            .into_response(),
+    }
 }

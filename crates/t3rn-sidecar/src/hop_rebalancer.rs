@@ -300,7 +300,8 @@ impl HopRebalancer {
         info!("[hop_rebalancer] phase2 done: tx_bridge={}", tx_bridge);
 
         // Phase 3: poll for Across receipt (up to 4h, every 30s)
-        let received_amount = self.wait_for_bridge_receipt(&tx_bridge, hop_amount_wei, to_chain).await
+        // origin_chain = from_chain (where depositV3 was sent), NOT to_chain
+        let received_amount = self.wait_for_bridge_receipt(&tx_bridge, hop_amount_wei, from_chain).await
             .unwrap_or(hop_amount_wei); // best-effort: assume full receipt
 
         // Phase 4: add_liquidity on destination chain
@@ -422,15 +423,16 @@ impl HopRebalancer {
     }
 
     /// Poll Across receipt API every 30s, up to 4h.
+    /// `origin_chain` = the chain where depositV3 was broadcast (the source).
     async fn wait_for_bridge_receipt(
         &self,
         tx_hash: &str,
         fallback: U256,
-        dst_chain: u64,
+        origin_chain: u64,
     ) -> Option<U256> {
         let url = format!(
             "https://app.across.to/api/receipt?originChainId={}&txHash={}",
-            dst_chain, tx_hash
+            origin_chain, tx_hash
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4 * 3600);
 

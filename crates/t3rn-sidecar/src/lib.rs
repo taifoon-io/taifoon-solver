@@ -3,6 +3,7 @@
 //! Public surfaces:
 
 pub mod deposit_all;
+pub mod fills_log;
 pub mod gas_razor;
 pub mod hop_rebalancer;
 pub mod order_monitor;

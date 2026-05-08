@@ -48,11 +48,15 @@ pub mod tx_guard;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
-use inventory::{classify_lwc, default_targets, InventoryStatus, InventoryTarget, LwcStatus, LWC_LOW_POOL_THRESHOLD_USD};
+use inventory::{
+    classify_lwc, classify_solana_gas, default_targets, InventoryStatus, InventoryTarget,
+    LwcStatus, SolanaGasStatus, LWC_LOW_POOL_THRESHOLD_USD, MIN_SOLANA_SOL, WARN_SOLANA_SOL,
+};
 use lwc_manager::{LwcChainState, LwcManager};
 use rebalancer::{BridgeAction, Rebalancer};
 use scanner::{scan_all, ChainSnapshot};
@@ -71,6 +75,14 @@ pub struct SidecarState {
     pub lwc_states: Vec<LwcChainState>,
     /// Per-chain LWC classification (parallel to lwc_states).
     pub lwc_classified: Vec<ClassifiedLwcChain>,
+    /// Last-known Solana wallet SOL balance, if SOLANA_ADDRESS is configured.
+    /// `None` means the RPC was unreachable on the last probe (Unknown status).
+    #[serde(default)]
+    pub solana_sol_balance: Option<f64>,
+    /// Classification of the Solana wallet gas position. `Unknown` if the RPC
+    /// was unreachable, or the field is absent if SOLANA_ADDRESS is unset.
+    #[serde(default)]
+    pub solana_gas_status: Option<SolanaGasStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +124,15 @@ pub struct PortfolioSidecar {
     pub state: SharedState,
     /// Optional LWC manager — present when T3RN_LWC_ENABLED=true.
     lwc_manager: Option<LwcManager>,
+    /// Serialises overlapping `tick` calls. The background loop and the
+    /// manual `POST /api/solver/rebalance` handler both contend on this so a
+    /// trigger that lands during an in-flight cycle waits rather than running
+    /// two scans in parallel.
+    tick_lock: Mutex<()>,
+    /// Seconds between scheduled background ticks. Set by the runner via
+    /// `set_interval_secs`; the status endpoint reads this to compute
+    /// `next_run_at`. `0` means "not scheduled" (manual-trigger only).
+    interval_secs: AtomicU64,
 }
 
 impl PortfolioSidecar {
@@ -141,11 +162,32 @@ impl PortfolioSidecar {
             solver_addr,
             state: Arc::new(RwLock::new(SidecarState::default())),
             lwc_manager,
+            tick_lock: Mutex::new(()),
+            interval_secs: AtomicU64::new(0),
         })
+    }
+
+    /// Record the schedule's interval so the API status endpoint can compute
+    /// `next_run_at`. Idempotent; later calls overwrite the value.
+    pub fn set_interval_secs(&self, secs: u64) {
+        self.interval_secs.store(secs, Ordering::Relaxed);
+    }
+
+    /// Read the recorded background interval, or `0` if no schedule was set.
+    pub fn interval_secs(&self) -> u64 {
+        self.interval_secs.load(Ordering::Relaxed)
+    }
+
+    /// Try to acquire the tick lock without waiting. Returns `None` if a tick
+    /// is already in flight — callers should treat this as "rebalance already
+    /// running, skip rather than queue another cycle."
+    pub fn try_lock_tick(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        self.tick_lock.try_lock().ok()
     }
 
     /// Run one scan + rebalance cycle. Returns the actions taken.
     pub async fn tick(&self) -> Vec<BridgeAction> {
+        let _guard = self.tick_lock.lock().await;
         let cycle = {
             let s = self.state.read().await;
             s.cycle + 1
@@ -237,6 +279,9 @@ impl PortfolioSidecar {
             );
         }
 
+        // 3b. Solana SOL gas probe — non-fatal, never blocks the EVM rebalancer.
+        let (solana_sol_balance, solana_gas_status) = scan_solana_gas().await;
+
         // 4. Rebalance (own funds + LWC phase)
         let actions = self.rebalancer.rebalance(&snapshots, &self.targets).await;
 
@@ -261,6 +306,8 @@ impl PortfolioSidecar {
             s.pending_actions = actions.clone();
             s.lwc_states = lwc_states;
             s.lwc_classified = lwc_classified;
+            s.solana_sol_balance = solana_sol_balance;
+            s.solana_gas_status = solana_gas_status;
             for a in &actions {
                 s.action_log.push(ActionLogEntry {
                     ts: Utc::now(),
@@ -282,6 +329,91 @@ impl PortfolioSidecar {
             self.tick().await;
             info!("😴 Portfolio sidecar sleeping {}s...", interval_secs);
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+        }
+    }
+}
+
+// ── Solana gas probe ──────────────────────────────────────────────────────────
+
+/// Fetch SOL balance for `address` via SOLANA_RPC_URL `getBalance`.
+///
+/// Returns `Ok(None)` only when SOLANA_ADDRESS is unset (caller's responsibility
+/// — this fn requires `address` non-empty), `Ok(Some(sol))` on a successful
+/// probe, and `Err(_)` when the RPC was unreachable or returned a malformed
+/// response. Errors here MUST NOT crash the sidecar tick — the caller logs and
+/// continues, leaving the gas status as `Unknown`.
+async fn fetch_solana_sol_balance(address: &str) -> anyhow::Result<f64> {
+    use anyhow::{anyhow, Context};
+    let solana_rpc = std::env::var("SOLANA_RPC_URL")
+        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .context("build reqwest client for solana balance probe")?;
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "getBalance",
+        "params": [address]
+    });
+    let resp = client
+        .post(&solana_rpc)
+        .json(&body)
+        .send()
+        .await
+        .context("solana getBalance request failed")?;
+    let parsed: serde_json::Value = resp
+        .json()
+        .await
+        .context("solana getBalance response not json")?;
+    if let Some(err) = parsed.get("error") {
+        return Err(anyhow!("solana rpc error: {}", err));
+    }
+    let lamports = parsed
+        .pointer("/result/value")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow!("solana getBalance missing result.value"))?;
+    Ok(lamports as f64 / 1e9)
+}
+
+/// One full Solana gas probe — reads SOLANA_ADDRESS, queries SOL balance,
+/// classifies, logs the actionable WARN at low-gas, and logs+swallows any RPC
+/// error. Returns the (balance, status) pair to persist on `SidecarState`.
+///
+/// Returns `(None, None)` if SOLANA_ADDRESS is unset (the solver does not run
+/// any Solana path on this deployment) so the API surface stays absent rather
+/// than reporting a meaningless `Unknown`.
+async fn scan_solana_gas() -> (Option<f64>, Option<SolanaGasStatus>) {
+    let solana_addr = match std::env::var("SOLANA_ADDRESS") {
+        Ok(a) if !a.trim().is_empty() => a,
+        _ => return (None, None),
+    };
+
+    match fetch_solana_sol_balance(&solana_addr).await {
+        Ok(sol) => {
+            let status = classify_solana_gas(Some(sol));
+            if status == SolanaGasStatus::LowGas {
+                warn!(
+                    "⛽ Solana wallet low on SOL: have={:.6} sol need={:.3} sol (status={})",
+                    sol, WARN_SOLANA_SOL, status.as_str()
+                );
+            } else {
+                let icon = match status {
+                    SolanaGasStatus::Healthy => "✅",
+                    SolanaGasStatus::Warn => "⚠️",
+                    _ => "—",
+                };
+                info!(
+                    "  {} Solana wallet SOL={:.6} (min={:.3}, warn={:.3}) [{}]",
+                    icon, sol, MIN_SOLANA_SOL, WARN_SOLANA_SOL, status.as_str()
+                );
+            }
+            (Some(sol), Some(status))
+        }
+        Err(e) => {
+            // Non-fatal: log and continue. Status becomes Unknown so the API
+            // can render a yellow "?" rather than misreporting healthy/low.
+            warn!("Solana gas probe failed (non-fatal): {}", e);
+            (None, Some(SolanaGasStatus::Unknown))
         }
     }
 }

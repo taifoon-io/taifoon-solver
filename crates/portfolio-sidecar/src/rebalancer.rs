@@ -261,6 +261,44 @@ struct SwapResp {
     expected_output_amount: Option<String>,
 }
 
+/// deBridge DLN public API response for `/dln/order/create-tx`.
+/// We only consume the fields we actually need to build the tx.
+#[derive(Debug, Deserialize)]
+struct DlnCreateTxResp {
+    tx: DlnTx,
+    #[serde(rename = "estimation")]
+    estimation: Option<DlnEstimation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DlnTx { to: String, data: String, #[serde(default)] value: Option<String> }
+
+#[derive(Debug, Deserialize)]
+struct DlnEstimation {
+    #[serde(rename = "dstChainTokenOut")]
+    dst_chain_token_out: Option<DlnDstTokenOut>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DlnDstTokenOut { amount: Option<String> }
+
+/// Reasons the Across path can fail in a way that should trigger the deBridge
+/// fallback. Anything outside this list is a hard failure (e.g. tx_guard
+/// blocked, RPC dropped) and is NOT retried.
+#[derive(Debug)]
+enum AcrossQuoteIssue {
+    /// HTTP non-2xx from Across or `outputAmount=0` — treat as no liquidity.
+    NoLiquidity(String),
+}
+
+impl std::fmt::Display for AcrossQuoteIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AcrossQuoteIssue::NoLiquidity(s) => write!(f, "across_quote_failed: {s}"),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SwapTx { to: String, data: String }
@@ -602,11 +640,18 @@ impl Rebalancer {
                         .as_secs();
                     let last_bridge = LAST_MAYAN_BRIDGE_SECS.load(Ordering::Relaxed);
                     let cooldown_ok = now_secs.saturating_sub(last_bridge) >= MAYAN_BRIDGE_COOLDOWN_SECS;
-                    let can_bridge = cooldown_ok && if needs_bootstrap {
+                    // Hard stop: never bridge when Base balance is critically low.
+                    // Prevents bootstrap mode from draining the wallet when Solana has 0 SOL.
+                    const MIN_BRIDGE_WALLET_USD: f64 = 15.0;
+                    let wallet_safe = bridge_usd > MIN_BRIDGE_WALLET_USD;
+                    let can_bridge = wallet_safe && cooldown_ok && if needs_bootstrap {
                         send_usd >= 5.0
                     } else {
                         base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD && send_usd >= 0.50
                     };
+                    if !wallet_safe {
+                        info!("🛑 Mayan bridge disabled: Base bridge token ${:.2} < ${:.0} minimum safe threshold", bridge_usd, MIN_BRIDGE_WALLET_USD);
+                    }
                     if !cooldown_ok && (send_usd >= 5.0 || (!needs_bootstrap && base_available >= SOLANA_BRIDGE_USD + MIN_BRIDGE_USD)) {
                         let secs_remaining = MAYAN_BRIDGE_COOLDOWN_SECS.saturating_sub(now_secs.saturating_sub(last_bridge));
                         info!("⏳ Mayan bridge cooldown: {}s remaining before next bridge attempt", secs_remaining);
@@ -627,7 +672,7 @@ impl Rebalancer {
                         let action = self.mayan_solana_bridge(base_snap, &solana_addr, send_raw, send_usd, bridge_addr, bridge_symbol).await;
                         *working_stable.entry(HOME_CHAIN_ID).or_insert(0.0) -= send_usd;
                         actions.push(action);
-                    } else if needs_bootstrap {
+                    } else if needs_bootstrap && wallet_safe {
                         // Before spending ETH on a swap, check if any non-Base chain already has
                         // USDC stranded from a prior bootstrap attempt — bridge it directly.
                         const MIN_DIRECT_BRIDGE_USD: f64 = 5.0; // Mayan refunds orders < ~$5 immediately
@@ -1182,26 +1227,75 @@ impl Rebalancer {
         self.send_raw(src_rpc, &resp.swap_tx.to, &resp.swap_tx.data).await
     }
 
-    async fn execute_stable_bridge(&self, src: &ChainSnapshot, dst_chain: u64, amount_raw: u128, _amount_usd: f64) -> Result<String> {
-        let src_token: Address = src.bridge_token_addr.parse()
-            .context("parse src token addr")?;
-        let src_rpc = rpc_for(src.chain_id);
-        let amount_u256 = U256::from(amount_raw);
+    /// Try to bridge stables via Across first, fall back to deBridge if the
+    /// Across **quote** errors out or returns zero/insufficient liquidity.
+    /// Post-quote failures (approval revert, RPC drop, etc.) are NOT retried
+    /// on deBridge because the same on-chain conditions would likely block
+    /// either path.
+    /// Logs `bridge_selected` with the reason on every successful selection.
+    async fn execute_stable_bridge(&self, src: &ChainSnapshot, dst_chain: u64, amount_raw: u128, amount_usd: f64) -> Result<String> {
+        let src_token: Address = src.bridge_token_addr.parse().context("parse src token addr")?;
+        match self.fetch_across_quote(src, src_token, dst_chain, amount_raw).await {
+            Ok(quote) => {
+                info!(
+                    "bridge_selected src={} dst={} bridge=across reason=primary amount_usd={:.2}",
+                    src.chain_id, dst_chain, amount_usd
+                );
+                self.execute_across_deposit(src, src_token, dst_chain, amount_raw, quote).await
+            }
+            Err(quote_err) if debridge_supports(src.chain_id, dst_chain) => {
+                info!(
+                    "bridge_selected src={} dst={} bridge=debridge reason=across_quote_failed amount_usd={:.2} ({})",
+                    src.chain_id, dst_chain, amount_usd, quote_err
+                );
+                self.execute_debridge_stable_bridge(src, dst_chain, amount_raw)
+                    .await
+                    .with_context(|| format!("debridge fallback {} → {}", src.chain_id, dst_chain))
+            }
+            Err(quote_err) => {
+                anyhow::bail!(
+                    "Across quote failed and deBridge fallback not supported on this path ({} → {}): {quote_err}",
+                    src.chain_id, dst_chain
+                );
+            }
+        }
+    }
 
-        // Fetch Across suggested fees.
+    /// Fetch an Across V3 suggested-fees quote. Returns the parsed `FeesResp`
+    /// only when the response is usable (non-zero outputAmount).
+    async fn fetch_across_quote(&self, src: &ChainSnapshot, src_token: Address, dst_chain: u64, amount_raw: u128) -> Result<FeesResp, AcrossQuoteIssue> {
         let fee_url = format!(
             "https://app.across.to/api/suggested-fees?originChainId={}&destinationChainId={}&token={:#x}&amount={}",
             src.chain_id, dst_chain, src_token, amount_raw
         );
         let fees_resp = self.http.get(&fee_url).send().await
-            .context("Across suggested-fees")?;
+            .map_err(|e| AcrossQuoteIssue::NoLiquidity(format!("suggested-fees request: {e}")))?;
         if !fees_resp.status().is_success() {
+            let status = fees_resp.status();
             let body = fees_resp.text().await.unwrap_or_default();
-            anyhow::bail!("Across fees API error: {}", body);
+            return Err(AcrossQuoteIssue::NoLiquidity(format!("HTTP {status}: {body}")));
         }
         let fees: FeesResp = fees_resp.json().await
-            .context("parse fees response")?;
+            .map_err(|e| AcrossQuoteIssue::NoLiquidity(format!("parse fees response: {e}")))?;
 
+        let output_amount: U256 = fees.output_amount.parse().unwrap_or(U256::ZERO);
+        if output_amount.is_zero() {
+            return Err(AcrossQuoteIssue::NoLiquidity(
+                "outputAmount=0 (insufficient liquidity)".into()
+            ));
+        }
+        if spoke_pool(src.chain_id).is_none() {
+            return Err(AcrossQuoteIssue::NoLiquidity(format!("No SpokePool for chain {}", src.chain_id)));
+        }
+        Ok(fees)
+    }
+
+    /// Send the Across V3 depositV3 transaction with a previously-fetched quote.
+    /// Errors here (approval, RPC, revert) are hard failures — we don't retry
+    /// on deBridge, since approval revert / RPC outage would block both paths.
+    async fn execute_across_deposit(&self, src: &ChainSnapshot, src_token: Address, dst_chain: u64, amount_raw: u128, fees: FeesResp) -> Result<String> {
+        let src_rpc = rpc_for(src.chain_id);
+        let amount_u256 = U256::from(amount_raw);
         let output_amount: U256 = fees.output_amount.parse().unwrap_or(U256::ZERO);
         let output_token: Address = fees.output_token.address.parse().unwrap_or(Address::ZERO);
         let exclusive_relayer: Address = fees.exclusive_relayer.parse().unwrap_or(Address::ZERO);
@@ -1210,7 +1304,6 @@ impl Rebalancer {
         let spoke = spoke_pool(src.chain_id)
             .ok_or_else(|| anyhow::anyhow!("No SpokePool for chain {}", src.chain_id))?;
 
-        // Approve SpokePool.
         self.ensure_allowance(
             &src.bridge_token_addr,
             &format!("{:#x}", spoke),
@@ -1231,6 +1324,71 @@ impl Rebalancer {
         }.abi_encode();
 
         self.send_raw(src_rpc, &format!("{:#x}", spoke), &hex::encode(&calldata)).await
+    }
+
+    /// deBridge DLN fallback for stable transfers. Uses the public
+    /// `https://dln.debridge.finance/v1.0/dln/order/create-tx` API to fetch
+    /// ready-to-send calldata for the source-chain DlnSource contract,
+    /// then approves + broadcasts via the same `ensure_allowance` /
+    /// `send_raw` primitives the Across path uses.
+    ///
+    /// Approve target = the `tx.to` address returned by the API (DlnSource).
+    /// The `recipient` is encoded inside the API call as `dstChainTokenOutRecipient`,
+    /// set to our solver address — symmetric with the Across `recipient` field.
+    async fn execute_debridge_stable_bridge(&self, src: &ChainSnapshot, dst_chain: u64, amount_raw: u128) -> Result<String> {
+        let src_token: Address = src.bridge_token_addr.parse().context("parse src token addr")?;
+        let src_rpc = rpc_for(src.chain_id);
+        let amount_u256 = U256::from(amount_raw);
+
+        // Destination USDC for each supported path. Mirrors the brief's
+        // "supported paths: Arbitrum→Base, Optimism→Base, Ethereum→Base".
+        let dst_usdc = debridge_dst_usdc(dst_chain)
+            .ok_or_else(|| anyhow::anyhow!("deBridge: no destination USDC mapping for chain {}", dst_chain))?;
+
+        let solver_hex = format!("{:#x}", self.solver_addr);
+        let url = format!(
+            "https://dln.debridge.finance/v1.0/dln/order/create-tx\
+             ?srcChainId={src_chain}&srcChainTokenIn={src_token:#x}&srcChainTokenInAmount={amount_raw}\
+             &dstChainId={dst_chain}&dstChainTokenOut={dst_usdc}&dstChainTokenOutAmount=auto\
+             &dstChainTokenOutRecipient={solver_hex}\
+             &senderAddress={solver_hex}&srcChainOrderAuthorityAddress={solver_hex}\
+             &dstChainOrderAuthorityAddress={solver_hex}\
+             &prependOperatingExpenses=true",
+            src_chain = src.chain_id,
+        );
+        let resp = self.http.get(&url).send().await
+            .context("deBridge create-tx request")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("deBridge create-tx HTTP {status}: {body}");
+        }
+        let create: DlnCreateTxResp = resp.json().await
+            .context("parse deBridge create-tx response")?;
+
+        if let Some(est) = &create.estimation {
+            if let Some(out) = &est.dst_chain_token_out {
+                if let Some(amount) = &out.amount {
+                    info!("debridge dst_chain_token_out_amount={} (chain {} → {})", amount, src.chain_id, dst_chain);
+                }
+            }
+        }
+
+        // Approve DlnSource to pull our token. The `to` address comes from the
+        // API response (DlnSource is the same on every chain); approving it as
+        // the spender is symmetric with how we approve the Across SpokePool.
+        self.ensure_allowance(&src.bridge_token_addr, &create.tx.to, amount_u256, src_rpc)
+            .await.context("approval for deBridge bridge")?;
+
+        let value = create.tx.value
+            .as_ref()
+            .and_then(|v| {
+                let s = v.trim_start_matches("0x");
+                if v.starts_with("0x") { U256::from_str_radix(s, 16).ok() } else { v.parse().ok() }
+            })
+            .unwrap_or(U256::ZERO);
+        let data = create.tx.data.trim_start_matches("0x");
+        self.send_raw_value(src_rpc, &create.tx.to, data, value).await
     }
 
     async fn ensure_allowance(&self, token: &str, spender: &str, amount: U256, rpc: &str) -> Result<()> {
@@ -1434,7 +1592,30 @@ fn best_surplus_source(
 }
 
 fn usd_to_raw(usd: f64, decimals: u32) -> u128 {
-    (usd * 10f64.powi(decimals as i32)) as u128
+    if usd <= 0.0 { return 0; }
+    let raw = usd * 10f64.powi(decimals as i32);
+    if raw > u128::MAX as f64 { return 0; }
+    raw as u128
+}
+
+/// Whether the deBridge fallback supports a given (src, dst) lane.
+/// Per the rebalancer brief: Arbitrum→Base, Optimism→Base, Ethereum→Base
+/// (same lanes Across already covers).
+fn debridge_supports(src_chain: u64, dst_chain: u64) -> bool {
+    matches!(
+        (src_chain, dst_chain),
+        (42161, 8453) | (10, 8453) | (1, 8453)
+    )
+}
+
+/// Canonical destination USDC address for each deBridge fallback path.
+/// Returned as a 0x-prefixed lowercase hex string for direct interpolation
+/// into the DLN API URL.
+fn debridge_dst_usdc(dst_chain: u64) -> Option<&'static str> {
+    match dst_chain {
+        8453 => Some("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), // USDC on Base
+        _ => None,
+    }
 }
 
 /// Query the Solana mainnet RPC for the lamport balance of a Solana address (base58).

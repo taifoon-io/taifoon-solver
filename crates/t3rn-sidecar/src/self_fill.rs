@@ -19,6 +19,7 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::{
+    fills_log::{FillRecord, FillsLog},
     gas_razor::{self, resolve_rpc_url},
     load_deployments,
     order_monitor::T3rnOrder,
@@ -60,18 +61,26 @@ fn chain_id_to_bytes4(chain_id: u64) -> [u8; 4] {
 
 pub struct SelfFill {
     signer:      alloy::signers::local::PrivateKeySigner,
-    #[allow(dead_code)]
     solver_addr: Address,
     deployments:  Vec<LwcDeployment>,
     dry_run:      bool,
     seen_orders:  Mutex<HashSet<[u8; 32]>>,
     fills_count:  Mutex<u64>,
+    fills_log:    Option<FillsLog>,
 }
 
 impl SelfFill {
     pub fn new(
         signer: alloy::signers::local::PrivateKeySigner,
         _rx: broadcast::Receiver<T3rnOrder>,
+    ) -> Arc<Self> {
+        Self::with_log(signer, _rx, None)
+    }
+
+    pub fn with_log(
+        signer: alloy::signers::local::PrivateKeySigner,
+        _rx: broadcast::Receiver<T3rnOrder>,
+        fills_log: Option<FillsLog>,
     ) -> Arc<Self> {
         let solver_addr = signer.address();
         let dry_run = std::env::var("DRY_RUN")
@@ -85,6 +94,7 @@ impl SelfFill {
             dry_run,
             seen_orders: Mutex::new(HashSet::new()),
             fills_count: Mutex::new(0),
+            fills_log,
         })
     }
 
@@ -165,16 +175,19 @@ impl SelfFill {
             return Ok(());
         }
 
-        // Profitability: ensure max_reward covers estimated gas cost
+        // Profitability: ensure max_reward (in stable units) covers estimated gas cost.
+        // gas_cost_wei is in ETH/native wei (18 dec); max_reward is in the stable (6 dec USDC).
+        // Convert gas to stable units using a conservative ETH price before comparing.
         let calldata_placeholder = alloy::primitives::Bytes::from(vec![0u8; 228]); // ~order() calldata size
         let gas_params = gas_razor::estimate(dst_chain_id, calldata_placeholder, well).await;
-        let gas_cost_wei = U256::from(gas_params.gas_limit)
-            * U256::from(gas_params.max_fee_per_gas);
+        let gas_cost_eth = gas_params.gas_limit as f64 * gas_params.max_fee_per_gas as f64 / 1e18;
+        let eth_price_usd = 2500.0_f64; // conservative — avoids over-filling on gas spikes
+        let gas_cost_stable = (gas_cost_eth * eth_price_usd * 10f64.powi(dep.stable_decimals as i32)) as u128;
 
-        if order.max_reward <= gas_cost_wei {
+        if order.max_reward.to::<u128>() <= gas_cost_stable {
             info!(
-                "[self_fill] not profitable: max_reward={} <= gas_cost={}, skipping id={}",
-                order.max_reward, gas_cost_wei, hex::encode(order.id)
+                "[self_fill] not profitable: max_reward={} <= gas_cost_stable={} (gas_eth={:.8}), skipping id={}",
+                order.max_reward, gas_cost_stable, gas_cost_eth, hex::encode(order.id)
             );
             return Ok(());
         }
@@ -191,7 +204,7 @@ impl SelfFill {
             targetAccount: target_account,
             amount: order.amount,
             rewardAsset: asset,
-            insurance: order.insurance,
+            insurance: U256::ZERO, // dead field in LWC V4 — contract ignores it
             maxReward: order.max_reward,
         };
         let calldata: alloy::primitives::Bytes = order_call.abi_encode().into();
@@ -205,12 +218,33 @@ impl SelfFill {
             gas_params.gas_limit, gas_params.max_fee_per_gas, self.dry_run
         );
 
+        let intent_id = hex::encode(order.id);
+        let solver_id = format!("{:#x}", self.solver_addr);
+
         if self.dry_run {
             info!(
                 "[self_fill] DRY_RUN — would fill order {} on chain {}, gas_limit={}, max_fee={}",
-                hex::encode(order.id), dst_chain_id,
+                intent_id, dst_chain_id,
                 gas_params.gas_limit, gas_params.max_fee_per_gas
             );
+            if let Some(log) = &self.fills_log {
+                let _ = log.append(FillRecord {
+                    ts: chrono::Utc::now(),
+                    intent_id: intent_id.clone(),
+                    protocol: "t3rn_lwc".to_string(),
+                    src_chain: order.source_chain,
+                    dst_chain: dst_chain_id,
+                    decision: "dry_run".to_string(),
+                    tx_hash: None,
+                    predicted_gas: Some(gas_params.gas_limit),
+                    gas_used: None,
+                    effective_gas_price_wei: None,
+                    actual_profit_usd: None,
+                    skip_reason: None,
+                    error: None,
+                    solver_id: Some(solver_id.clone()),
+                });
+            }
             *self.fills_count.lock().unwrap() += 1;
             return Ok(());
         }
@@ -242,8 +276,36 @@ impl SelfFill {
 
         info!(
             "[self_fill] filled: id={} dst_chain={} tx={} gas_used={}",
-            hex::encode(order.id), dst_chain_id, tx_hash, receipt.gas_used
+            intent_id, dst_chain_id, tx_hash, receipt.gas_used
         );
+
+        if let Some(log) = &self.fills_log {
+            // actual_profit = max_reward (stable units) - gas_cost (wei, ETH-denominated)
+            // We express profit in USD: max_reward / 10^stable_decimals - gas_cost_eth * eth_price
+            // For simplicity: max_reward is in USDC (6 dec), gas_cost_wei in chain native (18 dec).
+            // Use 2500 USD/ETH as a safe constant — close enough for P&L tracking.
+            let gas_cost_eth = receipt.gas_used as f64 * gas_params.max_fee_per_gas as f64 / 1e18;
+            let gas_cost_usd = gas_cost_eth * 2500.0;
+            let max_reward_usd = order.max_reward.to::<u128>() as f64
+                / 10f64.powi(dep.stable_decimals as i32);
+            let profit_usd = max_reward_usd - gas_cost_usd;
+            let _ = log.append(FillRecord {
+                ts: chrono::Utc::now(),
+                intent_id: intent_id.clone(),
+                protocol: "t3rn_lwc".to_string(),
+                src_chain: order.source_chain,
+                dst_chain: dst_chain_id,
+                decision: "executed".to_string(),
+                tx_hash: Some(tx_hash.clone()),
+                predicted_gas: Some(gas_params.gas_limit),
+                gas_used: Some(receipt.gas_used as u64),
+                effective_gas_price_wei: Some(gas_params.max_fee_per_gas.to_string()),
+                actual_profit_usd: Some(profit_usd),
+                skip_reason: None,
+                error: None,
+                solver_id: Some(solver_id),
+            });
+        }
 
         *self.fills_count.lock().unwrap() += 1;
         Ok(())

@@ -1,28 +1,29 @@
 #!/usr/bin/env bash
-# Phase 6 acceptance gate — demo rehearsal prerequisites.
-# Asserts that earlier phases all closed (entries in verification_gates.jsonl)
-# and the local environment is ready for the demo.
+# Phase 6 acceptance gate — all-adapter test coverage.
+# Verifies every adapter the solver can dispatch has passing tests.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO_ROOT"
 
-LEDGER="$REPO_ROOT/outcomes/verification_gates.jsonl"
-[[ -f "$LEDGER" ]] || { echo "[phase6] FAIL: verification_gates.jsonl missing"; exit 1; }
-
-echo "[phase6] earlier phases must each have at least one entry in the gate ledger:"
-for p in 1 2 3 4 5; do
-    if grep -q "\"phase\":${p}\b" "$LEDGER"; then
-        echo "  phase $p: present"
-    else
-        echo "  phase $p: MISSING — run ./tools/loops/loop_driver.sh $p first"
-        exit 1
-    fi
-done
-
 echo "[phase6] cargo build --workspace --release"
 cargo build --workspace --release
 
-echo "[phase6] check run-mainnet.sh present + executable"
-[[ -x "$REPO_ROOT/run-mainnet.sh" ]]
+echo "[phase6] cargo test -p executor across_v3 --release"
+cargo test -p executor across_v3 --release
 
-echo "[phase6] PASS — ready for demo rehearsal"
+echo "[phase6] cargo test -p executor debridge_dln --release"
+cargo test -p executor debridge_dln --release
+
+echo "[phase6] cargo test -p executor mayan_swift --release"
+cargo test -p executor mayan_swift --release
+
+echo "[phase6] cargo test -p executor mayan_solana --release"
+cargo test -p executor mayan_solana --release
+
+echo "[phase6] cargo test -p executor lifi_meta --release"
+cargo test -p executor lifi_meta --release
+
+echo "[phase6] cargo test -p executor --test lifi_projection --release"
+cargo test -p executor --test lifi_projection --release
+
+echo "[phase6] PASS"

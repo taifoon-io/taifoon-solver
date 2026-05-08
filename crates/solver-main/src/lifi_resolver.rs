@@ -76,20 +76,24 @@ pub fn parse_lifi_status_body(body: &Value) -> LifiBridgeResult {
     })
 }
 
-/// HTTP wrapper. Fetches `https://li.quest/v1/status?txHash=...` with a 3s
+/// HTTP wrapper. Fetches `https://li.quest/v1/status?txHash=...` with a 10s
 /// timeout and feeds the response body to [`parse_lifi_status_body`]. Any
 /// network/parse failure returns [`LifiBridgeResult::Pending`] so the caller
 /// retries on the next genome event.
 pub async fn resolve_lifi_bridge(tx_hash: &str) -> LifiBridgeResult {
     let url = format!("https://li.quest/v1/status?txHash={}", tx_hash);
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(10))
         .build()
     {
         Ok(c) => c,
         Err(_) => return LifiBridgeResult::Pending,
     };
-    let resp = match client.get(&url).send().await {
+    let mut req = client.get(&url);
+    if let Ok(key) = std::env::var("LIFI_API_KEY") {
+        req = req.header("x-lifi-api-key", key);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(_) => return LifiBridgeResult::Pending,
     };

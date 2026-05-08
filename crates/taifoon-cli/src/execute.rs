@@ -37,7 +37,11 @@ async fn resolve_lifi_bridge(tx_hash: &str) -> LifiBridgeResult {
         Ok(c) => c,
         Err(_) => return LifiBridgeResult::Pending,
     };
-    let resp = match client.get(&url).send().await {
+    let mut req = client.get(&url);
+    if let Ok(key) = std::env::var("LIFI_API_KEY") {
+        req = req.header("x-lifi-api-key", key);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(_) => return LifiBridgeResult::Pending,
     };

@@ -115,6 +115,57 @@ pub fn classify_lwc(
 
 pub const LWC_LOW_POOL_THRESHOLD_USD: f64 = 100.0;
 
+// ── Solana gas thresholds ────────────────────────────────────────────────────
+//
+// The Mayan-Solana fulfill path on mainnet uses ~5_000 lamports per simple tx
+// at base fee plus a per-CU priority fee. ~0.005 SOL covers roughly 1000 fills
+// at typical priority levels — below that, the broadcaster will start dropping
+// fills as the wallet runs dry. WARN_SOLANA_SOL is the "comfort target" used
+// by /api/solver/portfolio to surface a yellow status before we hit critical.
+
+/// Below this SOL balance the solver wallet is considered low on gas and
+/// `classify_solana_gas` returns `LowGas`. ~1000 fills at standard fees.
+pub const MIN_SOLANA_SOL: f64 = 0.005;
+
+/// Above MIN, below WARN: still healthy but worth surfacing.
+pub const WARN_SOLANA_SOL: f64 = 0.01;
+
+/// Classification of the solver's Solana wallet gas position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SolanaGasStatus {
+    /// SOL ≥ WARN_SOLANA_SOL — comfortable runway.
+    Healthy,
+    /// MIN_SOLANA_SOL ≤ SOL < WARN_SOLANA_SOL — top up soon.
+    Warn,
+    /// SOL < MIN_SOLANA_SOL — actionable warning, fills will start failing.
+    LowGas,
+    /// Solana RPC unreachable on the last probe — no balance available.
+    Unknown,
+}
+
+impl SolanaGasStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SolanaGasStatus::Healthy => "healthy",
+            SolanaGasStatus::Warn => "warn",
+            SolanaGasStatus::LowGas => "low_gas",
+            SolanaGasStatus::Unknown => "unknown",
+        }
+    }
+}
+
+/// Classify the solver's Solana SOL balance. `None` means the RPC was
+/// unreachable on the last probe and the status is `Unknown`.
+pub fn classify_solana_gas(sol_balance: Option<f64>) -> SolanaGasStatus {
+    match sol_balance {
+        None => SolanaGasStatus::Unknown,
+        Some(s) if s < MIN_SOLANA_SOL => SolanaGasStatus::LowGas,
+        Some(s) if s < WARN_SOLANA_SOL => SolanaGasStatus::Warn,
+        Some(_) => SolanaGasStatus::Healthy,
+    }
+}
+
 /// Load default inventory targets.
 /// Overrideable via env: SIDECAR_MIN_STABLE_<CHAIN_ID>, SIDECAR_TARGET_STABLE_<CHAIN_ID>.
 pub fn default_targets() -> Vec<InventoryTarget> {
@@ -299,5 +350,30 @@ mod tests {
     #[test]
     fn lwc_halted_overrides_all() {
         assert_eq!(classify_lwc(500.0, true, true, 100.0), LwcStatus::Halted);
+    }
+
+    // ── SolanaGasStatus tests ────────────────────────────────────────────────
+
+    #[test]
+    fn solana_gas_unknown_when_rpc_unreachable() {
+        assert_eq!(classify_solana_gas(None), SolanaGasStatus::Unknown);
+    }
+
+    #[test]
+    fn solana_gas_low_when_below_min() {
+        assert_eq!(classify_solana_gas(Some(0.0)), SolanaGasStatus::LowGas);
+        assert_eq!(classify_solana_gas(Some(0.0049)), SolanaGasStatus::LowGas);
+    }
+
+    #[test]
+    fn solana_gas_warn_between_min_and_warn() {
+        assert_eq!(classify_solana_gas(Some(0.005)), SolanaGasStatus::Warn);
+        assert_eq!(classify_solana_gas(Some(0.0099)), SolanaGasStatus::Warn);
+    }
+
+    #[test]
+    fn solana_gas_healthy_at_or_above_warn() {
+        assert_eq!(classify_solana_gas(Some(0.01)), SolanaGasStatus::Healthy);
+        assert_eq!(classify_solana_gas(Some(1.5)), SolanaGasStatus::Healthy);
     }
 }
