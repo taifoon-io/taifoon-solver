@@ -314,9 +314,11 @@ impl PortfolioSidecar {
                     cycle,
                     action: a.clone(),
                 });
-                if s.action_log.len() > 200 {
-                    s.action_log.remove(0);
-                }
+            }
+            // Drain oldest entries in one pass rather than one remove(0) per push.
+            if s.action_log.len() > 200 {
+                let excess = s.action_log.len() - 200;
+                s.action_log.drain(0..excess);
             }
         }
 
@@ -393,8 +395,8 @@ async fn scan_solana_gas() -> (Option<f64>, Option<SolanaGasStatus>) {
             let status = classify_solana_gas(Some(sol));
             if status == SolanaGasStatus::LowGas {
                 warn!(
-                    "⛽ Solana wallet low on SOL: have={:.6} sol need={:.3} sol (status={})",
-                    sol, WARN_SOLANA_SOL, status.as_str()
+                    "⛽ Solana wallet low on SOL: have={:.6} sol min={:.3} sol (status={})",
+                    sol, MIN_SOLANA_SOL, status.as_str()
                 );
             } else {
                 let icon = match status {
@@ -446,11 +448,14 @@ async fn execute_lwc_phase(
             None => continue,
         };
 
-        // Phase 5a — top up a low well from surplus own funds
+        // Phase 5a — top up a low well from surplus own funds.
+        // Use primary_stable_usd (not stable_usd) because the well only accepts
+        // the primary stable — including secondary stable in the amount would
+        // produce an amount_wei that exceeds the actual primary balance.
         if own.status == InventoryStatus::Surplus
             && (lwc.lwc_status == LwcStatus::LowPool || lwc.lwc_status == LwcStatus::EmptyPool)
         {
-            let deposit_usd = (snap.stable_usd * LWC_DEPOSIT_FRACTION).max(0.0);
+            let deposit_usd = (snap.primary_stable_usd * LWC_DEPOSIT_FRACTION).max(0.0);
             if deposit_usd >= MIN_LWC_DEPOSIT_USD {
                 let asset: alloy::primitives::Address = snap.primary_stable_addr.parse()
                     .unwrap_or(alloy::primitives::Address::ZERO);
