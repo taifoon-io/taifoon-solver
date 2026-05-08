@@ -181,7 +181,10 @@ impl SelfFill {
         let calldata_placeholder = alloy::primitives::Bytes::from(vec![0u8; 228]); // ~order() calldata size
         let gas_params = gas_razor::estimate(dst_chain_id, calldata_placeholder, well).await;
         let gas_cost_eth = gas_params.gas_limit as f64 * gas_params.max_fee_per_gas as f64 / 1e18;
-        let eth_price_usd = 2500.0_f64; // conservative — avoids over-filling on gas spikes
+        let eth_price_usd = std::env::var("ETH_PRICE_USD")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(2500.0);
         let gas_cost_stable = (gas_cost_eth * eth_price_usd * 10f64.powi(dep.stable_decimals as i32)) as u128;
 
         if order.max_reward.to::<u128>() <= gas_cost_stable {
@@ -285,7 +288,10 @@ impl SelfFill {
             // For simplicity: max_reward is in USDC (6 dec), gas_cost_wei in chain native (18 dec).
             // Use 2500 USD/ETH as a safe constant — close enough for P&L tracking.
             let gas_cost_eth = receipt.gas_used as f64 * gas_params.max_fee_per_gas as f64 / 1e18;
-            let gas_cost_usd = gas_cost_eth * 2500.0;
+            let gas_cost_usd = gas_cost_eth * std::env::var("ETH_PRICE_USD")
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(2500.0);
             let max_reward_usd = order.max_reward.to::<u128>() as f64
                 / 10f64.powi(dep.stable_decimals as i32);
             let profit_usd = max_reward_usd - gas_cost_usd;

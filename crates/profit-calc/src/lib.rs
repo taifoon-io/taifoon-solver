@@ -76,7 +76,10 @@ impl ProfitCalculator {
         Self {
             min_profit_usd,
             protocol_fees: HashMap::new(),
-            eth_price_usd: 3000.0, // Default, will fetch real price
+            eth_price_usd: std::env::var("ETH_PRICE_USD")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3000.0),
             warmbed_api_url: std::env::var("WARMBED_API_URL")
                 .unwrap_or_else(|_| "https://api.taifoon.dev".to_string()),
             http_client: reqwest::Client::new(),
