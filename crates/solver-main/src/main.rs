@@ -414,10 +414,13 @@ async fn main() -> Result<()> {
     // Per-intent retry counter — abandon after 5 attempts (~75s total).
     let mut lifi_retry_counts: HashMap<String, u8> = HashMap::new();
 
-    // Concurrency cap: at most 2 fills in-flight simultaneously.
-    // Each spawned fill holds a permit for its full lifecycle (execute + claim),
-    // so a third intent waits until one of the two completes its claim.
-    let fill_semaphore = Arc::new(Semaphore::new(2));
+    // Concurrency cap: 1 fill in-flight at a time.
+    // Each spawned fill holds its permit for the full execute+claim lifecycle.
+    // Limit is 1 because each lambda_execute creates its own alloy provider with
+    // an independent CachedNonceManager — two concurrent fills on the same dst
+    // chain would fetch the same pending nonce and the second broadcast would fail
+    // with "nonce too low". Serial execution avoids this without per-chain locking.
+    let fill_semaphore = Arc::new(Semaphore::new(1));
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     loop {
@@ -432,15 +435,40 @@ async fn main() -> Result<()> {
               intent.src_chain, intent.dst_chain, intent.amount);
 
         // ── Skip-rule fast-path (X1) ──────────────────────────────────────────
-        // intent_amount_usd / current_gas_gwei aren't free at this point in the
-        // pipeline (price oracle + RPC call). For now we evaluate with both
-        // None — only rules that don't require those inputs (e.g. dst_chain-
-        // only) can fire. Once the price oracle lands, plumb its result here.
+        // Cheap stablecoin USD estimate (no RPC): for USDC/USDT (6 dec) we can
+        // divide the raw amount by 1e6 to get a USD value without an oracle.
+        // Non-stablecoins remain None — those rules are gated until a price
+        // oracle is wired. gas_gwei also stays None (no RPC at this stage).
+        let skip_rule_amount_usd: Option<f64> = {
+            const SIX_DEC_TOKENS: &[&str] = &[
+                "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC mainnet
+                "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // USDC Arbitrum
+                "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", // USDC.e Arbitrum
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // USDC Base
+                "0x0b2c639c533813f4aa9d7837caf62653d097ff85", // USDC Optimism
+                "0x7f5c764cbc14f9669b88837ca1490cca17c31607", // USDC.e Optimism
+                "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", // USDC Polygon
+                "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", // USDC.e Polygon
+                "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", // USDC Linea
+                "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // USDC Scroll
+                "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT mainnet
+                "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USDT Arbitrum
+                "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT Optimism
+                "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon
+                "usdc", "usdt",
+            ];
+            let tok = intent.src_token.to_lowercase();
+            if SIX_DEC_TOKENS.contains(&tok.as_str()) {
+                intent.amount.parse::<f64>().ok().map(|r| r / 1_000_000.0)
+            } else {
+                None
+            }
+        };
         if let Some(reason) = skip_rules.evaluate(
             &intent.protocol,
             intent.src_chain,
             intent.dst_chain,
-            None,
+            skip_rule_amount_usd,
             None,
             intent.fill_deadline,
         ) {
