@@ -1588,6 +1588,15 @@ impl MayanPoller {
                     Some(h) if !h.is_empty() => h.to_string(),
                     _ => continue,
                 };
+                // Evict oldest half when the seen set reaches 20 000 entries to
+                // prevent unbounded growth in long-running processes.
+                if seen.len() >= 20_000 {
+                    let mut keys: Vec<String> = seen.iter().cloned().collect();
+                    keys.sort_unstable();
+                    for k in keys.into_iter().take(10_000) {
+                        seen.remove(&k);
+                    }
+                }
                 if !seen.insert(order_hash.clone()) {
                     continue;
                 }
