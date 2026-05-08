@@ -1551,7 +1551,10 @@ fn token_price_heuristic(token: &str) -> f64 {
         "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91",  // WETH zkSync Era
     ];
     if ETH_LIKE.iter().any(|&s| lower == s) {
-        return 3000.0;
+        return std::env::var("ETH_PRICE_USD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3000.0);
     }
     1.0
 }

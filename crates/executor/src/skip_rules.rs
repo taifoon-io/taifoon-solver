@@ -116,6 +116,25 @@ impl SkipRules {
                 confidence: w.confidence,
             });
         }
+        // Warn about max_gas_gwei predicates: the current call site in solver-main
+        // always passes current_gas_gwei=None (no RPC at the skip-rule fast-path).
+        // Rules that rely solely on max_gas_gwei will never fire until a gas oracle
+        // is wired into the evaluate call. Surface this at load time so operators
+        // don't wonder why gas-based rules are inactive.
+        let gas_only_rules = rules.iter()
+            .filter(|r| r.predicate.max_gas_gwei.is_some()
+                && r.predicate.min_amount_usd.is_none()
+                && r.predicate.dst_chain.is_none()
+                && r.predicate.src_chain.is_none()
+                && r.predicate.max_fill_deadline_secs.is_none())
+            .count();
+        if gas_only_rules > 0 {
+            warn!(
+                "skip-rules: {} rule(s) use only max_gas_gwei — these will NOT fire \
+                 because current_gas_gwei is not yet supplied at the evaluate call site",
+                gas_only_rules
+            );
+        }
         info!("📐 skip-rules: loaded {} active rules", rules.len());
         Self { rules }
     }
