@@ -162,6 +162,25 @@ const USDT_BASE: &str = "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2";
 const WETH_BASE: &str = "0x4200000000000000000000000000000000000006";
 const WETH_ARB: &str = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
 const WETH_OPT: &str = "0x4200000000000000000000000000000000000006";
+
+/// Canonical WETH address per chain. Returns `None` for chains without a WETH bridge.
+fn weth_addr_for_chain(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        1     => Some("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
+        10    => Some(WETH_OPT),
+        8453  => Some(WETH_BASE),
+        42161 => Some(WETH_ARB),
+        59144 => Some("0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"), // WETH on Linea
+        _     => None,
+    }
+}
+
+fn eth_price_usd() -> f64 {
+    std::env::var("ETH_PRICE_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3000.0)
+}
 const MIN_BASE_ETH_FOR_OPS: f64 = 0.0008;
 const USDT_SWAP_AMOUNT_USD: f64 = 5.0;
 
@@ -384,10 +403,13 @@ impl Rebalancer {
                 .filter(|s| s.chain_id != HOME_CHAIN_ID && s.weth_raw > 0)
                 .max_by(|a, b| a.weth_raw.partial_cmp(&b.weth_raw).unwrap_or(std::cmp::Ordering::Equal));
             if let Some(src) = weth_src {
-                let weth_addr = if src.chain_id == 42161 { WETH_ARB } else { WETH_OPT };
+                if let Some(weth_addr) = weth_addr_for_chain(src.chain_id) {
                 info!("🔓 Unwrapping {} WETH on chain {} → native ETH (ETH bootstrap prep)", src.weth_raw as f64 / 1e18, src.chain_id);
                 let action = self.unwrap_weth_on_chain(src.chain_id, weth_addr, src.weth_raw).await;
                 actions.push(action);
+                } else {
+                    warn!("No WETH address known for chain {} — skipping Phase -2 WETH unwrap", src.chain_id);
+                }
             }
         }
 
@@ -925,7 +947,7 @@ impl Rebalancer {
         solana_addr: &str,
         eth_wei: u128,
     ) -> BridgeAction {
-        let eth_usd = eth_wei as f64 / 1e18 * 2500.0; // rough ETH price
+        let eth_usd = eth_wei as f64 / 1e18 * eth_price_usd();
         let mut action = BridgeAction {
             src_chain: src.chain_id,
             dst_chain: 0,
@@ -954,7 +976,7 @@ impl Rebalancer {
         eth_wei: u128,
         chain_id: u64,
     ) -> BridgeAction {
-        let eth_usd = eth_wei as f64 / 1e18 * 2500.0;
+        let eth_usd = eth_wei as f64 / 1e18 * eth_price_usd();
         let mut action = BridgeAction {
             src_chain: chain_id,
             dst_chain: 0,
@@ -1014,9 +1036,9 @@ impl Rebalancer {
 
         // Step 1: wrap ETH → WETH, then swap WETH → USDC via Uniswap exactInputSingle.
         // Uniswap SwapRouter02 accepts ETH directly via exactInputSingle when tokenIn=WETH and value>0.
-        let eth_price_usd = 2500.0_f64;
+        let cur_eth_price_usd = eth_price_usd();
         // USDC has 6 decimals: 1 USDC = 1_000_000 raw. Apply 10% slippage floor.
-        let usdc_expected = (eth_wei as f64 / 1e18 * eth_price_usd * 0.90 * 1e6) as u128;
+        let usdc_expected = (eth_wei as f64 / 1e18 * cur_eth_price_usd * 0.90 * 1e6) as u128;
         let min_usdc_out = U256::from(usdc_expected.max(1)); // min 1 raw to avoid div-by-zero
 
         let swap_params = UniswapSwapRouter::ExactInputSingleParams {
@@ -1457,7 +1479,7 @@ impl Rebalancer {
     async fn unwrap_weth_on_chain(&self, chain_id: u64, weth_addr: &str, weth_raw: u128) -> BridgeAction {
         let mut action = BridgeAction {
             src_chain: chain_id, dst_chain: chain_id,
-            token_symbol: "WETH".into(), amount_usd: weth_raw as f64 / 1e18 * 3000.0,
+            token_symbol: "WETH".into(), amount_usd: weth_raw as f64 / 1e18 * eth_price_usd(),
             kind: BridgeKind::EthBootstrap, tx_hash: None,
             status: if self.dry_run { "dry_run".into() } else { "pending".into() },
         };
@@ -1505,8 +1527,8 @@ impl Rebalancer {
         self.ensure_allowance(USDT_BASE, UNISWAP_SWAP_ROUTER_BASE, amount_u256, rpc)
             .await.context("approve Uniswap router for USDT")?;
 
-        // min WETH out: convert USDT (6 dec) → WETH (18 dec) at $3000/ETH, 90% floor
-        let min_out = (usdt_raw as f64 / 1e6 / 3000.0 * 0.90 * 1e18) as u128;
+        // min WETH out: convert USDT (6 dec) → WETH (18 dec) at spot price, 90% floor
+        let min_out = (usdt_raw as f64 / 1e6 / eth_price_usd() * 0.90 * 1e18) as u128;
 
         let swap_params = UniswapSwapRouter::ExactInputSingleParams {
             tokenIn: USDT_BASE.parse().context("parse USDT")?,

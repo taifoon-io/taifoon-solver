@@ -3,7 +3,15 @@
 use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 
-pub const WETH_PRICE_USD: f64 = 3000.0;
+const WETH_PRICE_USD_DEFAULT: f64 = 3000.0;
+
+pub fn weth_price_usd() -> f64 {
+    std::env::var("ETH_PRICE_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(WETH_PRICE_USD_DEFAULT)
+}
+
 
 /// Token addresses per chain for the fill-path tokens the solver uses.
 pub struct ChainTokens {
@@ -166,7 +174,7 @@ async fn scan_chain(http: &reqwest::Client, ct: &ChainTokens, solver: Address) -
 
     let (weth_usd, weth_raw) = if let Some(addr) = ct.weth {
         let raw = erc20_balance_raw(http, ct.rpc, addr, solver).await.unwrap_or(0);
-        ((raw as f64 / 1e18) * WETH_PRICE_USD, raw)
+        ((raw as f64 / 1e18) * weth_price_usd(), raw)
     } else {
         (0.0, 0)
     };
