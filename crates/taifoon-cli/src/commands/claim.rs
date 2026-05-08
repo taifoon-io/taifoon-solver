@@ -194,7 +194,15 @@ const GAS_TOPUP_AMOUNT_RAW: u64 = 3_000_000; // $3 USDT (6 dec)
 // zkSync L2 shared bridge address (for ERC-20 withdrawal)
 const ZKSYNC_L2_BRIDGE: Address = address!("0000000000000000000000000000000000010003");
 
-const WETH_PRICE_USD: f64 = 3000.0;
+/// ETH/WETH price fallback. Override with `ETH_PRICE_USD=<value>` at runtime.
+const WETH_PRICE_USD_DEFAULT: f64 = 3000.0;
+
+fn weth_price_usd() -> f64 {
+    std::env::var("ETH_PRICE_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(WETH_PRICE_USD_DEFAULT)
+}
 const MIN_BRIDGE_USD: f64 = 1.0;
 const MIN_GAS_ETH: f64 = 0.0005;
 
@@ -354,7 +362,7 @@ async fn eth_balance_f64(http: &reqwest::Client, rpc: &str, owner: Address) -> O
 
 fn usd_value(raw: U256, decimals: u32, symbol: &str) -> f64 {
     let amount = raw.to::<u128>() as f64 / 10f64.powi(decimals as i32);
-    if symbol == "WETH" { amount * WETH_PRICE_USD } else { amount }
+    if symbol == "WETH" { amount * weth_price_usd() } else { amount }
 }
 
 async fn send_raw_tx(
@@ -863,7 +871,7 @@ async fn run_once(
                     bridges.push(BridgeEntry {
                         from_chain: FUNDING_CHAIN_ID, from_chain_name: "Arbitrum".to_string(),
                         token: "USDT".to_string(), amount_usd: GAS_TOPUP_USD,
-                        fee_usd: 0.0, net_usd: r.native_out * WETH_PRICE_USD,
+                        fee_usd: 0.0, net_usd: r.native_out * weth_price_usd(),
                         tx_hash: r.tx_hash,
                         status: if args.dry_run { "gas_topup_dry_run".to_string() } else { "gas_topup_sent".to_string() },
                     });
