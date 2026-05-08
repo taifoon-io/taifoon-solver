@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
 
-const UPSTREAM = process.env.SOLVER_API_INTERNAL_URL ?? 'http://127.0.0.1:8099'
+const UPSTREAM = process.env.SOLVER_API_INTERNAL_URL ?? 'http://127.0.0.1:8082'
 
 async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
