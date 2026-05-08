@@ -439,7 +439,10 @@ impl Rebalancer {
                 warn!("No surplus chain available for gas top-up to {}", target.chain_name);
                 continue;
             };
-            let src_snap = snapshots.iter().find(|s| s.chain_id == src_chain_id).unwrap();
+            let Some(src_snap) = snapshots.iter().find(|s| s.chain_id == src_chain_id) else {
+                warn!("No snapshot for surplus chain {} (gas top-up skipped)", src_chain_id);
+                continue;
+            };
 
             let amount_raw = usd_to_raw(GAS_TOPUP_USD, src_snap.bridge_token_decimals);
             let action = self.gas_topup(src_snap, target, amount_raw, GAS_TOPUP_USD).await;
@@ -468,7 +471,10 @@ impl Rebalancer {
                 warn!("No chain has >${:.2} available to fund {} shortfall", MIN_BRIDGE_USD, target.chain_name);
                 continue;
             };
-            let src_snap = snapshots.iter().find(|s| s.chain_id == src_chain_id).unwrap();
+            let Some(src_snap) = snapshots.iter().find(|s| s.chain_id == src_chain_id) else {
+                warn!("No snapshot for surplus chain {} (stable fill skipped)", src_chain_id);
+                continue;
+            };
             let src_target = targets.iter().find(|t| t.chain_id == src_chain_id);
 
             // Cap at working balance on source (already deducted by Phase 1 gas top-ups),

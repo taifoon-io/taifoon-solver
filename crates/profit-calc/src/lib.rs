@@ -131,7 +131,7 @@ impl ProfitCalculator {
                             timestamp: now,
                         });
 
-                        tracing::info!("✅ Warmbed API returned gas price for chain {}: {} gwei (block {})",
+                        tracing::debug!("profit-calc: gas chain={} gwei={} block={}",
                             chain_id, gas_price_gwei, gas_data.block_number);
                         Ok(gas_price_gwei)
                     }
@@ -200,22 +200,8 @@ impl ProfitCalculator {
         let amount_human = amount_raw as f64 / divisor;
         let amount_usd = amount_human * token_price_usd;
 
-        tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        tracing::info!("📊 VERBOSE AMOUNT DECODING:");
-        tracing::info!("   Token Address: {}", intent.src_token);
-        tracing::info!("   Chain ID: {}", intent.src_chain);
-        tracing::info!("   ────────────────────────────────────────────────────────────────");
-        tracing::info!("   RAW AMOUNT (wei/smallest unit): {}", amount_raw);
-        tracing::info!("   DETECTED DECIMALS: {}", decimals);
-        tracing::info!("   CONVERSION DIVISOR: 10^{} = {}", decimals, divisor);
-        tracing::info!("   ────────────────────────────────────────────────────────────────");
-        tracing::info!("   HUMAN-READABLE AMOUNT: {:.18}", amount_human);
-        tracing::info!("   (full precision: {} / {} = {:.18})", amount_raw, divisor, amount_human);
-        tracing::info!("   ────────────────────────────────────────────────────────────────");
-        tracing::info!("   TOKEN PRICE (USD): ${:.6}", token_price_usd);
-        tracing::info!("   TOTAL VALUE (USD): ${:.6}", amount_usd);
-        tracing::info!("   (calculation: {:.18} × ${:.6} = ${:.6})", amount_human, token_price_usd, amount_usd);
-        tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        tracing::debug!("profit-calc: token={} chain={} raw={} decimals={} human={:.6} price=${:.4} usd=${:.4}",
+            intent.src_token, intent.src_chain, amount_raw, decimals, amount_human, token_price_usd, amount_usd);
 
         // 3. Calculate protocol fee in USD
         let protocol_fee_usd = amount_usd * (protocol_fee_bps / 10000.0);
@@ -233,17 +219,8 @@ impl ProfitCalculator {
         // 7. Net profit
         let net_profit_usd = protocol_fee_usd + spread_usd - total_gas_usd - liquidity_cost_usd;
 
-        tracing::info!("💰 PROFIT CALCULATION:");
-        tracing::info!("   Protocol Fee ({} bps): ${:.6}", protocol_fee_bps, protocol_fee_usd);
-        tracing::info!("   (calculation: ${:.6} × {} / 10000 = ${:.6})", amount_usd, protocol_fee_bps, protocol_fee_usd);
-        tracing::info!("   Gas Cost (src: ${:.2} + dst: ${:.2}): ${:.2}", src_gas_usd, dst_gas_usd, total_gas_usd);
-        tracing::info!("   Spread: ${:.2}", spread_usd);
-        tracing::info!("   Liquidity Cost: ${:.2}", liquidity_cost_usd);
-        tracing::info!("   ────────────────────────────────────────────────────────────────");
-        tracing::info!("   NET PROFIT: ${:.6}", net_profit_usd);
-        tracing::info!("   (calculation: ${:.6} + ${:.2} - ${:.2} - ${:.2} = ${:.6})",
-            protocol_fee_usd, spread_usd, total_gas_usd, liquidity_cost_usd, net_profit_usd);
-        tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        tracing::debug!("profit-calc: fee_bps={} fee_usd=${:.4} gas_usd=${:.4} net=${:.4}",
+            protocol_fee_bps, protocol_fee_usd, total_gas_usd, net_profit_usd);
 
         Ok(ProfitResult {
             net_profit_usd,
@@ -277,52 +254,49 @@ impl ProfitCalculator {
     async fn estimate_gas_costs(&self, intent: &Intent) -> (f64, f64) {
         // The solver submits one fill tx on the destination chain only.
         // Source-chain gas is paid by the depositor — not our cost.
-        let dst_gas_usd = self.estimate_chain_gas_cost(intent.dst_chain).await;
+        let dst_gas_usd = self.estimate_chain_gas_cost(intent.dst_chain, &intent.protocol).await;
         (0.0, dst_gas_usd)
     }
 
-    async fn estimate_chain_gas_cost(&self, chain_id: u64) -> f64 {
-        // Estimate gas units for a typical cross-chain fill transaction
-        let estimated_gas_units = match chain_id {
-            1 => 150_000u64,   // Ethereum mainnet (complex contract calls)
-            10 => 100_000u64,  // Optimism
-            8453 => 100_000u64, // Base
-            42161 => 100_000u64, // Arbitrum
-            _ => 120_000u64,   // Default
+    async fn estimate_chain_gas_cost(&self, chain_id: u64, protocol: &str) -> f64 {
+        // Protocol-aware gas units: deBridge ~300k (OrderManager + DlnDestination),
+        // Mayan ~250k (fulfillSimple + ATA setup), Across ~200k (fillRelay).
+        let proto_lower = protocol.to_lowercase();
+        let protocol_gas_units: u64 = if proto_lower.contains("debridge") || proto_lower.contains("dln") {
+            300_000
+        } else if proto_lower.contains("mayan") {
+            250_000
+        } else {
+            // Across and default
+            200_000
         };
 
-        tracing::debug!("📊 Estimating gas cost for chain {} (estimated {} gas units)", chain_id, estimated_gas_units);
+        // Ethereum L1 intrinsic costs are higher; scale down L2s.
+        let estimated_gas_units = if chain_id == 1 {
+            protocol_gas_units.saturating_add(50_000)
+        } else {
+            protocol_gas_units
+        };
 
-        // Try to fetch real gas price from Warmbed API
         match self.fetch_gas_price(chain_id).await {
             Ok(gas_price_gwei) => {
-                // Calculate cost in USD
-                // Formula: gas_units × (gas_price_gwei / 1e9) = ETH cost
-                // Then: ETH cost × ETH_price_USD = USD cost
-                let gas_price_eth = gas_price_gwei / 1_000_000_000.0; // Convert gwei to ETH
-                let gas_cost_eth = (estimated_gas_units as f64) * gas_price_eth;
+                let gas_cost_eth = (estimated_gas_units as f64) * (gas_price_gwei / 1_000_000_000.0);
                 let gas_cost_usd = gas_cost_eth * self.eth_price_usd;
-
-                tracing::info!("💰 Real gas cost for chain {}: {} gwei (={:.9} ETH/gas) × {} units = {:.6} ETH = ${:.2}",
-                    chain_id, gas_price_gwei, gas_price_eth, estimated_gas_units, gas_cost_eth, gas_cost_usd);
-
+                tracing::debug!("profit-calc: chain={} proto={} gwei={} units={} gas_usd=${:.4}",
+                    chain_id, protocol, gas_price_gwei, estimated_gas_units, gas_cost_usd);
                 gas_cost_usd
             }
             Err(_) => {
-                // Fallback to hardcoded estimates if API fails
                 let fallback = match chain_id {
-                    1 => 1.20,     // Ethereum mainnet (~3 gwei, 200k gas, $3k ETH)
-                    10 => 0.02,    // Optimism
-                    8453 => 0.02,  // Base
-                    42161 => 0.05, // Arbitrum
-                    137 => 0.05,   // Polygon
-                    56 => 0.05,    // BSC
-                    _ => 0.30,     // Default
+                    1 => 1.20,
+                    10 => 0.02,
+                    8453 => 0.02,
+                    42161 => 0.05,
+                    137 => 0.05,
+                    56 => 0.05,
+                    _ => 0.30,
                 };
-
-                tracing::warn!("⚠️  Using fallback gas estimate for chain {}: ${:.2} (Warmbed API unavailable)",
-                    chain_id, fallback);
-
+                tracing::warn!("profit-calc: gas API unavailable for chain={}, fallback=${:.2}", chain_id, fallback);
                 fallback
             }
         }
@@ -359,7 +333,6 @@ impl ProfitCalculator {
             "usdc", "usdt",
         ];
         if SIX_DEC.contains(&addr_lower.as_str()) {
-            tracing::info!("✅ Detected 6-decimal stablecoin: {}", addr_lower);
             return 6;
         }
 
@@ -403,12 +376,12 @@ impl ProfitCalculator {
         let is_stablecoin = STABLECOINS.contains(&addr_lower.as_str());
 
         if is_stablecoin {
-            tracing::info!("💵 Token price: $1.00 (stablecoin)");
+            tracing::debug!("profit-calc: token={} price=$1.00 (stablecoin)", addr_lower);
             return 1.0;
         }
 
         // ETH/WETH/Native (use cached ETH price)
-        tracing::info!("💵 Token price: ${:.2} (ETH/WETH)", self.eth_price_usd);
+        tracing::debug!("profit-calc: token={} price=${:.2} (eth)", addr_lower, self.eth_price_usd);
         self.eth_price_usd
     }
 }
