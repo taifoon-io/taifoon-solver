@@ -590,7 +590,7 @@ impl AcrossPoller {
                             .unwrap_or(0);
                         // Allow if we ARE the exclusive relayer — only skip if someone else is.
                         let we_are_exclusive = self.solver_address.as_deref()
-                            .map(|sa| sa == excl.to_lowercase())
+                            .map(|sa| sa.to_lowercase() == excl.to_lowercase())
                             .unwrap_or(false);
                         if excl_deadline > now_secs && !we_are_exclusive {
                             continue; // still exclusive to another relayer — retry when expired
