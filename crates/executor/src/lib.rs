@@ -37,8 +37,8 @@ pub use lambda_controller::{
 pub use lifi_meta_router::LiFiMetaRouter;
 pub use mayan_evm_estimate::{default_mayan_swift_addresses, MayanEvmEstimateAdapter};
 pub use mayan_solana_estimate::{
-    load_messiah_solana_pubkey_or_fallback, svm_to_parent, MayanSolanaEstimateAdapter,
-    DEFAULT_SOLANA_RPC, FALLBACK_SOLANA_PAYER_PUBKEY,
+    default_solana_rpc, load_messiah_solana_pubkey_or_fallback, svm_to_parent,
+    MayanSolanaEstimateAdapter, DEFAULT_SOLANA_RPC, FALLBACK_SOLANA_PAYER_PUBKEY,
 };
 pub use outcome_log::{OutcomeLog, OutcomeRecord, PnlSummary, ProtocolPnl};
 pub use skip_rules::{RulePredicate, SkipRule, SkipRules};

@@ -105,9 +105,8 @@ pub const COMPUTE_BUDGET_PROGRAM_ID: &str = "ComputeBudget1111111111111111111111
 /// edge if the network is congested.
 pub const DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU: u64 = 50_000;
 
-/// Default mainnet RPC endpoint. Public, free, supports `simulateTransaction`.
-/// We don't hardcode this in production — use `SOLANA_RPC_URL` env override.
-pub const DEFAULT_SOLANA_RPC_URL: &str = "https://mainnet.helius-rpc.com/?api-key=741d812c-923e-46e1-aaa0-f89883e7147b";
+/// Public mainnet-beta Solana RPC. Set `SOLANA_RPC_URL` to use a private node.
+pub const DEFAULT_SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
 /// Subset of the genome event we need to build the Mayan Solana fulfill ix.
 /// This is a deliberately narrow projection — the executor wraps the full

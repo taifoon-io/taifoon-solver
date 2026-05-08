@@ -24,9 +24,22 @@ use crate::estimate::{
     write_attempt_bundle, AttemptBundle, EstimateAdapter, EstimateOutcome,
 };
 
-/// Default mainnet-beta Solana RPC. Public, free, supports
-/// `simulateTransaction`. Override via `SOLANA_RPC_URL`.
-pub const DEFAULT_SOLANA_RPC: &str = "https://mainnet.helius-rpc.com/?api-key=fce0a0a8-03a0-4a6c-b816-e70d5331669d";
+/// Fallback Solana RPC used only when `SOLANA_RPC_URL` is not set.
+/// Points to Helius public mainnet-beta endpoint; override in production.
+const DEFAULT_SOLANA_RPC_FALLBACK: &str = "https://api.mainnet-beta.solana.com";
+
+/// Resolve the Solana RPC URL from the environment, falling back to the public
+/// mainnet-beta endpoint. Set `SOLANA_RPC_URL` (or `HELIUS_RPC_URL`) in
+/// production to use a private/premium RPC node.
+pub fn default_solana_rpc() -> String {
+    std::env::var("SOLANA_RPC_URL")
+        .or_else(|_| std::env::var("HELIUS_RPC_URL"))
+        .unwrap_or_else(|_| DEFAULT_SOLANA_RPC_FALLBACK.to_string())
+}
+
+/// `DEFAULT_SOLANA_RPC` is kept for callers that need a `&str` constant.
+/// Prefer `default_solana_rpc()` at runtime.
+pub const DEFAULT_SOLANA_RPC: &str = DEFAULT_SOLANA_RPC_FALLBACK;
 
 /// Source-of-truth pubkey we use for the calldata-only path when the macOS
 /// keychain entry `mamba-messiah-solana-key` is missing. `11111111…` is the

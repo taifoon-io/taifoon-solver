@@ -42,7 +42,7 @@ use crate::across_executor::{build_across_adapter_calldata, build_across_spoke_p
 use crate::evm_estimate::{optimal_gas_price_wei, run_evm_estimate_with_value};
 use crate::estimate::EstimateOutcome;
 use crate::mayan_evm_estimate::MayanEvmEstimateAdapter;
-use crate::mayan_solana_estimate::DEFAULT_SOLANA_RPC;
+use crate::mayan_solana_estimate::default_solana_rpc;
 use crate::outcome_log::{OutcomeLog, OutcomeRecord};
 use crate::spinner_solver::SpinnerSolverClient;
 use protocol_adapters::debridge::DeBridgeAdapter;
@@ -619,8 +619,7 @@ impl LambdaController {
                 return Ok(LambdaExecuteOutcome::Skipped { reason: "dry_run".into() });
             }
 
-            let rpc_url = std::env::var("SOLANA_RPC_URL")
-                .unwrap_or_else(|_| DEFAULT_SOLANA_RPC.to_string());
+            let rpc_url = default_solana_rpc();
             let broadcaster = match SolanaBroadcaster::from_env(&rpc_url) {
                 Ok(b) => b,
                 Err(e) => {
