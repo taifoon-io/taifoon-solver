@@ -292,6 +292,7 @@ impl LambdaController {
                         let reason = format!("debridge_no_spread:give={g}<=take={t}");
                         info!("⏭️  {} — {}", intent.id, reason);
                         self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                        let _ = self.wallet.release(&intent.id);
                         return Ok(LambdaExecuteOutcome::Skipped { reason });
                     }
                     let spread_pct = (g - t) as f64 / g as f64 * 100.0;
@@ -299,6 +300,7 @@ impl LambdaController {
                         let reason = format!("debridge_spread_too_thin:{spread_pct:.3}pct");
                         info!("⏭️  {} — {}", intent.id, reason);
                         self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                        let _ = self.wallet.release(&intent.id);
                         return Ok(LambdaExecuteOutcome::Skipped { reason });
                     }
                 }
