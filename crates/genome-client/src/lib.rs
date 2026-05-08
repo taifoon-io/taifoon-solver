@@ -678,7 +678,10 @@ fn across_deposit_to_intent(
     dep_id: i64,
     fill_deadline_unix: i64,
 ) -> Intent {
-    let src_chain = dep.get("originChainId").and_then(|v| v.as_u64()).unwrap_or(1);
+    let src_chain = dep.get("originChainId").and_then(|v| v.as_u64()).unwrap_or_else(|| {
+        tracing::warn!("across_deposit: missing originChainId for dep_id={dep_id}, defaulting to mainnet (1)");
+        1
+    });
     let depositor = dep.get("depositor").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
     let recipient = dep.get("recipient").and_then(|v| v.as_str())
         .unwrap_or(&depositor).to_string();
@@ -1290,8 +1293,8 @@ fn parse_debridge_ws_message(
         return None;
     }
 
-    let maker_src = order.get("maker_src")?.as_str().unwrap_or("0x0");
-    let receiver = order.get("receiver_dst")?.as_str().unwrap_or("0x0");
+    let maker_src = order.get("maker_src")?.as_str()?;
+    let receiver = order.get("receiver_dst")?.as_str()?;
     let maker_nonce: u64 = order.get("maker_order_nonce")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
@@ -1321,7 +1324,7 @@ fn parse_debridge_ws_message(
         .unwrap_or_else(|| order_id.clone());
 
     let maker_src_addr = {
-        let clean = maker_src.trim_start_matches("0x");
+        let clean = maker_src.trim_start_matches("0x").to_lowercase();
         if clean.len() >= 40 {
             format!("0x{}", &clean[clean.len()-40..])
         } else {
@@ -1329,7 +1332,7 @@ fn parse_debridge_ws_message(
         }
     };
     let receiver_addr = {
-        let clean = receiver.trim_start_matches("0x");
+        let clean = receiver.trim_start_matches("0x").to_lowercase();
         if clean.len() >= 40 {
             format!("0x{}", &clean[clean.len()-40..])
         } else {
