@@ -2,12 +2,11 @@
 
 use anyhow::Result;
 use genome_client::{GenomeClient, Intent};
-use serde_json::json;
 use tokio::sync::mpsc;
 
 pub async fn stream_intents(
     genome_url: &str,
-    spinner_url: &str,
+    _spinner_url: &str,
     protocol: Option<String>,
     limit: Option<usize>,
     profitable_only: bool,
@@ -83,7 +82,7 @@ pub async fn stream_intents(
     Ok(())
 }
 
-pub async fn stats(since: &str, spinner_url: &str, json_mode: bool) -> Result<()> {
+pub async fn stats(since: &str, _spinner_url: &str, json_mode: bool) -> Result<()> {
     if json_mode {
         println!(r#"{{"success":true,"data":{{"fills":0,"profit_usd":0.0,"since":"{}"}}}}"#, since);
     } else {

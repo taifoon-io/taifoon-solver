@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -1595,7 +1593,7 @@ impl MayanPoller {
                 };
 
                 let src_chain_mayan = order.get("sourceChain").and_then(|v| v.as_str()).unwrap_or("0");
-                let swap_chain = order.get("swapChain").and_then(|v| v.as_str()).unwrap_or("0");
+                let _swap_chain = order.get("swapChain").and_then(|v| v.as_str()).unwrap_or("0");
                 let src_chain = mayan_chain_to_evm(src_chain_mayan).unwrap_or(0);
 
                 let from_token = order.get("fromTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();

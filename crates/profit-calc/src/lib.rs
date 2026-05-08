@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use genome_client::Intent;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -32,31 +32,24 @@ struct SolverIntel {
 struct ProtocolInfo {
     #[serde(default)]
     avg_fee_bps: Option<f64>,
-    #[serde(default)]
-    fills_168h: Option<u64>,
-}
-
-/// Gas price from Warmbed API
-#[derive(Debug, Clone, Deserialize)]
-struct GasMetrics {
-    chain_id: u64,
-    block_number: u64,
-    timestamp: u64,
-    gas_used: u64,
-    gas_limit: u64,
-    gas_price: Option<u64>,
-    tx_count: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct GasResponse {
+    #[allow(dead_code)]
     chain_id: u64,
+    #[allow(dead_code)]
     block_number: u64,
+    #[allow(dead_code)]
     timestamp: u64,
+    #[allow(dead_code)]
     base_fee_per_gas_wei: Option<String>,
     gas_price_gwei: Option<f64>,
+    #[allow(dead_code)]
     gas_used: u64,
+    #[allow(dead_code)]
     gas_limit: u64,
+    #[allow(dead_code)]
     utilization_pct: f64,
 }
 
@@ -376,7 +369,7 @@ impl ProfitCalculator {
     }
 
     /// Get token price in USD
-    fn get_token_price(&self, token_addr: &str, chain_id: u64) -> f64 {
+    fn get_token_price(&self, token_addr: &str, _chain_id: u64) -> f64 {
         let addr_lower = token_addr.to_lowercase();
 
         // Stablecoins (USDC, USDT, DAI, etc.) — reuse the same 6-dec list

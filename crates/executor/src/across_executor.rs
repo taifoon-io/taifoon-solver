@@ -665,7 +665,7 @@ pub async fn fetch_relay_data_from_tx(
             && data[20..32].iter().all(|&b| b == 0)
             && data[0..20].iter().any(|&b| b != 0);
 
-        let read_u256 = |offset: usize| -> Option<U256> {
+        let _read_u256 = |offset: usize| -> Option<U256> {
             if offset + 32 > data.len() { return None; }
             Some(U256::from_be_slice(&data[offset..offset + 32]))
         };

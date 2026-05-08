@@ -46,9 +46,8 @@ use crate::mayan_solana_estimate::DEFAULT_SOLANA_RPC;
 use crate::outcome_log::{OutcomeLog, OutcomeRecord};
 use crate::spinner_solver::SpinnerSolverClient;
 use protocol_adapters::debridge::DeBridgeAdapter;
-use protocol_adapters::{ProtocolAdapter, SpinnerClient};
+use protocol_adapters::SpinnerClient;
 use protocol_adapters_solana::{MayanSolanaIntent, SolanaBroadcaster};
-use crate::wormhole::fetch_vaa_for_mayan_order;
 
 /// Outcome of a `lambda_execute` run, mirrored back to the solver event API.
 #[derive(Debug, Clone)]
@@ -400,7 +399,7 @@ impl LambdaController {
         // Strategy:
         //   A) If we have a deposit_id → Across API /deposit/status → depositTxHash → decode on-chain
         //   B) If we have a tx_hash that looks like a real tx → decode on-chain directly
-        let enriched_intent;
+        let enriched_intent: Option<Intent>;
         // Enrichment only applies to Across direct-fills. deBridge/Mayan carry all needed
         // fields from their on-chain log decoders and never need Across relay-data lookup.
         let intent: &Intent = if direct_fill && !is_debridge_pre && !is_mayan_pre {

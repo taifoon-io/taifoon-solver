@@ -19,7 +19,7 @@ use tokio::sync::{broadcast, mpsc, Semaphore};
 use tracing::{error, info, warn};
 use tracing_subscriber::Layer;
 use wallet_manager::WalletManager;
-use t3rn_sidecar::{delivery_router, spawn_delivery_loop, DeliveryMatrix, T3RNSidecar};
+use t3rn_sidecar::{delivery_router, DeliveryMatrix, T3RNSidecar};
 
 /// A tracing layer that forwards formatted log lines to a broadcast channel.
 struct BroadcastLogLayer {
@@ -718,7 +718,7 @@ async fn main() -> Result<()> {
                                 child.mayan_order_id.as_deref().map(|s| &s[..s.len().min(20)]),
                                 child.mayan_auction_mode);
                         } else {
-                            info!("⚠️  LiFi→Mayan: could not resolve Mayan order for tx {} — skip", &lookup_tx[..18]);
+                            info!("⚠️  LiFi→Mayan: could not resolve Mayan order for tx {} — skip", &lookup_tx[..lookup_tx.len().min(18)]);
                             dispatched.remove(&dedup_key);
                             continue;
                         }

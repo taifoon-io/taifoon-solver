@@ -1,6 +1,5 @@
 //! Wallet management for Taifoon solver
 
-use alloy::primitives::{Address, U256};
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -42,7 +41,7 @@ impl Wallet {
 pub async fn status(
     private_key: &str,
     chain: Option<u64>,
-    spinner_url: &str,
+    _spinner_url: &str,
     json_mode: bool,
 ) -> Result<()> {
     let signer = Wallet::from_private_key(private_key)?;

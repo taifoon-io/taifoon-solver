@@ -10,12 +10,10 @@
 //! - Exit codes: 0 = success, 1 = error, 2 = no opportunities
 //! - Autonomous operation mode for AI agents
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::path::PathBuf;
+use serde::Serialize;
 
 mod wallet;
 mod monitor;
@@ -25,7 +23,6 @@ mod commands;
 
 extern crate portfolio_sidecar;
 
-use wallet::Wallet;
 
 // ── CLI Structure ────────────────────────────────────────────────────────────
 

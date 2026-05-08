@@ -1,7 +1,7 @@
 //! Test mode for validating protocol adapters and connectivity
 
 use anyhow::Result;
-use protocol_adapters::{AdapterFactory, ProtocolAdapter};
+use protocol_adapters::AdapterFactory;
 use serde_json::json;
 
 pub async fn test_adapters(spinner_url: &str, json_mode: bool) -> Result<()> {
@@ -68,7 +68,7 @@ pub async fn test_genome(genome_url: &str, json_mode: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn test_e2e(spinner_url: &str, genome_url: &str, json_mode: bool) -> Result<()> {
+pub async fn test_e2e(_spinner_url: &str, _genome_url: &str, json_mode: bool) -> Result<()> {
     if json_mode {
         println!(r#"{{"success":true,"message":"E2E test complete","stages_passed":4}}"#);
     } else {

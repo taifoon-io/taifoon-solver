@@ -1602,9 +1602,16 @@ fn usd_to_raw(usd: f64, decimals: u32) -> u128 {
 /// Per the rebalancer brief: Arbitrum→Base, Optimism→Base, Ethereum→Base
 /// (same lanes Across already covers).
 fn debridge_supports(src_chain: u64, dst_chain: u64) -> bool {
+    // deBridge DLN supports all EVM↔EVM routes. We whitelist only the paths
+    // where we have both chain wiring and a known dst USDC address.
     matches!(
         (src_chain, dst_chain),
-        (42161, 8453) | (10, 8453) | (1, 8453)
+        // → Base
+        (42161, 8453) | (10, 8453) | (1, 8453) | (137, 8453) |
+        // → Arbitrum
+        (8453, 42161) | (10, 42161) | (1, 42161) | (137, 42161) |
+        // → Optimism
+        (8453, 10) | (42161, 10) | (1, 10) | (137, 10)
     )
 }
 
@@ -1613,7 +1620,9 @@ fn debridge_supports(src_chain: u64, dst_chain: u64) -> bool {
 /// into the DLN API URL.
 fn debridge_dst_usdc(dst_chain: u64) -> Option<&'static str> {
     match dst_chain {
-        8453 => Some("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), // USDC on Base
+        8453  => Some("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), // USDC on Base
+        42161 => Some("0xaf88d065e77c8cc2239327c5edb3a432268e5831"), // USDC native on Arbitrum
+        10    => Some("0x0b2c639c533813f4aa9d7837caf62653d097ff85"), // USDC native on Optimism
         _ => None,
     }
 }
