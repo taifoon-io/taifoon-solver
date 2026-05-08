@@ -169,11 +169,13 @@ impl AcrossAdapter {
             outputAmount: output_amount,
             originChainId: U256::from(intent.src_chain),
             depositId: self.extract_deposit_id(intent)?,
-            fillDeadline: (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + 3600) as u32,
+            fillDeadline: intent.fill_deadline.unwrap_or_else(|| {
+                (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    + 3600) as u32
+            }),
             exclusivityDeadline: 0,
             message: Bytes::new(),
         })
