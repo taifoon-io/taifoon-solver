@@ -1247,7 +1247,9 @@ fn parse_debridge_ws_message(
         format!("0x{}", order_id_hex)
     };
 
-    // Dedup
+    // Dedup: evict (clear) when cap is hit — a brief replay window is acceptable
+    // vs unbounded memory growth. Cap at 50 000 order IDs (~3.3 MB).
+    if seen.len() >= 50_000 { seen.clear(); }
     if !seen.insert(order_id.clone()) { return None; }
 
     let order = order_info.get("order")?;
@@ -1796,10 +1798,20 @@ impl GenomeClient {
         info!("✅ Connected to genome stream");
 
         let mut buffer = String::new();
+        // Guard against unbounded growth from malformed/truncated SSE data.
+        const MAX_BUFFER_BYTES: usize = 512 * 1024; // 512 KiB
 
         while let Some(chunk) = response.chunk().await? {
             let text = String::from_utf8_lossy(&chunk);
             buffer.push_str(&text);
+
+            // Drop the buffer if it exceeds the cap without a complete event —
+            // indicates a malformed stream or a very large non-intent event.
+            if buffer.len() > MAX_BUFFER_BYTES && !buffer.contains("\n\n") {
+                tracing::warn!("SSE buffer overflow ({} bytes, no complete event) — discarding", buffer.len());
+                buffer.clear();
+                continue;
+            }
 
             // Process complete SSE events
             while let Some(event_end) = buffer.find("\n\n") {
@@ -1824,15 +1836,19 @@ impl GenomeClient {
         // SSE format:
         // event: genome
         // data: {...}
+        //
+        // Per SSE spec, multiple `data:` lines are concatenated with \n.
+        // In practice genome emits single-line JSON but we handle multi-line
+        // correctly to avoid silent data truncation.
 
         let mut event_type = None;
-        let mut data = None;
+        let mut data_parts: Vec<&str> = Vec::new();
 
         for line in event_text.lines() {
             if let Some(content) = line.strip_prefix("event: ") {
                 event_type = Some(content.trim());
             } else if let Some(content) = line.strip_prefix("data: ") {
-                data = Some(content.trim());
+                data_parts.push(content.trim());
             }
         }
 
@@ -1841,7 +1857,14 @@ impl GenomeClient {
             return None;
         }
 
-        let data = data?;
+        if data_parts.is_empty() { return None; }
+        let data_owned;
+        let data: &str = if data_parts.len() == 1 {
+            data_parts[0]
+        } else {
+            data_owned = data_parts.join("\n");
+            &data_owned
+        };
 
         // Parse JSON data, tolerating legacy/canonical key duplicates.
         let genome_event: GenomeEvent = match GenomeEvent::from_json_str(data) {

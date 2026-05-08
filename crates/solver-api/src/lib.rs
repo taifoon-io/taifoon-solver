@@ -884,13 +884,10 @@ async fn portfolio_handler(
     }
 
     // Solana balance — pick up premium RPC from chain_wiring if Solana entry exists
-    let sol_rpc = {
-        let w = load_chain_wiring_for_portfolio();
-        w.iter()
-            .find(|(cid, _, _)| *cid == 1_399_811_149)
-            .map(|(_, _, rpc)| rpc.clone())
-            .unwrap_or_else(|| "https://api.mainnet-beta.solana.com".to_string())
-    };
+    let sol_rpc = chain_list.iter()
+        .find(|(cid, _, _)| *cid == 1_399_811_149)
+        .map(|(_, _, rpc)| rpc.clone())
+        .unwrap_or_else(|| "https://api.mainnet-beta.solana.com".to_string());
     // Solana SOL gas threshold mirrors portfolio_sidecar::inventory::MIN_SOLANA_SOL
     // and WARN_SOLANA_SOL. Keep these in sync with inventory.rs.
     const MIN_SOLANA_SOL: f64 = 0.005;
