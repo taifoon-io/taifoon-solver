@@ -823,7 +823,7 @@ async fn main() -> Result<()> {
             // Issue #16: enrichment-failure log handle for the spawned task.
             let enrichment_log = rule_skip_log.clone();
             tokio::spawn(async move {
-                // Acquire permit — blocks until a slot is free (max 2 concurrent fills).
+                // Acquire permit — blocks until a slot is free (max 1 concurrent fill).
                 let _permit = match sem.acquire().await {
                     Ok(p) => p,
                     Err(_) => return, // semaphore closed (shutdown)

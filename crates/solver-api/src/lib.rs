@@ -1225,7 +1225,19 @@ async fn require_solver_api_token(req: Request<Body>, next: Next) -> Response {
         .map(str::trim)
         .unwrap_or("");
 
-    if provided.is_empty() || provided != expected {
+    // Constant-time comparison to resist timing-based token enumeration.
+    let provided_b = provided.as_bytes();
+    let expected_b = expected.as_bytes();
+    let len_ok = provided_b.len() == expected_b.len();
+    let cmp_len = provided_b.len().max(expected_b.len());
+    let acc = (0..cmp_len)
+        .map(|i| {
+            let a = provided_b.get(i).copied().unwrap_or(0);
+            let b = expected_b.get(i).copied().unwrap_or(0);
+            a ^ b
+        })
+        .fold(0u8, |acc, x| acc | x);
+    if !len_ok || acc != 0 {
         return unauthorized();
     }
 
