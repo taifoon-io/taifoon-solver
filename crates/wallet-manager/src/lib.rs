@@ -63,13 +63,14 @@ impl IntentState {
     }
 
     /// Terminal states do not hold reserved funds and cannot transition further.
+    /// Note: `Confirmed` is NOT terminal — deBridge fills must continue to
+    /// `ClaimPending → Claimed`. Only `Claimed` is the final Confirmed-path terminal.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
             IntentState::SkipUnprofitable
                 | IntentState::ProofMissing
                 | IntentState::CalldataError
-                | IntentState::Confirmed
                 | IntentState::Claimed
                 | IntentState::Reverted
         )
@@ -664,22 +665,27 @@ mod tests {
     fn terminal_state_blocks_transition() {
         let m = mgr();
         m.record_detected(intent("i1", 50.0)).unwrap();
-        m.transition("i1", IntentState::Confirmed, Some("0xabc"), None)
+        // Reverted IS terminal — a second transition must be rejected.
+        m.transition("i1", IntentState::Reverted, Some("0xabc"), None)
             .unwrap();
         let err = m
-            .transition("i1", IntentState::Reverted, None, None)
+            .transition("i1", IntentState::Claimed, None, None)
             .unwrap_err();
         assert!(matches!(err, WalletError::TerminalTransition(_, _)));
     }
 
     #[test]
-    fn confirmed_release_via_transition() {
+    fn confirmed_not_terminal_reservation_held() {
         let m = mgr();
         m.record_detected(intent("i1", 75.0)).unwrap();
         m.reserve("i1", 75.0).unwrap();
         m.transition("i1", IntentState::Confirmed, Some("0xdead"), None)
             .unwrap();
-        // Terminal transition releases the hold.
+        // Confirmed is NOT terminal — reservation stays held until Claimed.
+        assert_eq!(m.status().unwrap().reserved_usd, 75.0);
+        // Claiming releases the hold.
+        m.transition("i1", IntentState::ClaimPending, None, None).unwrap();
+        m.transition("i1", IntentState::Claimed, Some("0xclaim"), None).unwrap();
         assert_eq!(m.status().unwrap().reserved_usd, 0.0);
     }
 
