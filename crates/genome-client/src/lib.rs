@@ -428,7 +428,7 @@ impl Intent {
             detected_at: event.ts.unwrap_or_else(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_millis() as u64 / 1000
             }),
             output_amount: event.output_amount,

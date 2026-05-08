@@ -97,7 +97,7 @@ impl ProfitCalculator {
             if let Some(cached) = cache.get(&chain_id) {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs();
 
                 if now - cached.timestamp < CACHE_TTL_SECS {
@@ -125,7 +125,7 @@ impl ProfitCalculator {
                         // Update cache
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs();
 
                         let mut cache = self.gas_price_cache.write().await;
