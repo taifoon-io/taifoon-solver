@@ -33,6 +33,7 @@ pub struct ApprovalArgs {
 }
 
 struct ChainApproval {
+    #[allow(dead_code)]
     chain_id: u64,
     name: &'static str,
     rpc_url: &'static str,

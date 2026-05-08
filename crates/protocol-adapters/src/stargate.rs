@@ -4,7 +4,6 @@
 //! This adapter provides a stub for future LayerZero-based filling opportunities
 
 use super::*;
-use alloy::primitives::Address;
 
 pub struct StargateAdapter {
     spinner_client: SpinnerClient,

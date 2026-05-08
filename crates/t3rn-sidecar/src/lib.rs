@@ -119,18 +119,12 @@ async fn request_permit(
 
 pub struct DeliveryMatrix {
     deployments: Vec<LwcDeployment>,
-    http: reqwest::Client,
 }
 
 impl DeliveryMatrix {
     pub fn new() -> Self {
         Self {
             deployments: load_deployments(),
-            http: reqwest::Client::builder()
-                .user_agent("t3rn-sidecar-matrix/1.0")
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 

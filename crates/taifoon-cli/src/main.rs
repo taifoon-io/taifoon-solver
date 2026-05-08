@@ -354,14 +354,6 @@ struct JsonOutput<T> {
 }
 
 impl<T: Serialize> JsonOutput<T> {
-    fn success(data: T) -> Self {
-        Self {
-            success: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
     fn error(msg: impl Into<String>) -> JsonOutput<()> {
         JsonOutput {
             success: false,
@@ -375,24 +367,8 @@ impl<T: Serialize> JsonOutput<T> {
     }
 }
 
-fn print_json<T: Serialize>(data: T) {
-    JsonOutput::success(data).print();
-}
-
 fn print_error_json(msg: impl Into<String>) {
     JsonOutput::<()>::error(msg).print();
-}
-
-fn print_human(msg: impl AsRef<str>) {
-    println!("{}", msg.as_ref());
-}
-
-fn print_success(msg: impl AsRef<str>) {
-    println!("{}", msg.as_ref().green().bold());
-}
-
-fn print_warn(msg: impl AsRef<str>) {
-    println!("{}", msg.as_ref().yellow());
 }
 
 fn print_error(msg: impl AsRef<str>) {

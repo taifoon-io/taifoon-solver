@@ -62,6 +62,7 @@ pub struct PortfolioArgs {
     /// Solver API URL — if set, fetches portfolio from running solver API
     pub api_url: Option<String>,
     pub json_mode: bool,
+    #[allow(dead_code)]
     pub spinner_url: String,
 }
 

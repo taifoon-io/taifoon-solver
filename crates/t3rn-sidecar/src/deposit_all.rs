@@ -7,7 +7,6 @@
 use alloy::{
     primitives::{Address, U256},
     providers::{Provider, ProviderBuilder},
-    sol_types::SolCall,
 };
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};

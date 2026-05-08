@@ -357,7 +357,7 @@ async fn scan_well(
     // We intentionally set pool_total_usd = pool_available_usd as the best
     // approximation we can get without a price oracle, keeping the field
     // consistent across all chains.
-    let pool_total_usd = pool_available_usd;
+    let _pool_total_usd = pool_available_usd;
 
     // getLPTokenBalance — need assetId first
     let lp_balance_usd = if asset != Address::ZERO {

@@ -45,9 +45,8 @@
 //! - Multiple solvers CAN attempt fill on underlying protocol
 
 use super::*;
-use alloy::primitives::{Address, U256, Bytes, FixedBytes};
+use alloy::primitives::Address;
 use alloy::sol;
-use alloy::sol_types::SolCall;
 
 // ── LI.FI Diamond Contract ABI ────────────────────────────────────────────────
 
@@ -138,7 +137,7 @@ impl LiFiAdapter {
 
     /// Extract underlying bridge protocol from LI.FI transaction
     /// This would parse the event data to determine if it's using Across, Stargate, etc.
-    fn extract_bridge_protocol(&self, intent: &Intent) -> Result<String> {
+    fn extract_bridge_protocol(&self, _intent: &Intent) -> Result<String> {
         // In a real implementation, this would parse the LiFiTransferStarted event
         // to get the "bridge" field which indicates the underlying protocol
 

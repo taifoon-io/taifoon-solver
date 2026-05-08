@@ -9,7 +9,7 @@
 //! ## Reward: Auction model (3 bps protocol fee), solver keeps (input - output - 0.03%)
 
 use super::*;
-use alloy::primitives::{Address, U256};
+use alloy::primitives::Address;
 
 pub struct MayanAdapter {
     spinner_client: SpinnerClient,

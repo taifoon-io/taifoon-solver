@@ -166,7 +166,7 @@ pub struct ApiState {
     razor_cache: Arc<RwLock<HashMap<u64, RazorGasPreset>>>,
     warmbed_api_url: String,
     http_client: reqwest::Client,
-    wallet_db_path: String,
+    _wallet_db_path: String,
     wallet_manager: std::sync::OnceLock<Arc<WalletManager>>,
     /// Optional outcome log — when set, exposes /api/solver/outcomes and
     /// /api/solver/pnl endpoints reading realized P&L from rusqlite.
@@ -237,7 +237,7 @@ impl SolverApi {
                 })),
                 razor_cache: Arc::new(RwLock::new(HashMap::new())),
                 warmbed_api_url,
-                wallet_db_path,
+                _wallet_db_path: wallet_db_path,
                 wallet_manager: std::sync::OnceLock::new(),
                 http_client: reqwest::Client::new(),
                 outcome_log: std::sync::OnceLock::new(),

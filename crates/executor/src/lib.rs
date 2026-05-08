@@ -265,7 +265,7 @@ impl Executor {
         }
 
         // Create LWC order (not yet implemented)
-        drop(t3rn); // avoid unused warning
+        let _ = t3rn;
 
         // TODO: Wait for LWC to provide liquidity on destination
         // TODO: Execute fill transaction

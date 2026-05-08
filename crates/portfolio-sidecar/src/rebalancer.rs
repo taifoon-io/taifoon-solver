@@ -166,7 +166,6 @@ const MIN_BASE_ETH_FOR_OPS: f64 = 0.0008;
 const USDT_SWAP_AMOUNT_USD: f64 = 5.0;
 
 /// MayanSwift V2 contract (same address on all EVM chains).
-const MAYAN_SWIFT_BASE: &str = "0x40ffe85a28dc9993541449464d7529a922142960";
 const MAYAN_SWIFT: &str = "0x40ffe85a28dc9993541449464d7529a922142960";
 /// MayanForwarder contract (same address on all EVM chains).
 /// Routes through Wormhole so the order is indexed by Mayan explorer and solver network.
@@ -221,8 +220,6 @@ pub const HOME_CHAIN_ID: u64 = 8453; // Base
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FeesResp {
-    #[serde(default)]
-    relay_fee_total: String,
     #[serde(rename = "outputAmount")]
     output_amount: String,
     timestamp: String,
@@ -257,8 +254,6 @@ struct SwapResp {
     swap_tx: SwapTx,
     #[serde(default)]
     approval_txns: Vec<ApprovalTxn>,
-    #[serde(rename = "expectedOutputAmount")]
-    expected_output_amount: Option<String>,
 }
 
 /// deBridge DLN public API response for `/dln/order/create-tx`.

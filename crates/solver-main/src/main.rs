@@ -438,9 +438,11 @@ async fn main() -> Result<()> {
         // only) can fire. Once the price oracle lands, plumb its result here.
         if let Some(reason) = skip_rules.evaluate(
             &intent.protocol,
+            intent.src_chain,
             intent.dst_chain,
             None,
             None,
+            intent.fill_deadline,
         ) {
             info!("⏭️  skip-rule fired for {} — {}", intent.id, reason);
             if let Some(log) = rule_skip_log.as_ref() {
@@ -727,6 +729,13 @@ async fn main() -> Result<()> {
                 info!("🔀 LiFi→{} projection: {} intent id={} src_chain={} tx={}",
                     bridge, intent.id, child.id, child.src_chain, &child.tx_hash[..child.tx_hash.len().min(18)]);
                 lifi_retry_counts.remove(&intent.id);
+                // Guard against double-fill: if the child has a deposit_id (e.g. Across deposit
+                // resolved by li.quest), insert its canonical dedup key so that a genome re-emit
+                // of the same underlying deposit (carrying deposit_id) is deduplicated.
+                if let Some(dep_id) = child.deposit_id {
+                    let child_key = format!("{}:dep:{}", child.protocol, dep_id);
+                    dispatched.insert(child_key);
+                }
                 effective_intent = child;
                 &effective_intent
             }

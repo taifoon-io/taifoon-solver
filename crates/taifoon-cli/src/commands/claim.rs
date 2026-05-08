@@ -303,6 +303,7 @@ struct SwapTx {
 struct ApprovalTxn {
     chain_id: u64,
     to: String,
+    #[allow(dead_code)]
     data: String,
 }
 

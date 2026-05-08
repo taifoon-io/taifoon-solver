@@ -1,7 +1,6 @@
 //! Live balance scanner — reads ERC-20 and native ETH balances across all chains.
 
 use alloy::primitives::Address;
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 pub const WETH_PRICE_USD: f64 = 3000.0;

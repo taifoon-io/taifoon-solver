@@ -399,10 +399,9 @@ impl LambdaController {
         // Strategy:
         //   A) If we have a deposit_id → Across API /deposit/status → depositTxHash → decode on-chain
         //   B) If we have a tx_hash that looks like a real tx → decode on-chain directly
-        let enriched_intent: Option<Intent>;
         // Enrichment only applies to Across direct-fills. deBridge/Mayan carry all needed
         // fields from their on-chain log decoders and never need Across relay-data lookup.
-        let intent: &Intent = if direct_fill && !is_debridge_pre && !is_mayan_pre {
+        let enriched_intent: Option<Intent> = if direct_fill && !is_debridge_pre && !is_mayan_pre {
             let needs_enrichment = intent.fill_deadline.is_none()
                 || intent.output_amount.is_none()
                 || intent.deposit_id.is_none();
@@ -459,8 +458,7 @@ impl LambdaController {
                     if patched.message.is_none() {
                         patched.message = relay.message;
                     }
-                    enriched_intent = Some(patched);
-                    enriched_intent.as_ref().unwrap()
+                    Some(patched)
                 } else {
                     warn!("⚠️  Could not fetch relay data for {} from src chain {} — skipping to avoid revert", intent.id, intent.src_chain);
                     let reason = format!("across_enrichment_failed:{}", intent.id);
@@ -469,13 +467,12 @@ impl LambdaController {
                     return Ok(LambdaExecuteOutcome::Skipped { reason });
                 }
             } else {
-                enriched_intent = None;
-                intent
+                None
             }
         } else {
-            enriched_intent = None;
-            intent
+            None
         };
+        let intent: &Intent = enriched_intent.as_ref().unwrap_or(intent);
 
         // 5b. EXCLUSIVITY CHECK — skip fills within an active exclusivity window when
         // we are not the exclusive relayer. The SpokePool enforces this on-chain.
