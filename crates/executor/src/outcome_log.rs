@@ -228,7 +228,7 @@ impl OutcomeLog {
                     claim_tx_hash, claim_fee_usd
              FROM solver_outcomes
              ORDER BY ts DESC
-             LIMIT ?2"
+             LIMIT ?1"
         };
 
         let parse_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<OutcomeRecord> {
@@ -264,7 +264,7 @@ impl OutcomeLog {
             for r in rows { out.push(r?); }
         } else {
             let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map(params![rusqlite::types::Null, limit], parse_row)?;
+            let rows = stmt.query_map(params![limit], parse_row)?;
             for r in rows { out.push(r?); }
         }
         Ok(out)
