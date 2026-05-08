@@ -4,7 +4,7 @@ use executor::{
     build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
     LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
-use genome_client::{AcrossPoller, DeBridgePoller, GenomeClient, Intent};
+use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, GenomeClient, Intent};
 use portfolio_sidecar::PortfolioSidecar;
 use profit_calc::ProfitCalculator;
 use protocol_adapters::AdapterFactory;
@@ -1091,20 +1091,30 @@ async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
         let auction_mode = order.get("auctionMode").and_then(|v| v.as_u64()).map(|v| v as u8);
         let trader = order.get("trader").and_then(|v| v.as_str()).map(String::from);
         let to_amount = order.get("toAmount").and_then(|v| v.as_str()).map(String::from);
-        // Decode OrderParams from source tx to get random, fees, deadline, etc.
         let src_chain_mayan = order.get("sourceChain").and_then(|v| v.as_str()).unwrap_or("0");
         let src_chain = match src_chain_mayan {
             "2" => 1u64, "4" => 56, "5" => 137, "6" => 43114,
             "23" => 42161, "24" => 10, "30" => 8453, _ => 0,
         };
+        // Decode the on-chain createOrderWithToken calldata so we have the full
+        // OrderParams (random, fees, deadline). These must match exactly for the
+        // fulfillSimple/fulfillOrder orderId hash check to pass on-chain.
+        let order_params = fetch_mayan_order_params(&client, src_chain, tx_hash).await;
         return Some(Intent {
             id: format!("lifi→mayan_enriched:{}", order_hash),
             protocol: "mayan_swift".into(),
             mayan_order_id: Some(order_hash.to_string()),
-            mayan_auction_mode: auction_mode,
+            mayan_auction_mode: auction_mode.or(order_params.auction_mode),
             output_amount: to_amount,
             trader,
             src_chain,
+            mayan_random: order_params.random,
+            mayan_cancel_fee: order_params.cancel_fee,
+            mayan_refund_fee: order_params.refund_fee,
+            mayan_gas_drop: order_params.gas_drop,
+            mayan_referrer_addr: order_params.referrer_addr,
+            mayan_referrer_bps: order_params.referrer_bps,
+            deadline: order_params.deadline,
             ..Default::default()
         });
     }

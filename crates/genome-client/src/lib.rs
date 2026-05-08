@@ -1369,7 +1369,7 @@ fn parse_debridge_ws_message(
 /// Decoded fields from a Mayan Swift V2 `createOrderWithToken` or
 /// `createOrderWithEth` calldata on the source chain transaction.
 #[derive(Debug, Default)]
-struct MayanOrderParams {
+pub struct MayanOrderParams {
     /// 32-byte random salt (hex, no 0x prefix).
     pub random: Option<String>,
     pub cancel_fee: Option<u64>,
@@ -1405,7 +1405,7 @@ struct MayanOrderParams {
 ///  slot 13: referrerBps (uint8)
 ///  slot 14: auctionMode (uint8)
 ///  slot 15: random (bytes32)
-async fn fetch_mayan_order_params(
+pub async fn fetch_mayan_order_params(
     http: &reqwest::Client,
     src_chain: u64,
     tx_hash: &str,
