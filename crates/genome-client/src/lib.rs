@@ -522,6 +522,11 @@ impl AcrossPoller {
             .build()
             .unwrap_or_default();
         let mut seen: HashSet<i64> = HashSet::new();
+        // Cap the seen set at 10 000 entries — once filled deposits drop off the
+        // Across API they will never re-appear, so the entries are stale. Evict
+        // the 1 000 smallest (numerically oldest) IDs when the cap is hit.
+        const SEEN_CAP: usize = 10_000;
+        const SEEN_EVICT: usize = 1_000;
         // Backoff state: incremented on 429, reset on success.
         let mut consecutive_429s: u32 = 0;
 
@@ -581,8 +586,7 @@ impl AcrossPoller {
                         && excl != "0x0000000000000000000000000000000000000000";
                     if is_exclusive {
                         let excl_deadline = dep.get("exclusivityDeadline")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| chrono_unix_from_iso(s))
+                            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| chrono_unix_from_iso(s))))
                             .unwrap_or(0);
                         // Allow if we ARE the exclusive relayer — only skip if someone else is.
                         let we_are_exclusive = self.solver_address.as_deref()
@@ -593,17 +597,28 @@ impl AcrossPoller {
                         }
                     }
 
-                    // Fill deadline: skip if < 60s remaining
+                    // Fill deadline: skip if < 60s remaining.
+                    // Across API may return fillDeadline as either a JSON integer or a string.
                     let fill_deadline_unix = dep.get("fillDeadline")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| chrono_unix_from_iso(s))
+                        .and_then(|v| {
+                            v.as_i64()
+                                .or_else(|| v.as_str().and_then(|s| chrono_unix_from_iso(s)))
+                        })
                         .unwrap_or(0);
-                    if fill_deadline_unix > 0 && fill_deadline_unix - now_secs < 60 {
+                    if fill_deadline_unix > 0 && fill_deadline_unix <= now_secs + 60 {
                         continue;
                     }
 
                     // Dedup: only after deadline/exclusivity checks so we don't permanently
                     // block deposits that were skipped due to a temporary condition.
+                    // Evict oldest (smallest) deposit IDs when cap is reached.
+                    if seen.len() >= SEEN_CAP {
+                        let mut ids: Vec<i64> = seen.iter().copied().collect();
+                        ids.sort_unstable();
+                        for id in ids.into_iter().take(SEEN_EVICT) {
+                            seen.remove(&id);
+                        }
+                    }
                     if !seen.insert(dep_id) {
                         continue;
                     }
@@ -684,8 +699,7 @@ fn across_deposit_to_intent(
     let excl_relayer = dep.get("exclusiveRelayer").and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let excl_deadline = dep.get("exclusivityDeadline")
-        .and_then(|v| v.as_str())
-        .and_then(|s| chrono_unix_from_iso(s))
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| chrono_unix_from_iso(s))))
         .map(|v| v as u32);
     let message = dep.get("message").and_then(|v| v.as_str())
         .map(|s| s.to_string());

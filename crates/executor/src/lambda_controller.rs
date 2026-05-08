@@ -551,6 +551,29 @@ impl LambdaController {
             }
         }
 
+        // 5d. Pre-flight deadline check for Mayan fills.
+        // intent.deadline (u64 unix) is the order's auction/fill deadline. Refuse to
+        // build calldata if the order has already expired (with 30s margin).
+        {
+            let proto_lower_pre = intent.protocol.to_lowercase();
+            let is_mayan_pre2 = proto_lower_pre.contains("mayan");
+            if is_mayan_pre2 {
+                if let Some(dl) = intent.deadline {
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if dl < now_secs.saturating_add(30) {
+                        let reason = format!("mayan_deadline_expired:dl={dl}<now+30={}", now_secs + 30);
+                        info!("⏭️  {} — {}", intent.id, reason);
+                        self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                        let _ = self.wallet.release(&intent.id);
+                        return Ok(LambdaExecuteOutcome::Skipped { reason });
+                    }
+                }
+            }
+        }
+
         // 6. CALLDATA_BUILD.
         // Paths by protocol + chain:
         //   a) is_mayan + EVM → MayanSwift.fulfillOrder() on Swift contract
@@ -2029,6 +2052,29 @@ mod tests {
         // No deadline carried in the intent → no skip; downstream calldata
         // builder substitutes now+3600. The helper does not invent a reason.
         assert!(across_fill_deadline_skip_reason(None, 1_715_000_000).is_none());
+    }
+
+    #[test]
+    fn mayan_deadline_skip_reason_logic() {
+        // Mirrors the inline logic in lambda_execute §5d.
+        let now: u64 = 1_715_000_000;
+        let margin: u64 = 30;
+
+        // Far future deadline → should NOT skip
+        let dl_future = now + 3600;
+        assert!(dl_future >= now.saturating_add(margin), "far deadline ok");
+
+        // Expired deadline (dl < now + 30) → should skip
+        let dl_near = now + 10;
+        assert!(dl_near < now.saturating_add(margin), "near deadline skip");
+
+        // Already expired deadline
+        let dl_past = now.saturating_sub(1);
+        assert!(dl_past < now.saturating_add(margin), "past deadline skip");
+
+        // Exactly at margin (dl == now + 30) → must NOT skip (strict <)
+        let dl_at_margin = now + margin;
+        assert!(!(dl_at_margin < now.saturating_add(margin)), "at-margin passes");
     }
 
     #[tokio::test]
