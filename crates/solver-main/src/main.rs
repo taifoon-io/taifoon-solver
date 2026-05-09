@@ -621,6 +621,19 @@ async fn main() -> Result<()> {
             info!("⏭️  dedup skip (already dispatched): {}", dedup_key);
             continue;
         }
+        // Secondary Mayan dedup: when MayanPoller fills order 0xABC first and then a
+        // LiFi genome event for the same order arrives, the two have different dedup_keys
+        // but the same mayan_order_id. Block the second path here to avoid a wasted
+        // reverting-fill attempt (on-chain the order is gone; no fund loss, but gas waste).
+        if let Some(ref order_hash) = intent.mayan_order_id {
+            let swift_key = format!("mayan_swift:{}", order_hash);
+            let flash_key = format!("mayan_flash:{}", order_hash);
+            if dispatched.contains(&swift_key) || dispatched.contains(&flash_key) {
+                info!("⏭️  mayan-order dedup skip (already dispatched via different path): {}", order_hash);
+                dispatched.remove(&dedup_key); // don't permanently block this LiFi key
+                continue;
+            }
+        }
 
         // Emit detected only after dedup passes — lifecycle re-fires (placed/executed)
         // for the same intent must not create dangling detected records in the API.
@@ -815,12 +828,20 @@ async fn main() -> Result<()> {
                 info!("🔀 LiFi→{} projection: {} intent id={} src_chain={} tx={}",
                     bridge, intent.id, child.id, child.src_chain, &child.tx_hash[..child.tx_hash.len().min(18)]);
                 lifi_retry_counts.remove(&intent.id);
-                // Guard against double-fill: if the child has a deposit_id (e.g. Across deposit
-                // resolved by li.quest), insert its canonical dedup key so that a genome re-emit
-                // of the same underlying deposit (carrying deposit_id) is deduplicated.
+                // Guard against double-fill:
+                //  a) Across deposit: genome may re-emit the same underlying deposit with
+                //     a deposit_id — dedup by canonical "protocol:dep:N" key.
+                //  b) Mayan order: MayanPoller may independently discover the same
+                //     orderHash (user went through LiFi which routes to Mayan Swift).
+                //     Dedup by both "mayan_swift:<hash>" and "mayan_flash:<hash>" so
+                //     whichever protocol tag the poller uses, the fill is still blocked.
                 if let Some(dep_id) = child.deposit_id {
                     let child_key = format!("{}:dep:{}", child.protocol, dep_id);
                     dispatched.insert(child_key);
+                }
+                if let Some(ref order_hash) = child.mayan_order_id {
+                    dispatched.insert(format!("mayan_swift:{}", order_hash));
+                    dispatched.insert(format!("mayan_flash:{}", order_hash));
                 }
                 effective_intent = child;
                 &effective_intent
