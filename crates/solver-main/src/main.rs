@@ -531,10 +531,12 @@ async fn main() -> Result<()> {
                 || t == "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
                 || t == "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
                 || t == "0xc2132d05d31c914a87c6611c10748aeb04b58e8f";
+            let eth_usd: f64 = std::env::var("ETH_PRICE_USD")
+                .ok().and_then(|s| s.parse().ok()).unwrap_or(3000.0);
             // Mayan-style float (decimal point) — already human-readable token amount
             if s.contains('.') {
                 let amt: f64 = s.parse().unwrap_or(0.0);
-                if is_stable { amt } else { amt * 3700.0 }
+                if is_stable { amt } else { amt * eth_usd }
             } else {
                 let raw: u128 = s.parse::<u128>()
                     .or_else(|_| u128::from_str_radix(s, 16))
@@ -544,7 +546,7 @@ async fn main() -> Result<()> {
                 if is_6dec {
                     raw as f64 / 1_000_000.0
                 } else {
-                    (raw as f64 / 1e18) * 3700.0
+                    (raw as f64 / 1e18) * eth_usd
                 }
             }
         };
