@@ -1014,7 +1014,10 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
     // slot[0] = offset to Order in bytes — verified = 224 = slot 7
     let order_offset_bytes = u64::from_be_bytes(slots[0][24..32].try_into().ok()?) as usize;
     let os = order_offset_bytes / 32; // start of Order struct in slot array
-    if os + 9 >= slots.len() { return None; }
+    // Need os+0 through os+13 (externalCall is the last field at os+13).
+    // Previously guarded only os+9, which allowed orders with non-empty externalCall
+    // to pass with dln_external_call=None, defeating the iter-51 skip guard.
+    if os + 13 >= slots.len() { return None; }
 
     // slot[1] = orderId bytes32
     let order_id_hex = format!("0x{}", hex::encode(&slots[1]));
