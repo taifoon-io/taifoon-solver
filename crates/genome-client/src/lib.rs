@@ -317,6 +317,12 @@ pub struct Intent {
     /// Mayan Swift gasDrop amount (raw u64, from OrderParams).
     #[serde(default)]
     pub mayan_gas_drop: Option<u64>,
+
+    // ── DLN Solana destination fields ─────────────────────────────────────────
+    /// True when the destination chain is Solana (chain_id = 100_000_001).
+    /// Set by the DeBridge pollers when they pass a Solana-destination order through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_solana_destination: Option<bool>,
 }
 
 impl Intent {
@@ -467,6 +473,7 @@ impl Intent {
             mayan_referrer_addr: None,
             mayan_referrer_bps: None,
             mayan_gas_drop: None,
+            is_solana_destination: None,
         })
     }
 }
@@ -830,17 +837,24 @@ impl DeBridgePoller {
                 last_block.insert(*chain_id, to_block + 1);
 
                 for log in logs {
-                    if let Some(intent) = decode_dln_order_created_log(&log, *chain_id) {
+                    if let Some(mut intent) = decode_dln_order_created_log(&log, *chain_id) {
                         if !seen.insert(intent.id.clone()) { continue; }
                         // Skip non-EVM destination chains — we have no fill path for them.
+                        // Exception: Solana (100_000_001) is handled by DlnSolanaFiller.
                         if let Some(name) = debridge_non_evm_chain_name(intent.dst_chain) {
-                            info!("⏭️  DeBridgePoller skip non-EVM dst chain={} ({}) order={}",
-                                intent.dst_chain, name, intent.order_id.as_deref().unwrap_or("?"));
-                            continue;
+                            if intent.dst_chain != 100_000_001 {
+                                info!("⏭️  DeBridgePoller skip non-EVM dst chain={} ({}) order={}",
+                                    intent.dst_chain, name, intent.order_id.as_deref().unwrap_or("?"));
+                                continue;
+                            }
+                            // Solana destination — allow through for DLN Solana fill path.
+                            intent.is_solana_destination = Some(true);
                         }
                         // Skip orders where the take-token is not a known stablecoin/WETH —
                         // exotic tokens cause 18-decimal mis-pricing and we have no inventory.
-                        if !is_supported_fill_token(&intent.dst_token) {
+                        // Exception: for Solana destinations the dst_token is a base58 SPL mint,
+                        // not an EVM hex address, so skip the EVM token whitelist check.
+                        if intent.dst_chain != 100_000_001 && !is_supported_fill_token(&intent.dst_token) {
                             info!("⏭️  DeBridgePoller skip exotic take_token={} order={}",
                                 intent.dst_token, intent.order_id.as_deref().unwrap_or("?"));
                             continue;
@@ -1316,12 +1330,20 @@ fn parse_debridge_ws_message(
     let dst_token = hex_to_addr(take.get("token_address")?.as_str()?);
 
     // Skip non-EVM destination chains — same filter as DeBridgePoller logs path.
-    if let Some(name) = debridge_non_evm_chain_name(dst_chain) {
-        tracing::debug!("deBridge WS skip non-EVM dst chain={} ({})", dst_chain, name);
-        return None;
-    }
+    // Exception: Solana (100_000_001) is handled by DlnSolanaFiller.
+    let is_solana_dst = if let Some(name) = debridge_non_evm_chain_name(dst_chain) {
+        if dst_chain != 100_000_001 {
+            tracing::debug!("deBridge WS skip non-EVM dst chain={} ({})", dst_chain, name);
+            return None;
+        }
+        // Solana destination — allow through for DLN Solana fill path.
+        true
+    } else {
+        false
+    };
     // Skip exotic tokens (same filter as DeBridgePoller).
-    if !is_supported_fill_token(&dst_token) {
+    // Exception: for Solana destinations the dst_token is a base58 SPL mint, not an EVM hex.
+    if !is_solana_dst && !is_supported_fill_token(&dst_token) {
         tracing::debug!("deBridge WS skip exotic dst_token={}", dst_token);
         return None;
     }
@@ -1401,6 +1423,7 @@ fn parse_debridge_ws_message(
         dln_allowed_taker_dst: allowed_taker,
         dln_allowed_cancel_beneficiary_src: cancel_ben,
         dln_external_call: external_call,
+        is_solana_destination: if is_solana_dst { Some(true) } else { None },
         detected_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
