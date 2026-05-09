@@ -9,9 +9,9 @@ const GAS_DEBRIDGE_UNLOCK: u64 = 80_000;
 const GAS_LIFI_FILL: u64 = 120_000;
 const GAS_MAYAN_UNLOCK: u64 = 100_000;
 
-// Approximate ETH price in USD (used for USDC equivalent)
-const ETH_USD: f64 = 3_200.0;
-const SOL_USD: f64 = 150.0;
+// Approximate ETH/SOL prices — overridable at runtime via ETH_PRICE_USD / SOL_PRICE_USD.
+const ETH_USD_DEFAULT: f64 = 3_200.0;
+const SOL_USD_DEFAULT: f64 = 150.0;
 // Solana fixed fee per signature (~5000 lamports)
 const SOL_LAMPORTS_PER_TX: u64 = 5_000;
 
@@ -81,7 +81,7 @@ fn chain_name(id: u64) -> &'static str {
     }
 }
 
-fn compute_chain_fees(chain_id: u64, gas_price_gwei: f64) -> ChainFees {
+fn compute_chain_fees(chain_id: u64, gas_price_gwei: f64, eth_usd: f64) -> ChainFees {
     let gwei_per_eth: f64 = 1e9;
     let wei_per_eth: f64 = 1e18;
 
@@ -89,7 +89,7 @@ fn compute_chain_fees(chain_id: u64, gas_price_gwei: f64) -> ChainFees {
 
     let cost_wei = |gas: u64| -> u64 { gas_price_wei * gas };
     let cost_eth = |gas: u64| -> f64 { (gas_price_wei as f64 * gas as f64) / wei_per_eth };
-    let cost_usdc = |gas: u64| -> f64 { cost_eth(gas) * ETH_USD };
+    let cost_usdc = |gas: u64| -> f64 { cost_eth(gas) * eth_usd };
 
     ChainFees {
         chain_id,
@@ -120,6 +120,11 @@ fn compute_chain_fees(chain_id: u64, gas_price_gwei: f64) -> ChainFees {
 }
 
 pub async fn run(spinner_url: &str, json_mode: bool) -> Result<()> {
+    let eth_usd: f64 = std::env::var("ETH_PRICE_USD")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(ETH_USD_DEFAULT);
+    let sol_usd: f64 = std::env::var("SOL_PRICE_USD")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(SOL_USD_DEFAULT);
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
@@ -156,8 +161,14 @@ pub async fn run(spinner_url: &str, json_mode: bool) -> Result<()> {
     let mut evm_chains: Vec<ChainFees> = chain_ids
         .iter()
         .map(|&cid| {
-            let gwei = gas_map.get(&cid).copied().unwrap_or(1.0);
-            compute_chain_fees(cid, gwei)
+            let gwei = match gas_map.get(&cid).copied() {
+                Some(g) => g,
+                None => {
+                    tracing::warn!("fees: no gas price for chain {} — using 25 gwei fallback", cid);
+                    25.0
+                }
+            };
+            compute_chain_fees(cid, gwei, eth_usd)
         })
         .collect();
 
@@ -168,14 +179,14 @@ pub async fn run(spinner_url: &str, json_mode: bool) -> Result<()> {
         chain: "Solana".to_string(),
         fee_lamports: SOL_LAMPORTS_PER_TX,
         fee_sol: SOL_LAMPORTS_PER_TX as f64 / 1e9,
-        fee_usdc: (SOL_LAMPORTS_PER_TX as f64 / 1e9) * SOL_USD,
+        fee_usdc: (SOL_LAMPORTS_PER_TX as f64 / 1e9) * sol_usd,
     };
 
     let report = FeesReport {
         evm_chains,
         solana,
-        eth_usd_used: ETH_USD,
-        sol_usd_used: SOL_USD,
+        eth_usd_used: eth_usd,
+        sol_usd_used: sol_usd,
     };
 
     if json_mode {
