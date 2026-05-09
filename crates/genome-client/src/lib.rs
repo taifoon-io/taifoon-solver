@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+pub mod dln_solana_poller;
+pub use dln_solana_poller::{DlnSolanaSourcePoller, DLN_SOLANA_PROGRAM_ID};
+
 /// Genome event from DA API SSE stream.
 ///
 /// Legacy field names (`token`, `amount`, `timestamp`, `ref`) are honored via
@@ -323,6 +326,14 @@ pub struct Intent {
     /// Set by the DeBridge pollers when they pass a Solana-destination order through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_solana_destination: Option<bool>,
+
+    // ── DLN Solana source flag ─────────────────────────────────────────────────
+    /// True when the DLN order was created on Solana (i.e. the source chain is
+    /// Solana and the destination is an EVM chain). The solver fills the EVM
+    /// side using the existing DlnDestination.fulfillOrder path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub is_dln_source_solana: Option<bool>,
 }
 
 impl Intent {
@@ -474,6 +485,7 @@ impl Intent {
             mayan_referrer_bps: None,
             mayan_gas_drop: None,
             is_solana_destination: None,
+            is_dln_source_solana: None,
         })
     }
 }

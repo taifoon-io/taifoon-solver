@@ -4,7 +4,7 @@ use executor::{
     build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
     LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
-use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, GenomeClient, Intent};
+use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, DlnSolanaSourcePoller, GenomeClient, Intent};
 use portfolio_sidecar::PortfolioSidecar;
 use profit_calc::ProfitCalculator;
 use protocol_adapters::AdapterFactory;
@@ -397,6 +397,14 @@ async fn main() -> Result<()> {
         solver_address: solver_evm_addr,
         ..AcrossPoller::default_mainnet()
     };
+    // DLN v2 Solana source poller — Solana-origin orders filling EVM destinations
+    if std::env::var("ENABLE_DLN_SOLANA_SOURCE").is_ok() {
+        let dln_sol_tx = intent_tx.clone();
+        let dln_sol_poller = DlnSolanaSourcePoller::default();
+        tokio::spawn(async move { dln_sol_poller.run(dln_sol_tx).await });
+        info!("🌊 DLN Solana source poller enabled");
+    }
+
     let _genome_handle = tokio::spawn(async move {
         if let Err(e) = genome_client
             .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
