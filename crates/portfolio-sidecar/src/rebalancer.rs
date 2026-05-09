@@ -637,8 +637,9 @@ impl Rebalancer {
                 let base_available_normal = base_working - base_reserve;
 
                 // Check Solana SOL balance to detect bootstrap condition.
+                // None = RPC unreachable — assume sufficient balance to avoid false bootstrap.
                 let solana_lamports = check_solana_balance(&solana_addr).await;
-                let needs_bootstrap = solana_lamports < 5_000_000; // < 0.005 SOL → bootstrap
+                let needs_bootstrap = solana_lamports.map(|l| l < 5_000_000).unwrap_or(false);
 
                 // In bootstrap mode, allow bridging if Base has enough raw (ignoring reserve).
                 let base_available = if needs_bootstrap { base_working } else { base_available_normal };
@@ -679,11 +680,12 @@ impl Rebalancer {
                         let secs_remaining = MAYAN_BRIDGE_COOLDOWN_SECS.saturating_sub(now_secs.saturating_sub(last_bridge));
                         info!("⏳ Mayan bridge cooldown: {}s remaining before next bridge attempt", secs_remaining);
                     }
+                    let sol_lamports_display = solana_lamports.map(|l| l.to_string()).unwrap_or_else(|| "?".into());
                     if can_bridge {
                         if needs_bootstrap {
                             info!(
                                 "🚀 Mayan bootstrap bridge: ${:.2} {} Base → Solana {} (sol_lamports={})",
-                                send_usd, bridge_symbol, &solana_addr[..8.min(solana_addr.len())], solana_lamports
+                                send_usd, bridge_symbol, &solana_addr[..8.min(solana_addr.len())], sol_lamports_display
                             );
                         } else {
                             info!(
@@ -712,7 +714,7 @@ impl Rebalancer {
                             info!(
                                 "🚀 Direct USDC bridge (stranded): ${:.2} {} {} → Solana {} (sol_lamports={})",
                                 src.bridge_token_usd, src.bridge_token_addr.get(..10).unwrap_or("?"), chain_name,
-                                &solana_addr[..8.min(solana_addr.len())], solana_lamports
+                                &solana_addr[..8.min(solana_addr.len())], sol_lamports_display
                             );
                             let (usdc_addr, _weth_addr, _router_addr) = match src.chain_id {
                                 42161 => ("0xaf88d065e77c8cC2239327C5EDb3A432268e5831", WETH_ARB, "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"),
@@ -772,7 +774,7 @@ impl Rebalancer {
                         if let Some((eth_snap, eth_chain_name, eth_chain_id)) = eth_src {
                             info!(
                                 "🚀 ETH bootstrap bridge: {} wei ETH {} → Solana {} (sol_lamports={}, stables depleted)",
-                                ETH_BOOTSTRAP_WEI, eth_chain_name, &solana_addr[..8.min(solana_addr.len())], solana_lamports
+                                ETH_BOOTSTRAP_WEI, eth_chain_name, &solana_addr[..8.min(solana_addr.len())], sol_lamports_display
                             );
                             let action = if eth_chain_id == HOME_CHAIN_ID {
                                 self.mayan_solana_bridge_eth(eth_snap, &solana_addr, ETH_BOOTSTRAP_WEI).await
@@ -1659,7 +1661,10 @@ fn debridge_dst_usdc(dst_chain: u64) -> Option<&'static str> {
 
 /// Query the Solana mainnet RPC for the lamport balance of a Solana address (base58).
 /// Returns 0 on any error.
-async fn check_solana_balance(address: &str) -> u64 {
+/// Returns `Some(lamports)` on success, `None` when the Solana RPC is unreachable.
+/// Callers must treat `None` as "balance unknown" — not as 0 — to avoid triggering
+/// a false bootstrap bridge during an RPC outage.
+async fn check_solana_balance(address: &str) -> Option<u64> {
     let solana_rpc = std::env::var("SOLANA_RPC_URL")
         .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
     let client = reqwest::Client::builder()
@@ -1671,7 +1676,7 @@ async fn check_solana_balance(address: &str) -> u64 {
         "method": "getBalance",
         "params": [address]
     });
-    let Ok(resp) = client.post(&solana_rpc).json(&body).send().await else { return 0 };
-    let Ok(parsed) = resp.json::<serde_json::Value>().await else { return 0 };
-    parsed.pointer("/result/value").and_then(|v| v.as_u64()).unwrap_or(0)
+    let resp = client.post(&solana_rpc).json(&body).send().await.ok()?;
+    let parsed = resp.json::<serde_json::Value>().await.ok()?;
+    parsed.pointer("/result/value").and_then(|v| v.as_u64())
 }
