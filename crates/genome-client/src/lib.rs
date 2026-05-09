@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+pub mod dln_solana_poller;
+pub use dln_solana_poller::{DlnSolanaSourcePoller, DLN_SOLANA_PROGRAM_ID};
+
 /// Genome event from DA API SSE stream.
 ///
 /// Legacy field names (`token`, `amount`, `timestamp`, `ref`) are honored via
@@ -317,6 +320,14 @@ pub struct Intent {
     /// Mayan Swift gasDrop amount (raw u64, from OrderParams).
     #[serde(default)]
     pub mayan_gas_drop: Option<u64>,
+
+    // ── DLN Solana source flag ─────────────────────────────────────────────────
+    /// True when the DLN order was created on Solana (i.e. the source chain is
+    /// Solana and the destination is an EVM chain). The solver fills the EVM
+    /// side using the existing DlnDestination.fulfillOrder path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub is_dln_source_solana: Option<bool>,
 }
 
 impl Intent {
@@ -467,6 +478,7 @@ impl Intent {
             mayan_referrer_addr: None,
             mayan_referrer_bps: None,
             mayan_gas_drop: None,
+            is_dln_source_solana: None,
         })
     }
 }

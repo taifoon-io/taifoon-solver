@@ -22,6 +22,7 @@
 
 pub mod keychain;
 pub mod mayan_solana;
+pub mod relay_solana;
 pub mod send;
 pub mod simulate;
 
@@ -29,6 +30,7 @@ pub use keychain::load_solana_signer;
 pub use mayan_solana::{
     DEFAULT_MAYAN_SWIFT_PROGRAM, MayanSolanaIntent, MayanSolanaSimulator, derive_mayan_vault_pda,
 };
+pub use relay_solana::{RelaySolanaBroadcaster, RelaySolanaIntent, RELAY_SOLANA_PROGRAM_ID};
 pub use send::{SolanaBroadcaster, SolanaSendResult, SOLANA_PRIVATE_KEY_ENV};
 pub use simulate::{
     SolanaEstimateOutcome, SolanaSimulator, classify_solana_simulate_result,
