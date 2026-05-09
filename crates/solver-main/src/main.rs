@@ -689,6 +689,7 @@ async fn main() -> Result<()> {
                             info!("⏭️  lifi skip (bridge not routable, permanent): {}", intent.id);
                             // li.quest is authoritative — trust its NotRoutable even if genome
                             // provided a bridge slug (genome metadata can lag or misclassify).
+                            lifi_retry_counts.remove(&intent.id);
                             continue;
                         }
                         LifiBridgeResult::Pending => {
