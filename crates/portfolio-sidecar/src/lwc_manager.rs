@@ -231,6 +231,9 @@ impl LwcManager {
                 let pending = provider.send_transaction(approve_req).await
                     .context("approve tx failed")?;
                 let receipt = pending.get_receipt().await.context("approve receipt failed")?;
+                if !receipt.status() {
+                    anyhow::bail!("[LWC] approve tx reverted for asset {}", asset);
+                }
                 info!("[LWC] approved asset {} for well: {:?}", asset, receipt.transaction_hash);
             }
         }
@@ -255,6 +258,9 @@ impl LwcManager {
         let pending = provider.send_transaction(req).await.context("addLiquidity tx failed")?;
         let receipt = pending.get_receipt().await.context("addLiquidity receipt failed")?;
         let hash = format!("{:?}", receipt.transaction_hash);
+        if !receipt.status() {
+            anyhow::bail!("[LWC] addLiquidity reverted on-chain (chain={} tx={})", chain_id, hash);
+        }
         info!("[LWC] addLiquidity confirmed: chain={} tx={}", chain_id, hash);
         Ok(hash)
     }
@@ -302,6 +308,9 @@ impl LwcManager {
         let pending = provider.send_transaction(req).await.context("removeLiquidity tx failed")?;
         let receipt = pending.get_receipt().await.context("removeLiquidity receipt failed")?;
         let hash = format!("{:?}", receipt.transaction_hash);
+        if !receipt.status() {
+            anyhow::bail!("[LWC] removeLiquidity reverted on-chain (chain={} tx={})", chain_id, hash);
+        }
         info!("[LWC] removeLiquidity confirmed: chain={} tx={}", chain_id, hash);
         Ok(hash)
     }

@@ -277,6 +277,10 @@ impl SelfFill {
         let receipt = pending.get_receipt().await?;
         let tx_hash = format!("{:#x}", receipt.transaction_hash);
 
+        if !receipt.status() {
+            anyhow::bail!("[self_fill] fill tx reverted on-chain (intent={} tx={})", intent_id, tx_hash);
+        }
+
         info!(
             "[self_fill] filled: id={} dst_chain={} tx={} gas_used={}",
             intent_id, dst_chain_id, tx_hash, receipt.gas_used
