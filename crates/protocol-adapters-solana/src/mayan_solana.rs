@@ -41,26 +41,17 @@ pub fn derive_mayan_vault_pda(order_hash_hex: &str, program_id_b58: &str) -> Opt
     let program_bytes = bs58::decode(program_id_b58).into_vec().ok()
         .filter(|b| b.len() == 32)?;
 
+    // Canonical Solana PDA derivation:
+    //   sha256(seed1_raw || seed2_raw || ... || bump_byte || program_id || "ProgramDerivedAddress")
+    // Seeds: b"vault" (5 bytes), order_hash_bytes (32 bytes).
     for bump in (0u8..=255).rev() {
-        // sha256(b"vault" || order_hash || bump || program_id || b"ProgramDerivedAddress")
         let mut h = Sha256::new();
-        h.update(b"\x05vault");       // compact-u16(5) length prefix + seed bytes
-        h.update(&order_bytes);       // second seed (32 bytes, no length prefix needed — we encode raw)
+        h.update(b"vault");
+        h.update(&order_bytes);
         h.update([bump]);
         h.update(&program_bytes);
         h.update(b"ProgramDerivedAddress");
-        // NOTE: the canonical Solana PDA hash is:
-        //   sha256(seeds[0], seeds[1], ..., bump, program_id, "ProgramDerivedAddress")
-        // where each seed is written as its raw bytes (no length prefix) and
-        // bump is a single byte appended after the last seed.
-        // Re-derive with the correct flat layout:
-        let mut h2 = Sha256::new();
-        h2.update(b"vault");          // seed 1 raw bytes
-        h2.update(&order_bytes);      // seed 2 raw bytes
-        h2.update([bump]);            // nonce byte
-        h2.update(&program_bytes);    // program id
-        h2.update(b"ProgramDerivedAddress");
-        let digest: [u8; 32] = h2.finalize().into();
+        let digest: [u8; 32] = h.finalize().into();
         if !is_on_curve(&digest) {
             return Some(bs58::encode(digest).into_string());
         }
