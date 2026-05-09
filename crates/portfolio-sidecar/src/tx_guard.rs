@@ -196,15 +196,20 @@ impl TxGuard {
             return Ok(());
         }
 
-        // ERC-20 token contracts: only approve() is allowed, not transfer()
+        // ERC-20 token contracts: only approve() is permitted.
+        // transfer() / transferFrom() move tokens to an arbitrary recipient and
+        // must be blocked — they are never needed from the rebalancer path.
         if self.token_addrs.contains(&to) {
             if is_approve_calldata(calldata) {
                 return Ok(());
             }
-            // transfer() or transferFrom() to a token contract would be unusual
-            // but we allow any call here since the token contract itself can't
-            // forward funds elsewhere without the solver signing again.
-            return Ok(());
+            let reason = format!(
+                "tx_guard: BLOCKED — non-approve call to token contract {:#x} (calldata selector {:02x?})",
+                to,
+                calldata.get(..4).unwrap_or(&[])
+            );
+            error!("{}", reason);
+            return Err(reason);
         }
 
         // Unknown address — block
