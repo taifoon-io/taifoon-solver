@@ -332,7 +332,7 @@ async fn main() -> Result<()> {
     // Task B: deBridge claim retry
     if let Some(ref ctrl) = lambda_controller {
         let ctrl_claim = Arc::clone(ctrl);
-        let wallet_db_claim = wallet_db_path.clone();
+        let wallet_claim = Arc::clone(&wallet_manager);
         let claim_interval = sidecar_interval_secs;
         let outcome_log_for_claim = rule_skip_log.clone();
         info!("🔁 deBridge claim-retry background task started (interval={}s)", claim_interval);
@@ -341,7 +341,7 @@ async fn main() -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             loop {
                 debridge_claim_retry_tick(
-                    &wallet_db_claim,
+                    &wallet_claim,
                     &ctrl_claim,
                     outcome_log_for_claim.as_ref(),
                     dry_run,
@@ -1029,15 +1029,11 @@ fn log_enrichment_failure(
 /// claimed fills are skipped on subsequent ticks. After a successful
 /// `claimUnlock`, we write the claim tx + fee back onto the executed-fill row.
 async fn debridge_claim_retry_tick(
-    wallet_db_path: &str,
+    wallet: &wallet_manager::WalletManager,
     ctrl: &executor::LambdaController,
     outcome_log: Option<&OutcomeLog>,
     dry_run: bool,
 ) {
-    let wallet = match wallet_manager::WalletManager::open(wallet_db_path, 0.0) {
-        Ok(w) => w,
-        Err(e) => { warn!("claim_retry: wallet DB open failed: {}", e); return; }
-    };
     let confirmed = match wallet.list_intents(Some("CONFIRMED"), 200) {
         Ok(v) => v,
         Err(e) => { warn!("claim_retry: list_intents failed: {}", e); return; }
