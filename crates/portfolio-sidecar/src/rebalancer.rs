@@ -501,9 +501,11 @@ impl Rebalancer {
 
             // Cap at working balance on source (already deducted by Phase 1 gas top-ups),
             // minus the source's own minimum reserve (0 for src-only chains).
+            // Also cap to bridge_token_usd: working_stable tracks the *sum* of USDC+USDT,
+            // but the bridge can only move the single primary token (max of the two).
             let src_reserve = src_target.map(|t| if t.is_fill_chain { t.min_stable_usd } else { 0.0 }).unwrap_or(0.0);
             let working = working_stable.get(&src_chain_id).copied().unwrap_or(0.0);
-            let available = working - src_reserve;
+            let available = (working - src_reserve).min(src_snap.bridge_token_usd);
             let send_usd = shortfall.min(available).max(0.0);
             if send_usd < MIN_BRIDGE_USD {
                 warn!(
@@ -540,7 +542,8 @@ impl Rebalancer {
                     );
                     continue;
                 }
-                let sweep_usd = (working - target.target_stable_usd).max(0.0);
+                // Cap to bridge_token_usd: only the primary token (max USDC/USDT) is bridgeable.
+                let sweep_usd = (working - target.target_stable_usd).min(snap.bridge_token_usd).max(0.0);
                 if sweep_usd < MIN_BRIDGE_USD { continue; }
 
                 info!(
@@ -568,7 +571,8 @@ impl Rebalancer {
                 // (a) Stable sweep — ERC-20 via Across depositV3
                 let working = working_stable.get(&target.chain_id).copied().unwrap_or(0.0);
                 if working >= target.high_water_usd + MIN_BRIDGE_USD && snap.gas_eth >= 0.0001 {
-                    let sweep_usd = working - target.high_water_usd;
+                    // Cap to bridge_token_usd: the bridge moves only the primary token.
+                    let sweep_usd = (working - target.high_water_usd).min(snap.bridge_token_usd);
                     if sweep_usd >= MIN_BRIDGE_USD {
                         info!(
                             "🧹 Src-only {} has ${:.2} stables — sweeping ${:.2} → Base",
