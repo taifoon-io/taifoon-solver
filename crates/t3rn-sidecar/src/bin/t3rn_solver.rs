@@ -409,6 +409,9 @@ async fn test_fill_handler(
                 Err(e) => Json(json!({ "error": format!("get_receipt: {e}") })),
                 Ok(receipt) => {
                     let tx_hash = format!("{:#x}", receipt.transaction_hash);
+                    if !receipt.status() {
+                        return Json(json!({ "error": format!("order() reverted on-chain: tx={tx_hash}") }));
+                    }
                     info!(
                         "[test_fill] Base→Optimism order submitted: tx={} gas_used={}",
                         tx_hash, receipt.gas_used

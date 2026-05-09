@@ -1339,6 +1339,8 @@ impl LambdaController {
         let receipt = match pending.with_required_confirmations(1).get_receipt().await {
             Ok(r) => r,
             Err(e) => {
+                // Roll back to CONFIRMED so the retry loop can re-attempt.
+                self.transition(&intent.id, IntentState::Confirmed, None, None);
                 return Ok(LambdaClaimOutcome::Failed {
                     error: format!("get_receipt:{e}"),
                 });
@@ -1346,6 +1348,8 @@ impl LambdaController {
         };
 
         if !receipt.status() {
+            // Revert: roll back to CONFIRMED so the retry loop can re-attempt.
+            self.transition(&intent.id, IntentState::Confirmed, None, None);
             return Ok(LambdaClaimOutcome::Failed {
                 error: format!("claimUnlock reverted (tx {tx_hash})"),
             });
