@@ -487,7 +487,12 @@ async fn main() -> Result<()> {
             ];
             let tok = intent.src_token.to_lowercase();
             if SIX_DEC_TOKENS.contains(&tok.as_str()) {
-                intent.amount.parse::<f64>().ok().map(|r| r / 1_000_000.0)
+                intent.amount.parse::<f64>().ok().map(|r| {
+                    // MayanPoller emits amounts as human-readable USD strings (e.g. "250.5").
+                    // Across/deBridge emit raw 6-decimal integer strings (e.g. "250500000").
+                    // Detect by presence of '.': if it's a float it's already in USD units.
+                    if intent.amount.contains('.') { r } else { r / 1_000_000.0 }
+                })
             } else {
                 None
             }
