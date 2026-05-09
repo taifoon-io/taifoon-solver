@@ -350,6 +350,10 @@ impl T3RNSidecar {
         let tx_hash = format!("{:?}", receipt.transaction_hash);
         let gas_used = receipt.gas_used;
 
+        if !receipt.status() {
+            anyhow::bail!("[t3rn-sidecar] LWC fill order reverted on-chain (intent={} tx={})", intent_id, tx_hash);
+        }
+
         info!("[t3rn-sidecar] order confirmed: intent={} tx={} gas_used={:?}", intent_id, tx_hash, gas_used);
         self.used_permits.lock().unwrap().insert(permit_key);
 
