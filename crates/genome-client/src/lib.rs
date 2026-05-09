@@ -1804,6 +1804,8 @@ impl MayanPoller {
                     is_solana_source: Some(is_solana_src),
                     // stateAddr is the Solana order PDA — required for Mayan Solana fulfill.
                     state_account: state_addr,
+                    // Carry the raw swiftProgram address so the flash adapter can use it directly.
+                    swift_program_id: if swift_program.is_empty() { None } else { Some(swift_program.to_string()) },
                     batch_id: None,
                     detected_at: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
