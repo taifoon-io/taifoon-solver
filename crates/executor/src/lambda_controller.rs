@@ -726,6 +726,7 @@ impl LambdaController {
                 let reason = format!("across_solana_src_unsupported:depositor={}", &dep[..dep.len().min(12)]);
                 info!("⏭️  {} — {}", intent.id, reason);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
         }
@@ -737,6 +738,7 @@ impl LambdaController {
                 let reason = format!("across_no_deposit_id:{}", intent.id);
                 info!("⏭️  Skipping {} — deposit_id unavailable after enrichment", intent.id);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
         }
@@ -752,6 +754,7 @@ impl LambdaController {
             if let Some(reason) = across_fill_deadline_skip_reason(intent.fill_deadline, now) {
                 info!("⏭️  {} — {}", intent.id, reason);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
         }

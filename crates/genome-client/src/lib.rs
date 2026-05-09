@@ -1208,28 +1208,42 @@ impl DeBridgeWsPoller {
             let _ = write.send(Message::Text(sub_msg.to_string().into())).await;
             let _ = write.send(Message::Text(get_msg.to_string().into())).await;
 
-            while let Some(msg) = read.next().await {
-                match msg {
-                    Ok(Message::Text(text)) => {
-                        if let Some(intent) = parse_debridge_ws_message(&text, &mut seen) {
-                            info!("⚡ deBridge WS orderId={} {}→{} give={}",
-                                intent.order_id.as_deref().unwrap_or("?"),
-                                intent.src_chain, intent.dst_chain, intent.amount);
-                            if intent_tx.send(intent).await.is_err() { return; }
+            // 90-second idle timeout: if no frame arrives (data, ping, or close),
+            // treat the connection as stalled and reconnect. Without this, a TCP-level
+            // hang (e.g. middlebox silently drops the connection) blocks forever.
+            let idle_timeout = std::time::Duration::from_secs(90);
+            loop {
+                match tokio::time::timeout(idle_timeout, read.next()).await {
+                    Err(_elapsed) => {
+                        warn!("deBridge WS idle for {}s — reconnecting", idle_timeout.as_secs());
+                        break;
+                    }
+                    Ok(None) => {
+                        warn!("deBridge WS stream ended, reconnecting...");
+                        break;
+                    }
+                    Ok(Some(msg)) => match msg {
+                        Ok(Message::Text(text)) => {
+                            if let Some(intent) = parse_debridge_ws_message(&text, &mut seen) {
+                                info!("⚡ deBridge WS orderId={} {}→{} give={}",
+                                    intent.order_id.as_deref().unwrap_or("?"),
+                                    intent.src_chain, intent.dst_chain, intent.amount);
+                                if intent_tx.send(intent).await.is_err() { return; }
+                            }
                         }
-                    }
-                    Ok(Message::Ping(data)) => {
-                        let _ = write.send(Message::Pong(data)).await;
-                    }
-                    Ok(Message::Close(_)) => {
-                        warn!("deBridge WS closed, reconnecting...");
-                        break;
-                    }
-                    Err(e) => {
-                        warn!("deBridge WS error: {}, reconnecting...", e);
-                        break;
-                    }
-                    _ => {}
+                        Ok(Message::Ping(data)) => {
+                            let _ = write.send(Message::Pong(data)).await;
+                        }
+                        Ok(Message::Close(_)) => {
+                            warn!("deBridge WS closed, reconnecting...");
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("deBridge WS error: {}, reconnecting...", e);
+                            break;
+                        }
+                        _ => {}
+                    },
                 }
             }
 
