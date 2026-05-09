@@ -687,14 +687,16 @@ fn across_deposit_to_intent(
         .unwrap_or(&depositor).to_string();
     let input_token = dep.get("inputToken").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
     let output_token = dep.get("outputToken").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
-    // inputAmount / outputAmount arrive as JSON strings in the Across API
+    // inputAmount / outputAmount arrive as JSON strings in the Across API.
+    // Fall back through f64→u128 (not u64) to handle large WETH amounts
+    // (> 18.4 ETH in wei overflows u64::MAX → as_u64() returns None silently).
     let input_amount = dep.get("inputAmount")
         .and_then(|v| v.as_str().map(|s| s.to_string())
-            .or_else(|| v.as_u64().map(|n| n.to_string())))
+            .or_else(|| v.as_f64().map(|n| (n as u128).to_string())))
         .unwrap_or_else(|| "0".to_string());
     let output_amount = dep.get("outputAmount")
         .and_then(|v| v.as_str().map(|s| s.to_string())
-            .or_else(|| v.as_u64().map(|n| n.to_string())))
+            .or_else(|| v.as_f64().map(|n| (n as u128).to_string())))
         .unwrap_or_else(|| "0".to_string());
     let tx_hash = dep.get("depositTxHash").and_then(|v| v.as_str())
         .or_else(|| dep.get("txHash").and_then(|v| v.as_str()))
