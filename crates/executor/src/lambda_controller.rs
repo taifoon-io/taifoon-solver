@@ -290,8 +290,9 @@ impl LambdaController {
 
         // 4-pre. Spread check for deBridge (spinner bypassed → no external profitability gate).
         // give_amount is what the user locked on src; take_amount is what we must pay on dst.
-        // The spread is give - take in token units. We require spread_pct ≥ 0.5 % to cover
-        // gas and slippage, otherwise skip.
+        // Reject only exact-par (give==take, zero profit) and sub-0.01% dust fills — DLN's
+        // contract ensures give > take for any economically-valid order, so this floor just
+        // filters rounding-error / test-deposit noise without rejecting real fills.
         // IMPORTANT: Only apply this check when give and take are likely the same-decimal token
         // (e.g., USDC→USDC). When take >> give by >1000×, tokens have different decimals
         // (e.g., USDC 6-dec give vs ETH 18-dec take) and the raw comparison is meaningless.
