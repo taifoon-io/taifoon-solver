@@ -1424,8 +1424,14 @@ impl LambdaController {
             let divisor = if is_stable { 1e6 } else { 1e18 };
             (give - take).max(0.0) / divisor
         };
-        if let Err(e) = self.wallet.record_revenue(&intent.id, fee_usd) {
-            warn!("⚠️  wallet record_revenue: {e}");
+        // Only record revenue when we have real give/take amounts (fee_usd > 0).
+        // Synthetic retry intents lack these fields and would INSERT OR REPLACE a
+        // zero value, clobbering any previously-recorded correct fee from the
+        // automated claim path.
+        if fee_usd > 0.0 {
+            if let Err(e) = self.wallet.record_revenue(&intent.id, fee_usd) {
+                warn!("⚠️  wallet record_revenue: {e}");
+            }
         }
         self.transition(&intent.id, IntentState::Claimed, Some(&tx_hash), None);
 
