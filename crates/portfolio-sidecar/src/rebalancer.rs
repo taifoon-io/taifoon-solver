@@ -1159,8 +1159,9 @@ impl Rebalancer {
 
         // minAmountOut in SOL lamports (9 decimals): 85% of input USDC value converted to SOL.
         // Lower slippage tolerance (85%) gives Mayan solvers more margin to fill without reverting.
-        // SOL price ~$170 as of May 2026; using conservative $160 to avoid order rejection on dips.
-        let sol_price_usd = 160.0_f64;
+        // Override with SOL_PRICE_USD env var; default $160 (conservative to reduce rejection on dips).
+        let sol_price_usd: f64 = std::env::var("SOL_PRICE_USD")
+            .ok().and_then(|s| s.parse().ok()).unwrap_or(160.0);
         let usdc_usd = amount_raw as f64 / 1e6;
         let min_sol_lamports = (usdc_usd / sol_price_usd * 0.85 * 1e9) as u64;
 
@@ -1439,7 +1440,10 @@ impl Rebalancer {
             .on_http(rpc.parse().context("parse rpc")?);
         let req = TransactionRequest::default().to(token_addr).input(Bytes::from(approve).into());
         let pending = wp.send_transaction(req).await.context("approve tx")?;
-        pending.with_required_confirmations(1).get_receipt().await.context("approve receipt")?;
+        let receipt = pending.with_required_confirmations(1).get_receipt().await.context("approve receipt")?;
+        if !receipt.status() {
+            anyhow::bail!("approve tx reverted on-chain for token {token_addr:#x}");
+        }
         Ok(())
     }
 

@@ -634,13 +634,19 @@ async fn bridge_token_across(
     let fees = fetch_suggested_fees(http, chain.chain_id, dst_chain, token.address, raw_amount)
         .await.with_context(|| format!("Across fees failed for {} on chain {}", token.symbol, chain.chain_id))?;
 
-    let relay_fee_raw: U256 = fees.relay_fee_total.parse().unwrap_or(U256::ZERO);
-    let output_amount_raw: U256 = fees.output_amount.parse().unwrap_or(U256::ZERO);
+    let relay_fee_raw: U256 = fees.relay_fee_total.parse()
+        .inspect_err(|e| tracing::warn!("Across: relay_fee_total parse failed ('{}': {e})", fees.relay_fee_total))
+        .unwrap_or(U256::ZERO);
+    let output_amount_raw: U256 = fees.output_amount.parse()
+        .inspect_err(|e| tracing::warn!("Across: output_amount parse failed ('{}': {e}) — deposit will be rejected by SpokePool", fees.output_amount))
+        .unwrap_or(U256::ZERO);
     let fee_usd = usd_value(relay_fee_raw, token.decimals, token.symbol);
     let net_usd = amount_usd - fee_usd;
     let quote_timestamp: u32 = fees.timestamp.parse().unwrap_or(0);
     let exclusive_relayer: Address = fees.exclusive_relayer.parse().unwrap_or(Address::ZERO);
-    let output_token: Address = fees.output_token.address.parse().unwrap_or(Address::ZERO);
+    let output_token: Address = fees.output_token.address.parse()
+        .inspect_err(|e| tracing::warn!("Across: output_token parse failed ('{}': {e})", fees.output_token.address))
+        .unwrap_or(Address::ZERO);
 
     if dry_run {
         return Ok(BridgeEntry {
