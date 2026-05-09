@@ -96,7 +96,7 @@ impl SolanaBroadcaster {
     }
 
     /// Build the signed legacy transaction bytes.
-    fn build_signed_tx(&self, intent: &MayanSolanaIntent, blockhash: &[u8; 32]) -> Result<Vec<u8>> {
+    pub(crate) fn build_signed_tx(&self, intent: &MayanSolanaIntent, blockhash: &[u8; 32]) -> Result<Vec<u8>> {
         let payer = self.signing_key.verifying_key().to_bytes();
         let program = decode_b58_32(&intent.swift_program_id_b58)
             .context("decode swift program id")?;
@@ -221,7 +221,7 @@ impl SolanaBroadcaster {
 }
 
 /// Load a `SigningKey` from a base58-encoded 64-byte keypair or hex 32-byte secret.
-fn load_signing_key(raw: &str) -> Result<SigningKey> {
+pub(crate) fn load_signing_key(raw: &str) -> Result<SigningKey> {
     let trimmed = raw.trim();
     // Try base58 decode first (64-byte Solana keypair format).
     if let Ok(bytes) = bs58::decode(trimmed).into_vec() {

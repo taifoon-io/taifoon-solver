@@ -33,3 +33,6 @@ pub use send::{SolanaBroadcaster, SolanaSendResult, SOLANA_PRIVATE_KEY_ENV};
 pub use simulate::{
     SolanaEstimateOutcome, SolanaSimulator, classify_solana_simulate_result,
 };
+
+#[cfg(test)]
+mod solana_tests;
