@@ -16,7 +16,7 @@ use tracing::{error, info, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenomeEvent {
     /// Full address (e.g., "T:1745678/proto:lifi_v2/deposit:1:0xabc123")
-    #[serde(default)]
+    #[serde(default, alias = "address")]
     pub addr: String,
     /// Entity type (e.g., "proto", "order")
     pub entity: String,
