@@ -385,7 +385,10 @@ impl HopRebalancer {
                 .to(input_token)
                 .input(approve_calldata.into());
             let pending = provider.send_transaction(approve_req).await.context("approve failed")?;
-            pending.get_receipt().await.context("approve receipt")?;
+            let ar = pending.get_receipt().await.context("approve receipt")?;
+            if !ar.status() {
+                anyhow::bail!("approve tx reverted for token {}", input_token);
+            }
         }
 
         // depositV3
@@ -418,6 +421,9 @@ impl HopRebalancer {
         let pending = provider.send_transaction(tx_req).await.context("depositV3 failed")?;
         let receipt = pending.get_receipt().await.context("depositV3 receipt")?;
         let hash = format!("{:#x}", receipt.transaction_hash);
+        if !receipt.status() {
+            anyhow::bail!("[hop_rebalancer] depositV3 reverted on-chain (tx {})", hash);
+        }
         info!("[hop_rebalancer] Across deposit tx={}", hash);
         Ok(hash)
     }
