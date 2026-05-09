@@ -1356,7 +1356,9 @@ fn parse_debridge_ws_message(
     let give_amount = hex_to_u128(give.get("amount")?.as_str()?).to_string();
     let take_amount = hex_to_u128(take.get("amount")?.as_str()?).to_string();
     let src_token = hex_to_addr(give.get("token_address")?.as_str()?);
-    let dst_token = hex_to_addr(take.get("token_address")?.as_str()?);
+    // dst_token: for Solana orders the API sends a base58 SPL mint, not a hex EVM address.
+    // Determine Solana destination first so we can skip hex_to_addr truncation.
+    let dst_token_raw = take.get("token_address")?.as_str()?;
 
     // Skip non-EVM destination chains — same filter as DeBridgePoller logs path.
     // Exception: Solana (100_000_001) is handled by DlnSolanaFiller.
@@ -1370,6 +1372,15 @@ fn parse_debridge_ws_message(
     } else {
         false
     };
+
+    // For Solana destinations, token_address is a base58 SPL mint — pass through as-is.
+    // For EVM destinations, normalize to 20-byte 0x-prefixed address.
+    let dst_token = if is_solana_dst {
+        dst_token_raw.to_string()
+    } else {
+        hex_to_addr(dst_token_raw)
+    };
+
     // Skip exotic tokens (same filter as DeBridgePoller).
     // Exception: for Solana destinations the dst_token is a base58 SPL mint, not an EVM hex.
     if !is_solana_dst && !is_supported_fill_token(&dst_token) {
@@ -1423,7 +1434,11 @@ fn parse_debridge_ws_message(
             format!("0x{}", clean)
         }
     };
-    let receiver_addr = {
+    // For Solana destination orders, receiver_dst is a base58 pubkey — pass through
+    // unchanged. For EVM orders, strip to last 20 bytes (EVM address format).
+    let receiver_addr = if is_solana_dst {
+        receiver.to_string()
+    } else {
         let clean = receiver.trim_start_matches("0x").to_lowercase();
         if clean.len() >= 40 {
             format!("0x{}", &clean[clean.len()-40..])
@@ -2183,5 +2198,56 @@ mod tests {
         assert_eq!(intent.dst_token, "0x0b2c639c533813f4aa9d7837caf62653d097ff85");
         assert_eq!(intent.recipient, "0xabcdef1234567890abcdef1234567890abcdef12");
         assert!(intent.order_id.as_deref().unwrap().starts_with("0x4f5e6d7c"));
+    }
+
+    /// WS parser must NOT corrupt Solana base58 addresses for Solana-destination orders.
+    /// Before the fix, hex_to_addr() was applied to both dst_token and receiver_dst even
+    /// for Solana orders, stripping the first 4 chars of a 44-char base58 pubkey.
+    #[test]
+    fn debridge_ws_solana_dst_preserves_base58_addresses() {
+        let usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let sol_receiver = "3g5uxUYgfM6sGZpxpEkCB7LkNhkFT5o5N6TXQVH8nfLk";
+        // Solana chain_id = 100_000_001 = 0x5F5E101 hex
+        let sol_chain_hex = format!("{:064x}", 100_000_001u64);
+        let evm_chain_hex = format!("{:064x}", 42161u64);
+        // order_id: 32 bytes
+        let order_id = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        // amounts: 32 bytes each
+        let amount_hex = format!("{:064x}", 1_000_000u128);
+
+        let msg = serde_json::json!({
+            "Order": {
+                "order_info": {
+                    "order_id": order_id,
+                    "order_info_status": { "Created": { "finalization_info": {} } },
+                    "order": {
+                        "give": {
+                            "chain_id": evm_chain_hex,
+                            "amount": amount_hex,
+                            "token_address": "000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+                        },
+                        "take": {
+                            "chain_id": sol_chain_hex,
+                            "amount": amount_hex,
+                            "token_address": usdc_mint
+                        },
+                        "maker_src": "000000000000000000000000deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                        "receiver_dst": sol_receiver,
+                        "maker_order_nonce": "1"
+                    }
+                }
+            }
+        });
+
+        let mut seen = std::collections::HashSet::new();
+        let intent = parse_debridge_ws_message(&msg.to_string(), &mut seen)
+            .expect("Solana-dst order should be accepted");
+
+        assert_eq!(intent.dst_chain, 100_000_001);
+        // dst_token must be the raw SPL mint, not a truncated hex string
+        assert_eq!(intent.dst_token, usdc_mint, "dst_token was corrupted by hex_to_addr");
+        // recipient must be the raw Solana pubkey, not 0x-prefixed truncation
+        assert_eq!(intent.recipient, sol_receiver, "recipient was corrupted by hex_to_addr");
+        assert!(intent.is_solana_destination.unwrap_or(false));
     }
 }
