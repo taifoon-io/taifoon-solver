@@ -222,4 +222,39 @@ mod tests {
             other => panic!("expected Resolved, got {:?}", other),
         }
     }
+
+    /// Null tool/bridge field (explicit JSON null) → Pending, not a parse error.
+    #[test]
+    fn null_tool_yields_pending() {
+        assert_eq!(
+            parse_lifi_status_body(&json!({ "tool": null })),
+            LifiBridgeResult::Pending,
+        );
+        assert_eq!(
+            parse_lifi_status_body(&json!({ "bridge": null, "status": "PENDING" })),
+            LifiBridgeResult::Pending,
+        );
+    }
+
+    /// All supported Mayan slug variants resolve to canonical "mayan" bridge.
+    #[test]
+    fn all_mayan_slug_variants_resolve() {
+        for slug in &["mayan", "mayan_swift", "mayanSwift", "MAYAN", "MAYANSWIFT"] {
+            match parse_lifi_status_body(&json!({ "tool": slug })) {
+                LifiBridgeResult::Resolved(res) => assert_eq!(res.bridge, "mayan", "slug={}", slug),
+                other => panic!("expected Resolved for slug={}, got {:?}", slug, other),
+            }
+        }
+    }
+
+    /// deBridge slug variants all resolve to canonical "debridge".
+    #[test]
+    fn debridge_slug_variants_resolve() {
+        for slug in &["debridge", "dln", "debridge_dln", "DeBridge"] {
+            match parse_lifi_status_body(&json!({ "tool": slug })) {
+                LifiBridgeResult::Resolved(res) => assert_eq!(res.bridge, "debridge", "slug={}", slug),
+                other => panic!("expected Resolved for slug={}, got {:?}", slug, other),
+            }
+        }
+    }
 }
