@@ -451,10 +451,12 @@ async fn main() -> Result<()> {
                 "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", // USDC.e Polygon
                 "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", // USDC Linea
                 "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // USDC Scroll
+                "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
                 "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT mainnet
                 "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USDT Arbitrum
                 "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT Optimism
                 "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon
+                "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
                 "usdc", "usdt",
             ];
             let tok = intent.src_token.to_lowercase();

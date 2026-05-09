@@ -458,7 +458,10 @@ async fn ensure_allowance(
     let approve_call = approveCall { spender, amount: U256::MAX }.abi_encode();
     let approve_req = TransactionRequest::default().to(token).input(Bytes::from(approve_call).into());
     let pending = write_provider.send_transaction(approve_req).await.context("approve tx failed")?;
-    pending.with_required_confirmations(1).get_receipt().await.context("approval receipt failed")?;
+    let ar = pending.with_required_confirmations(1).get_receipt().await.context("approval receipt failed")?;
+    if !ar.status() {
+        anyhow::bail!("approve tx reverted for token {:#x}", token);
+    }
     Ok(())
 }
 
