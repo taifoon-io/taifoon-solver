@@ -1145,7 +1145,10 @@ async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
         if status != "ORDER_CREATED" {
             continue;
         }
-        let order_hash = order.get("orderHash").and_then(|v| v.as_str())?;
+        let order_hash = match order.get("orderHash").and_then(|v| v.as_str()) {
+            Some(h) => h,
+            None => continue, // ORDER_CREATED without orderHash — skip this entry, try next
+        };
         let auction_mode = order.get("auctionMode").and_then(|v| v.as_u64()).map(|v| v as u8);
         let trader = order.get("trader").and_then(|v| v.as_str()).map(String::from);
         let to_amount = order.get("toAmount").and_then(|v| v.as_str()).map(String::from);
