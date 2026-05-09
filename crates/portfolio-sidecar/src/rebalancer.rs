@@ -533,6 +533,13 @@ impl Rebalancer {
                 if *status != InventoryStatus::Surplus { continue; }
 
                 let working = working_stable.get(&target.chain_id).copied().unwrap_or(0.0);
+                if working < target.target_stable_usd {
+                    warn!(
+                        "⚠️  {} classified SURPLUS but working=${:.2} < target=${:.2} — skipping sweep",
+                        target.chain_name, working, target.target_stable_usd
+                    );
+                    continue;
+                }
                 let sweep_usd = (working - target.target_stable_usd).max(0.0);
                 if sweep_usd < MIN_BRIDGE_USD { continue; }
 

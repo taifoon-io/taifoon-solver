@@ -1683,7 +1683,10 @@ impl MayanPoller {
                 }
                 let order_hash = match order.get("orderHash").and_then(|v| v.as_str()) {
                     Some(h) if !h.is_empty() => h.to_string(),
-                    _ => continue,
+                    _ => {
+                        tracing::debug!("MayanPoller skip order — missing or empty orderHash");
+                        continue;
+                    }
                 };
                 // Evict oldest half when the seen set reaches 20 000 entries to
                 // prevent unbounded growth in long-running processes.
@@ -1716,7 +1719,17 @@ impl MayanPoller {
 
                 let src_chain_mayan = order.get("sourceChain").and_then(|v| v.as_str()).unwrap_or("0");
                 let _swap_chain = order.get("swapChain").and_then(|v| v.as_str()).unwrap_or("0");
-                let src_chain = mayan_chain_to_evm(src_chain_mayan).unwrap_or(0);
+                let src_chain = match mayan_chain_to_evm(src_chain_mayan) {
+                    Some(c) => c,
+                    None => {
+                        tracing::debug!(
+                            "MayanPoller skip order {} — unknown sourceChain {:?}",
+                            &order_hash[..20.min(order_hash.len())],
+                            src_chain_mayan
+                        );
+                        continue;
+                    }
+                };
 
                 let from_token = order.get("fromTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
                 let to_token = order.get("toTokenAddress").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();

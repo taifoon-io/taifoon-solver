@@ -26,8 +26,13 @@ use crate::send::SOLANA_PRIVATE_KEY_ENV;
 
 /// Placeholder Mayan Flash program ID.
 ///
-/// TODO(mayan-flash): verify program ID and full account list from Mayan Flash IDL
-pub const MAYAN_FLASH_PROGRAM_ID: &str = "MayanFLaSh111111111111111111111111111111111";
+/// INTENTIONALLY INVALID BASE58 — contains '0' which is not in the base58 alphabet.
+/// Any attempt to decode this and construct a transaction will fail loudly at
+/// bs58::decode time rather than silently routing funds to a wrong address.
+///
+/// TODO(mayan-flash): replace with the real program ID once the Mayan Flash IDL
+/// is published and the mainnet program is confirmed.
+pub const MAYAN_FLASH_PROGRAM_ID: &str = "PLACEHOLDER0MayanFlash0XXXXXXXXXXXXXXXXXXXXXXX";
 
 /// Default compute unit budget for Flash fills. Lower than Swift because the
 /// LP-based fill skips the auction VAA verification overhead.
@@ -79,10 +84,11 @@ impl MayanFlashIntent {
             .as_deref()
             .ok_or_else(|| anyhow!("Mayan Flash requires intent.state_account"))?;
 
-        // Prefer the Flash program ID from the intent if it looks like a Flash key;
-        // fall back to the placeholder constant.
+        // Use swift_program_id as-is when non-empty — the caller already selected
+        // this adapter by protocol tag, so the field IS the flash program address.
+        // The old substring check required "flash" in the ID which is not guaranteed.
         let program = match intent.swift_program_id.as_deref() {
-            Some(p) if p.to_lowercase().contains("flash") => p,
+            Some(p) if !p.is_empty() => p,
             _ => MAYAN_FLASH_PROGRAM_ID,
         };
 
@@ -555,7 +561,9 @@ mod tests {
             ),
             trader: Some("DepositorWa11etAddrSoLana1111111111111111111".into()),
             deadline: Some(1745931645),
-            swift_program_id: Some(MAYAN_FLASH_PROGRAM_ID.into()),
+            // Use the Swift program ID as a valid base58 stand-in for tests —
+            // the Flash placeholder is intentionally invalid to catch accidental production use.
+            swift_program_id: Some(crate::mayan_solana::DEFAULT_MAYAN_SWIFT_PROGRAM.into()),
             state_account: Some("9wK4N3pTzXyZ8vQ5mB2hWnQ7tR9uVaCfDgFhJiKkMnPp".into()),
             vault_account: Some("8mB2hWnQ7tR9uVaCfDgFhJiKkMnPpQ9wK4N3pTzXyZ8v".into()),
             compute_units_estimate: Some(200_000),

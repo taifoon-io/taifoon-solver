@@ -26,8 +26,14 @@ use crate::send::SolanaSendResult;
 pub const WORMHOLE_CORE_PROGRAM_ID: &str = "worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth";
 
 /// Wormhole NTT program (mainnet placeholder — per-deployment address varies).
-/// The actual address depends on which token/deployment is being integrated.
-pub const WORMHOLE_NTT_PROGRAM_ID: &str = "NTTMgrXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // placeholder
+///
+/// INTENTIONALLY INVALID BASE58 — contains '0' which is not in the base58 alphabet.
+/// Any attempt to decode this and construct a transaction will fail loudly at
+/// bs58::decode time rather than silently routing funds to a wrong address.
+///
+/// TODO(wormhole-ntt): replace with the real per-token NTT manager program ID
+/// once the target token set and deployment addresses are confirmed.
+pub const WORMHOLE_NTT_PROGRAM_ID: &str = "PLACEHOLDER0WormholeNTT0XXXXXXXXXXXXXXXXXXXXXXX";
 
 /// Wormholescan VAA API base URL.
 pub const WORMHOLESCAN_API_BASE: &str = "https://api.wormholescan.io";

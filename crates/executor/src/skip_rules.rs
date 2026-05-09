@@ -121,19 +121,26 @@ impl SkipRules {
         // Rules that rely solely on max_gas_gwei will never fire until a gas oracle
         // is wired into the evaluate call. Surface this at load time so operators
         // don't wonder why gas-based rules are inactive.
-        let gas_only_rules = rules.iter()
+        let gas_only_rules: Vec<&SkipRule> = rules.iter()
             .filter(|r| r.predicate.max_gas_gwei.is_some()
                 && r.predicate.min_amount_usd.is_none()
                 && r.predicate.dst_chain.is_none()
                 && r.predicate.src_chain.is_none()
                 && r.predicate.max_fill_deadline_secs.is_none())
-            .count();
-        if gas_only_rules > 0 {
+            .collect();
+        if !gas_only_rules.is_empty() {
             warn!(
                 "skip-rules: {} rule(s) use only max_gas_gwei — these will NOT fire \
                  because current_gas_gwei is not yet supplied at the evaluate call site",
-                gas_only_rules
+                gas_only_rules.len()
             );
+            for r in &gas_only_rules {
+                warn!(
+                    "  inactive gas-only rule: {:?} (max_gas_gwei={:?})",
+                    r.description.as_deref().unwrap_or("<no description>"),
+                    r.predicate.max_gas_gwei
+                );
+            }
         }
         info!("📐 skip-rules: loaded {} active rules", rules.len());
         Self { rules }
