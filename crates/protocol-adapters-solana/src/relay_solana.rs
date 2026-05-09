@@ -55,17 +55,21 @@ impl RelaySolanaIntent {
     /// Returns an error if required fields (token addresses, amounts) are missing
     /// or cannot be parsed.
     pub fn from_intent(intent: &Intent) -> Result<Self> {
+        let deposit_id = intent
+            .id
+            .split(':')
+            .last()
+            .and_then(|s| s.parse::<u64>().ok())
+            .ok_or_else(|| anyhow::anyhow!(
+                "RelaySolanaIntent: cannot parse deposit_id from intent id={:?}", intent.id
+            ))?;
+        let input_amount = intent.amount.parse::<u64>().unwrap_or(0);
         Ok(Self {
             intent_id: intent.id.clone(),
-            deposit_id: intent
-                .id
-                .split(':')
-                .last()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0),
+            deposit_id,
             input_token_mint_b58: intent.src_token.clone(),
             output_token_mint_b58: intent.dst_token.clone(),
-            input_amount: intent.amount.parse().unwrap_or(0),
+            input_amount,
             output_amount: intent
                 .output_amount
                 .as_deref()
