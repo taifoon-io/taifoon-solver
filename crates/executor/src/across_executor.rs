@@ -718,8 +718,11 @@ pub async fn fetch_relay_data_from_tx(
         // message: ABI dynamic bytes at slot[9] (offset pointer at byte 288).
         // Slot[9] contains the byte-offset from start of data to the length word.
         // Length at that offset, followed by the bytes themselves.
+        // NOTE: the ABI offset pointer is always standard right-aligned uint256 (never packed),
+        // so we read the full 32-byte slot directly even in packed_format mode.
         let message: Option<String> = (|| -> Option<String> {
-            let msg_offset = read_uint_slot(288)?.to::<usize>();
+            if 288 + 32 > data.len() { return None; }
+            let msg_offset = U256::from_be_slice(&data[288..320]).to::<usize>();
             let len_offset = msg_offset;
             if len_offset + 32 > data.len() { return None; }
             let msg_len = U256::from_be_slice(&data[len_offset..len_offset + 32]).to::<usize>();
