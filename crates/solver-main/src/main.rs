@@ -1156,7 +1156,13 @@ async fn debridge_claim_retry_tick(
 
 /// Query the Mayan explorer API for an order whose `sourceTxHash` matches `tx_hash`.
 /// Returns a partial Intent with Mayan-specific fields populated, or `None` if the
-/// order isn't found or is not in ORDER_CREATED state.
+/// order isn't found or has already been claimed/completed.
+///
+/// We intentionally do NOT filter on ORDER_CREATED: by the time LiFi→Mayan enrichment
+/// fires, the order may have advanced to FULFILL_REQUESTED or FULFILLED but is still
+/// unfilled by us. Any status with a valid orderHash is potentially fillable.
+/// We skip only orders with no orderHash (explorer not yet indexed) and orders whose
+/// status indicates no fill is possible (COMPLETED, SETTLED, CLAIMED, REFUNDED).
 async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
     let url = format!(
         "https://explorer-api.mayan.finance/v3/swaps?sourceTxHash={}&service=SWIFT_V2",
@@ -1171,12 +1177,13 @@ async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
     let orders = body.get("data")?.as_array()?;
     for order in orders {
         let status = order.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        if status != "ORDER_CREATED" {
+        // Skip already-terminal states — nothing to fill.
+        if matches!(status, "COMPLETED" | "SETTLED" | "CLAIMED" | "REFUNDED" | "CANCELLED") {
             continue;
         }
         let order_hash = match order.get("orderHash").and_then(|v| v.as_str()) {
-            Some(h) => h,
-            None => continue, // ORDER_CREATED without orderHash — skip this entry, try next
+            Some(h) if !h.is_empty() => h,
+            _ => continue, // explorer not yet indexed this order — skip
         };
         let auction_mode = order.get("auctionMode").and_then(|v| v.as_u64()).map(|v| v as u8);
         let trader = order.get("trader").and_then(|v| v.as_str()).map(String::from);
