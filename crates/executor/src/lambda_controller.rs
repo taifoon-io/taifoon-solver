@@ -1365,7 +1365,8 @@ impl LambdaController {
                 .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
             let dst_tok = intent.dst_token.to_lowercase();
             let is_stable = matches!(dst_tok.trim(),
-                // USDC on Base, Arbitrum, Optimism, Ethereum, Polygon, Linea, Unichain
+                // USDC on Base, Arbitrum, Optimism, Ethereum, Polygon, Linea, Unichain,
+                // Scroll, Ink, Mode, Polygon zkEVM, Avalanche, zkSync Era
                 "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" |
                 "0xaf88d065e77c8cc2239327c5edb3a432268e5831" |
                 "0x0b2c639c533813f4aa9d7837caf62653d097ff85" |
@@ -1373,10 +1374,24 @@ impl LambdaController {
                 "0x2791bca1f2de4661ed88a30c99a7a9449aa84174" |
                 "0x176211869ca2b568f2a7d4ee941e073a821ee1ff" |
                 "0x078d782b760474a361dda7ff6e249887ddf39eb0" |
+                "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4" |
+                "0x2d270e6886d130d724215a266106e6832161eaed" |
+                "0xd988097fb8612cc24eec14542bc03424c656005f" |
+                "0x9c3c9283d3e44854697cd22d3faa240cfb032889" |
+                "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a" |
+                "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e" |
+                "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4" |
                 // USDT variants
                 "0xdac17f958d2ee523a2206206994597c13d831ec7" |
                 "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" |
-                "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
+                "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58" |
+                "0xc2132d05d31c914a87c6611c10748aeb04b58e8f" |
+                "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2" |
+                "0xf55bec9cafdbe8730f096aa55dad6d22d44099df" |
+                "0x0200c29006150606b650577bbe7b6248f58470c1" |
+                "0xf0f161fda2712db8b566946122a5af183995e2ed" |
+                "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7" |
+                "0xc7198437980c041c805a1edcba50c1ce5db95118"
             );
             let divisor = if is_stable { 1e6 } else { 1e18 };
             (give - take).max(0.0) / divisor
@@ -1518,7 +1533,18 @@ fn token_decimals(token: &str) -> u8 {
         // NOTE: BSC USDT (0x55d398) uses 18 decimals — intentionally omitted here
         "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon (6 dec)
         "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
+        "0x2d270e6886d130d724215a266106e6832161eaed", // USDC Ink
+        "0xd988097fb8612cc24eec14542bc03424c656005f", // USDC.e Mode
+        "0x9c3c9283d3e44854697cd22d3faa240cfb032889", // USDC Polygon zkEVM
+        "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a", // USDC.e Avalanche (old)
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC Avalanche native
+        "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4", // USDC zkSync Era
         "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
+        "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // USDT Scroll
+        "0x0200c29006150606b650577bbe7b6248f58470c1", // USDT Ink
+        "0xf0f161fda2712db8b566946122a5af183995e2ed", // USDT Mode
+        "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDT Avalanche native
+        "0xc7198437980c041c805a1edcba50c1ce5db95118", // USDT.e Avalanche
         "usdc", "usdt",
     ];
     if SIX_DEC.iter().any(|&s| lower == s) {

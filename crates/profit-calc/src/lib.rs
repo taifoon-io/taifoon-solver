@@ -334,7 +334,18 @@ impl ProfitCalculator {
             "0x049d68029688eabf473097a2fc38ef61633a3c7a", // USDT Fantom
             "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon
             "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
+            "0x2d270e6886d130d724215a266106e6832161eaed", // USDC Ink
+            "0xd988097fb8612cc24eec14542bc03424c656005f", // USDC.e Mode
+            "0x9c3c9283d3e44854697cd22d3faa240cfb032889", // USDC Polygon zkEVM
+            "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a", // USDC.e Avalanche (old)
+            "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC Avalanche native
+            "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4", // USDC zkSync Era
             "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
+            "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // USDT Scroll
+            "0x0200c29006150606b650577bbe7b6248f58470c1", // USDT Ink
+            "0xf0f161fda2712db8b566946122a5af183995e2ed", // USDT Mode
+            "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDT Avalanche native
+            "0xc7198437980c041c805a1edcba50c1ce5db95118", // USDT.e Avalanche
             "usdc", "usdt",
         ];
         if SIX_DEC.contains(&addr_lower.as_str()) {
@@ -373,7 +384,18 @@ impl ProfitCalculator {
             "0x049d68029688eabf473097a2fc38ef61633a3c7a",
             "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
             "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
+            "0x2d270e6886d130d724215a266106e6832161eaed", // USDC Ink
+            "0xd988097fb8612cc24eec14542bc03424c656005f", // USDC.e Mode
+            "0x9c3c9283d3e44854697cd22d3faa240cfb032889", // USDC Polygon zkEVM
+            "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a", // USDC.e Avalanche (old)
+            "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC Avalanche native
+            "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4", // USDC zkSync Era
             "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
+            "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // USDT Scroll
+            "0x0200c29006150606b650577bbe7b6248f58470c1", // USDT Ink
+            "0xf0f161fda2712db8b566946122a5af183995e2ed", // USDT Mode
+            "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDT Avalanche native
+            "0xc7198437980c041c805a1edcba50c1ce5db95118", // USDT.e Avalanche
             // DAI
             "0x6b175474e89094c44da98b954eedeac495271d0f",
             "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", // DAI Arbitrum
