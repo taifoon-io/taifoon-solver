@@ -525,6 +525,24 @@ async fn main() -> Result<()> {
             continue;
         }
 
+        // ── Expired deadline guard ───────────────────────────────────────────────
+        // Catch intents whose fill deadline has already passed. skip_rules fire
+        // only when deadline > now + max_deadline_secs (too far in future); they
+        // do NOT fire when deadline < now (already expired). Do that here.
+        if let Some(dl) = intent.fill_deadline {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if (dl as u64) < now_secs {
+                info!(
+                    "⏭️  {} skip (fill_deadline {} already expired, now={}): {}",
+                    intent.protocol, dl, now_secs, intent.id
+                );
+                continue;
+            }
+        }
+
         // ── Portfolio-capacity pre-filters ───────────────────────────────────────
         // Drop intents outside the configured chain set or amount range *before*
         // the li.quest API call and enrichment RPC, so we waste no resources on
@@ -825,9 +843,12 @@ async fn main() -> Result<()> {
                     continue;
                 }
             }
-            // Skip zero-amount intents regardless of protocol.
-            if intent_ref.amount == "0" && intent_ref.output_amount.as_deref().map(|s| s == "0" || s.is_empty()).unwrap_or(true) {
-                info!("⏭️  {} skip (zero input+output amount): {}", intent_ref.protocol, intent_ref.id);
+            // Skip zero-amount intents. Only check input amount — absent output_amount
+            // is not a skip signal (deBridge/Across don't populate it).
+            let amount_is_zero = intent_ref.amount == "0"
+                || intent_ref.amount.trim_start_matches("0x").trim_start_matches('0').is_empty();
+            if amount_is_zero {
+                info!("⏭️  {} skip (zero input amount): {}", intent_ref.protocol, intent_ref.id);
                 continue;
             }
             let Some(ctrl) = lambda_controller.as_ref() else {
@@ -1155,7 +1176,14 @@ async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
         let src_chain_mayan = order.get("sourceChain").and_then(|v| v.as_str()).unwrap_or("0");
         let src_chain = match src_chain_mayan {
             "2" => 1u64, "4" => 56, "5" => 137, "6" => 43114,
-            "23" => 42161, "24" => 10, "30" => 8453, _ => 0,
+            "23" => 42161, "24" => 10, "30" => 8453,
+            other => {
+                tracing::warn!(
+                    "resolve_lifi_mayan_order: unknown sourceChain {:?} for order {} — skipping",
+                    other, order_hash
+                );
+                continue; // unknown chain → don't construct an invalid src_chain=0 intent
+            }
         };
         // Decode the on-chain createOrderWithToken calldata so we have the full
         // OrderParams (random, fees, deadline). These must match exactly for the

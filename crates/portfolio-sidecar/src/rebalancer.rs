@@ -1626,7 +1626,10 @@ fn best_surplus_source(
 fn usd_to_raw(usd: f64, decimals: u32) -> u128 {
     if usd <= 0.0 { return 0; }
     let raw = usd * 10f64.powi(decimals as i32);
-    if raw > u128::MAX as f64 { return 0; }
+    if raw > u128::MAX as f64 {
+        warn!("usd_to_raw overflow: usd={} decimals={} — clamping to 0", usd, decimals);
+        return 0;
+    }
     raw as u128
 }
 
