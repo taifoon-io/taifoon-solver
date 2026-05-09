@@ -317,6 +317,13 @@ impl AcrossExecutor {
             claim_fee_usd: None,
         })?;
 
+        // A reverted fill must propagate as Err so lambda_controller does NOT
+        // advance the intent to CONFIRMED (which would leave it stuck waiting for
+        // a claim that will never arrive because the fill never executed).
+        if !success {
+            anyhow::bail!("executeWithProof reverted on-chain (tx {})", tx_hash);
+        }
+
         Ok(Some(tx_hash))
     }
 
