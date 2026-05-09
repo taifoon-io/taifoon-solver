@@ -1308,7 +1308,6 @@ impl LambdaController {
             }
         };
 
-        self.transition(&intent.id, IntentState::ClaimPending, None, None);
         info!("📤 claimUnlock → DlnSource {} on src chain {} for intent {}",
             dln_src_addr, intent.src_chain, intent.id);
 
@@ -1325,12 +1324,15 @@ impl LambdaController {
         let pending = match provider.send_transaction(tx_req).await {
             Ok(p) => p,
             Err(e) => {
+                // Intent stays in CONFIRMED so the claim retry loop can re-attempt.
                 return Ok(LambdaClaimOutcome::Failed {
                     error: format!("send_transaction:{e}"),
                 });
             }
         };
 
+        // Tx is in-flight — transition now so concurrent claim loops skip this intent.
+        self.transition(&intent.id, IntentState::ClaimPending, None, None);
         let tx_hash = format!("{:#x}", *pending.tx_hash());
         info!("📤 claimUnlock broadcast {} on chain {}", tx_hash, intent.src_chain);
 
