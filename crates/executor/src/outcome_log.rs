@@ -298,6 +298,12 @@ impl OutcomeLog {
              )",
             params![claim_tx_hash, claim_fee_usd, intent_id],
         )?;
+        if n == 0 {
+            warn!(
+                "update_claim: no executed row found for intent_id={} — claim revenue not recorded in outcomes table",
+                intent_id
+            );
+        }
         Ok(n)
     }
 
