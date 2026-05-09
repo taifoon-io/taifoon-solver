@@ -738,6 +738,7 @@ impl Rebalancer {
                                     }
                                 }
                             };
+                            *working_stable.entry(src.chain_id).or_insert(0.0) -= src.bridge_token_usd;
                             actions.push(action);
                         } else {
                         // Stablecoin exhausted — try ETH→SOL bootstrap if we have spare ETH.
@@ -1032,6 +1033,7 @@ impl Rebalancer {
         router_addr: &str,
     ) -> Result<String> {
         let rpc = rpc_for(chain_id);
+        if rpc.is_empty() { anyhow::bail!("no RPC configured for chain {} — add it to rpc_for()", chain_id); }
         let eth_u256 = U256::from(eth_wei);
 
         // Step 1: wrap ETH → WETH, then swap WETH → USDC via Uniswap exactInputSingle.
@@ -1108,6 +1110,7 @@ impl Rebalancer {
 
     async fn execute_mayan_solana_bridge_on_chain(&self, amount_raw: u128, solana_addr: &str, token_in_addr: &str, token_symbol: &str, chain_id: u64) -> Result<String> {
         let rpc = rpc_for(chain_id);
+        if rpc.is_empty() { anyhow::bail!("no RPC configured for chain {} — add it to rpc_for()", chain_id); }
         let amount_u256 = U256::from(amount_raw);
 
         // Decode Solana base58 pubkey → 32-byte destAddr
