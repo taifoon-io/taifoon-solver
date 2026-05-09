@@ -229,6 +229,7 @@ impl LambdaController {
                     )
                 };
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
                 self.append_outcome(OutcomeRecord {
                     ts: started_at,
                     intent_id: intent.id.clone(),
@@ -618,6 +619,7 @@ impl LambdaController {
             if self.dry_run {
                 info!("🧪 DRY_RUN: would broadcast Mayan Solana fulfill for {}", intent.id);
                 self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some("dry_run"));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Skipped { reason: "dry_run".into() });
             }
 
@@ -628,6 +630,7 @@ impl LambdaController {
                     let reason = format!("solana_key_not_configured:{e}");
                     warn!("⚠️  Mayan Solana {} — {}", intent.id, reason);
                     self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Skipped { reason });
                 }
             };
@@ -689,6 +692,7 @@ impl LambdaController {
                 Some(AcrossSpreadSkip::OutputExceedsInput { reason }) => {
                     info!("⏭️  {} — {}", intent.id, reason);
                     self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Skipped { reason });
                 }
                 Some(AcrossSpreadSkip::SpreadTooThin { reason }) => {
@@ -961,6 +965,7 @@ impl LambdaController {
                 claim_tx_hash: None,
                 claim_fee_usd: None,
             });
+            let _ = self.wallet.release(&intent.id);
             return Ok(LambdaExecuteOutcome::Skipped {
                 reason: "dry_run".into(),
             });

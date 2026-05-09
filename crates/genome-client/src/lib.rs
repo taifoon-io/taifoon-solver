@@ -1810,17 +1810,22 @@ impl GenomeClient {
     pub async fn subscribe(&self, intent_tx: mpsc::Sender<Intent>) -> Result<()> {
         info!("🔌 Connecting to genome stream: {}", self.sse_url);
 
+        let mut backoff_secs: u64 = 2;
         loop {
             match self.subscribe_internal(&intent_tx).await {
                 Ok(_) => {
-                    warn!("Genome stream ended unexpectedly, reconnecting in 5s...");
+                    warn!("Genome stream ended unexpectedly, reconnecting in {}s...", backoff_secs);
+                    // Clean close — stream was healthy; reset backoff.
+                    backoff_secs = 2;
                 }
                 Err(e) => {
-                    error!("Genome stream error: {}, reconnecting in 5s...", e);
+                    error!("Genome stream error: {}, reconnecting in {}s...", e, backoff_secs);
+                    // Exponential backoff capped at 60s for persistent failures.
+                    backoff_secs = (backoff_secs * 2).min(60);
                 }
             }
 
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
         }
     }
 
