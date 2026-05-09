@@ -1097,8 +1097,32 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
     let take_chain_id = u64_at(&slots[os + 5]);
     let take_amount   = u128_str(&slots[os + 7]);
 
+    // For Solana-destination orders, takeToken and receiverDst bytes in the ABI log are
+    // raw 32-byte Solana pubkeys — they must be base58-encoded, not hex-with-0x.
+    // EVM-destination fields are always hex. Give-side fields are always EVM hex.
+    let is_solana_dst = debridge_non_evm_chain_name(take_chain_id)
+        .map(|name| name.contains("Solana") || name.contains("SVM"))
+        .unwrap_or(false);
+
+    let bytes_to_addr = |b: Vec<u8>| -> String {
+        if is_solana_dst && b.len() == 32 {
+            bs58::encode(&b).into_string()
+        } else {
+            format!("0x{}", hex::encode(&b))
+        }
+    };
     let bytes_to_hex = |b: Vec<u8>| -> Option<String> {
         if b.is_empty() { None } else { Some(format!("0x{}", hex::encode(&b))) }
+    };
+    // Solana optional dst-side fields: order_authority_address_dst and allowed_taker_dst
+    // are also Solana pubkeys when the destination is Solana.
+    let bytes_to_dst_field = |b: Vec<u8>| -> Option<String> {
+        if b.is_empty() { return None; }
+        if is_solana_dst && b.len() == 32 {
+            Some(bs58::encode(&b).into_string())
+        } else {
+            Some(format!("0x{}", hex::encode(&b)))
+        }
     };
 
     let maker_src   = read_bytes_relative(&slots[os + 1])
@@ -1108,10 +1132,10 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
         .map(|b| format!("0x{}", hex::encode(&b)))
         .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
     let take_token  = read_bytes_relative(&slots[os + 6])
-        .map(|b| format!("0x{}", hex::encode(&b)))
+        .map(bytes_to_addr)
         .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
     let receiver    = read_bytes_relative(&slots[os + 8])
-        .map(|b| format!("0x{}", hex::encode(&b)))
+        .map(bytes_to_addr)
         .unwrap_or_else(|| "0x0000000000000000000000000000000000000000".into());
 
     // Optional authority/allowlist fields — must be decoded to reconstruct the correct orderId hash.
@@ -1120,10 +1144,10 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
         .and_then(bytes_to_hex);
     let order_authority_address_dst = slots.get(os + 10)
         .and_then(|s| read_bytes_relative(s))
-        .and_then(bytes_to_hex);
+        .and_then(bytes_to_dst_field);
     let allowed_taker_dst = slots.get(os + 11)
         .and_then(|s| read_bytes_relative(s))
-        .and_then(bytes_to_hex);
+        .and_then(bytes_to_dst_field);
     let allowed_cancel_beneficiary_src = slots.get(os + 12)
         .and_then(|s| read_bytes_relative(s))
         .and_then(bytes_to_hex);
@@ -1160,6 +1184,7 @@ fn decode_dln_order_created_log(log: &serde_json::Value, src_chain_id: u64) -> O
         dln_allowed_taker_dst: allowed_taker_dst,
         dln_allowed_cancel_beneficiary_src: allowed_cancel_beneficiary_src,
         dln_external_call: external_call,
+        is_solana_destination: if is_solana_dst { Some(true) } else { None },
         detected_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -2198,6 +2223,75 @@ mod tests {
         assert_eq!(intent.dst_token, "0x0b2c639c533813f4aa9d7837caf62653d097ff85");
         assert_eq!(intent.recipient, "0xabcdef1234567890abcdef1234567890abcdef12");
         assert!(intent.order_id.as_deref().unwrap().starts_with("0x4f5e6d7c"));
+    }
+
+    /// Log-based DLN decoder must base58-encode takeToken and receiverDst bytes for
+    /// Solana-destination orders. Before the fix, all fields were hex-encoded with 0x
+    /// prefix, causing DlnSolanaIntent::from_intent to fail with CalldataError.
+    #[test]
+    fn decode_dln_log_solana_dst_produces_base58_addresses() {
+        let p = |v: u128| -> [u8; 32] { let mut s = [0u8; 32]; s[16..].copy_from_slice(&v.to_be_bytes()); s };
+        let p64 = |v: u64| -> [u8; 32] { let mut s = [0u8; 32]; s[24..].copy_from_slice(&v.to_be_bytes()); s };
+        let addr = |hex: &str| -> [u8; 32] { let b = hex::decode(hex).unwrap(); let mut s = [0u8; 32]; s[..b.len()].copy_from_slice(&b); s };
+
+        // Use real USDC SPL mint pubkey bytes (EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v).
+        let usdc_mint_b58 = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let usdc_bytes = bs58::decode(usdc_mint_b58).into_vec().unwrap();
+        let receiver_b58 = "3g5uxUYgfM6sGZpxpEkCB7LkNhkFT5o5N6TXQVH8nfLk";
+        let receiver_bytes = bs58::decode(receiver_b58).into_vec().unwrap();
+        // Pad to 32 bytes for the push_bytes helper below.
+        let to_hex32 = |b: &[u8]| -> String {
+            let mut full = vec![0u8; 32]; full[..b.len()].copy_from_slice(b); hex::encode(&full)
+        };
+
+        let mut slots: Vec<[u8; 32]> = Vec::new();
+        slots.push(p64(224));  // [0] order offset = 7*32
+        slots.push(addr("aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344")); // [1] orderId
+        for _ in 0..5 { slots.push([0u8; 32]); }  // [2..6] padding
+
+        // Order struct at slot[7] (os=7). Offsets are RELATIVE to Order struct start.
+        slots.push(p64(99));               // [os+0] makerOrderNonce
+        slots.push(p64(9 * 32));           // [os+1] makerSrc offset = 288
+        slots.push(p64(42161));            // [os+2] giveChainId (Arbitrum)
+        slots.push(p64(9 * 32 + 64));      // [os+3] giveToken offset
+        slots.push(p(5_000_000));          // [os+4] giveAmount
+        slots.push(p64(100_000_001));      // [os+5] takeChainId = Solana
+        slots.push(p64(9 * 32 + 128));     // [os+6] takeToken offset
+        slots.push(p(4_990_000));          // [os+7] takeAmount
+        slots.push(p64(9 * 32 + 192));     // [os+8] receiverDst offset
+
+        let push_bytes_hex = |slots: &mut Vec<[u8; 32]>, hex: &str| {
+            let b = hex::decode(hex).unwrap();
+            let p64 = |v: u64| -> [u8; 32] { let mut s = [0u8; 32]; s[24..].copy_from_slice(&v.to_be_bytes()); s };
+            slots.push(p64(b.len() as u64));
+            let mut d = [0u8; 32]; d[..b.len()].copy_from_slice(&b); slots.push(d);
+        };
+
+        // makerSrc = EVM address (20 bytes)
+        push_bytes_hex(&mut slots, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+        // giveToken = EVM USDC (20 bytes)
+        push_bytes_hex(&mut slots, "a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
+        // takeToken = Solana USDC mint (32 bytes)
+        push_bytes_hex(&mut slots, &to_hex32(&usdc_bytes));
+        // receiverDst = Solana pubkey (32 bytes)
+        push_bytes_hex(&mut slots, &to_hex32(&receiver_bytes));
+
+        let data_hex = format!("0x{}", slots.iter().map(|s| hex::encode(s)).collect::<String>());
+        let log = serde_json::json!({
+            "data": data_hex,
+            "transactionHash": "0xcafebabe"
+        });
+
+        let intent = decode_dln_order_created_log(&log, 42161).expect("should decode Solana-dst order");
+        assert_eq!(intent.dst_chain, 100_000_001, "dst_chain must be Solana");
+        // takeToken must be base58, not 0x-prefixed hex
+        assert_eq!(intent.dst_token, usdc_mint_b58, "dst_token must be base58 SPL mint");
+        assert!(!intent.dst_token.starts_with("0x"), "dst_token must not be 0x hex");
+        // receiverDst must be base58 pubkey
+        assert_eq!(intent.recipient, receiver_b58, "recipient must be base58 Solana pubkey");
+        assert!(!intent.recipient.starts_with("0x"), "recipient must not be 0x hex");
+        // is_solana_destination must be set
+        assert_eq!(intent.is_solana_destination, Some(true));
     }
 
     /// WS parser must NOT corrupt Solana base58 addresses for Solana-destination orders.
