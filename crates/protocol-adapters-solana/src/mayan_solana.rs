@@ -361,7 +361,7 @@ fn decode_hex_32(s: &str) -> Result<[u8; 32]> {
     Ok(arr)
 }
 
-fn anchor_discriminator(ix_name: &str) -> [u8; 8] {
+pub(crate) fn anchor_discriminator(ix_name: &str) -> [u8; 8] {
     // Anchor's convention: sha256(b"global:" || ix_name)[..8]
     let mut h = Sha256::new();
     h.update(b"global:");

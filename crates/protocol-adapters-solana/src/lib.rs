@@ -24,6 +24,7 @@ pub mod keychain;
 pub mod mayan_solana;
 pub mod send;
 pub mod simulate;
+pub mod wormhole_ntt;
 
 pub use keychain::load_solana_signer;
 pub use mayan_solana::{
@@ -32,4 +33,8 @@ pub use mayan_solana::{
 pub use send::{SolanaBroadcaster, SolanaSendResult, SOLANA_PRIVATE_KEY_ENV};
 pub use simulate::{
     SolanaEstimateOutcome, SolanaSimulator, classify_solana_simulate_result,
+};
+pub use wormhole_ntt::{
+    WormholeNttBroadcaster, WormholeNttIntent, fetch_vaa, WORMHOLE_CORE_PROGRAM_ID,
+    WORMHOLE_NTT_PROGRAM_ID,
 };
