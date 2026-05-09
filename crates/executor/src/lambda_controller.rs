@@ -273,6 +273,21 @@ impl LambdaController {
             }
         }
 
+        // 4-pre-1. Skip deBridge orders that carry an externalCall payload — we cannot safely
+        // simulate or execute arbitrary calldata injected by the order creator on the dst chain.
+        if is_debridge_pre {
+            if let Some(ref ext) = intent.dln_external_call {
+                let clean = ext.trim_start_matches("0x");
+                if !clean.is_empty() && clean.chars().any(|c| c != '0') {
+                    let reason = "debridge_external_call_unsupported".to_string();
+                    info!("⏭️  {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            }
+        }
+
         // 4-pre. Spread check for deBridge (spinner bypassed → no external profitability gate).
         // give_amount is what the user locked on src; take_amount is what we must pay on dst.
         // The spread is give - take in token units. We require spread_pct ≥ 0.5 % to cover
