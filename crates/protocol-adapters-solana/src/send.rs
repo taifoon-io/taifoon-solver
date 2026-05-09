@@ -24,7 +24,10 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tracing::info;
 
-use crate::mayan_solana::{MayanSolanaIntent, SYSTEM_PROGRAM_ID};
+use crate::mayan_solana::{
+    MayanSolanaIntent, COMPUTE_BUDGET_PROGRAM_ID, DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU,
+    SYSTEM_PROGRAM_ID,
+};
 
 /// Env var name for the Solana private key.
 pub const SOLANA_PRIVATE_KEY_ENV: &str = "SOLANA_PRIVATE_KEY";
@@ -104,6 +107,16 @@ impl SolanaBroadcaster {
         let trader = decode_b58_32(&intent.trader_pubkey_b58)
             .context("decode trader pubkey")?;
         let system = decode_b58_32(SYSTEM_PROGRAM_ID).expect("system program");
+        let cb = decode_b58_32(COMPUTE_BUDGET_PROGRAM_ID).expect("compute budget program");
+
+        // ComputeBudget: SetComputeUnitLimit (tag 0x02 + u32 LE)
+        let cu_limit: u32 = intent.compute_units_estimate.min(u32::MAX as u64) as u32;
+        let mut cu_limit_data = vec![0x02u8];
+        cu_limit_data.extend_from_slice(&cu_limit.to_le_bytes());
+
+        // ComputeBudget: SetComputeUnitPrice (tag 0x03 + u64 LE micro-lamports/CU)
+        let mut cu_price_data = vec![0x03u8];
+        cu_price_data.extend_from_slice(&DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU.to_le_bytes());
 
         let mut ix_data = Vec::with_capacity(8 + 32 + 8 + 8);
         ix_data.extend_from_slice(&anchor_discriminator("fulfill"));
@@ -113,7 +126,7 @@ impl SolanaBroadcaster {
         ix_data.extend_from_slice(&intent.min_amount_out.to_le_bytes());
         ix_data.extend_from_slice(&intent.deadline.to_le_bytes());
 
-        let metas: Vec<AccountMeta> = vec![
+        let fulfill_metas: Vec<AccountMeta> = vec![
             AccountMeta { pubkey: payer, is_signer: true, is_writable: true },
             AccountMeta { pubkey: state, is_signer: false, is_writable: true },
             AccountMeta { pubkey: vault, is_signer: false, is_writable: true },
@@ -121,8 +134,14 @@ impl SolanaBroadcaster {
             AccountMeta { pubkey: system, is_signer: false, is_writable: false },
         ];
 
-        // Build message bytes (same layout as simulate.rs but with real blockhash).
-        let msg = build_message(payer, program, &metas, &ix_data, blockhash)?;
+        let instructions: Vec<(/* program */ [u8; 32], Vec<AccountMeta>, Vec<u8>)> = vec![
+            (cb, vec![], cu_limit_data),
+            (cb, vec![], cu_price_data),
+            (program, fulfill_metas, ix_data),
+        ];
+
+        // Build message bytes with all three instructions (ComputeBudget × 2 + fulfill).
+        let msg = build_message_multi(payer, &instructions, blockhash)?;
 
         // Sign the message bytes.
         let sig = self.signing_key.sign(&msg);
@@ -286,43 +305,54 @@ fn write_compact_u16(buf: &mut Vec<u8>, mut n: u16) {
     }
 }
 
-/// Build the Solana legacy transaction MESSAGE bytes (without the signature prefix).
-/// Same layout as `serialize_legacy_transaction` in `mayan_solana.rs` but:
-///   - accepts a real `blockhash` (32 bytes) instead of zeroes
-///   - returns only the message (the caller prepends sig count + signature)
-fn build_message(
+/// Build a Solana legacy transaction MESSAGE (no signature prefix) with multiple
+/// instructions. Mirrors `serialize_legacy_transaction_multi` in `mayan_solana.rs`
+/// but accepts a real blockhash and returns only the message bytes (caller adds sigs).
+///
+/// `instructions` is `(program_id, account_metas, instruction_data)`.
+fn build_message_multi(
     payer: [u8; 32],
-    program_id: [u8; 32],
-    metas: &[AccountMeta],
-    instruction_data: &[u8],
+    instructions: &[([u8; 32], Vec<AccountMeta>, Vec<u8>)],
     blockhash: &[u8; 32],
 ) -> Result<Vec<u8>> {
+    use std::collections::HashMap;
+    let mut caps: HashMap<[u8; 32], (bool, bool)> = HashMap::new();
+    caps.insert(payer, (true, true));
+
+    for (prog, metas, _) in instructions {
+        for m in metas {
+            let e = caps.entry(m.pubkey).or_insert((false, false));
+            e.0 = e.0 || m.is_signer;
+            e.1 = e.1 || m.is_writable;
+        }
+        caps.entry(*prog).or_insert((false, false));
+    }
+
+    let push_unique = |dst: &mut Vec<[u8; 32]>, key: [u8; 32]| {
+        if !dst.iter().any(|k| *k == key) { dst.push(key); }
+    };
+
     let mut signer_w: Vec<[u8; 32]> = vec![payer];
     let mut signer_r: Vec<[u8; 32]> = Vec::new();
     let mut nonsign_w: Vec<[u8; 32]> = Vec::new();
     let mut nonsign_r: Vec<[u8; 32]> = Vec::new();
 
-    let push_unique = |dst: &mut Vec<[u8; 32]>, key: [u8; 32]| {
-        if !dst.iter().any(|k| *k == key) {
-            dst.push(key);
+    for (prog, metas, _) in instructions {
+        for m in metas {
+            if m.pubkey == payer { continue; }
+            let (is_s, is_w) = caps.get(&m.pubkey).copied().unwrap_or((false, false));
+            match (is_s, is_w) {
+                (true,  true)  => push_unique(&mut signer_w, m.pubkey),
+                (true,  false) => push_unique(&mut signer_r, m.pubkey),
+                (false, true)  => push_unique(&mut nonsign_w, m.pubkey),
+                (false, false) => push_unique(&mut nonsign_r, m.pubkey),
+            }
         }
-    };
-
-    for m in metas {
-        if m.pubkey == payer {
-            continue;
-        }
-        match (m.is_signer, m.is_writable) {
-            (true, true)  => push_unique(&mut signer_w, m.pubkey),
-            (true, false) => push_unique(&mut signer_r, m.pubkey),
-            (false, true) => push_unique(&mut nonsign_w, m.pubkey),
-            (false, false) => push_unique(&mut nonsign_r, m.pubkey),
-        }
+        push_unique(&mut nonsign_r, *prog);
     }
-    push_unique(&mut nonsign_r, program_id);
 
-    let num_required_sigs   = (signer_w.len() + signer_r.len()) as u8;
-    let num_readonly_signed  = signer_r.len() as u8;
+    let num_required_sigs    = (signer_w.len() + signer_r.len()) as u8;
+    let num_readonly_signed   = signer_r.len() as u8;
     let num_readonly_unsigned = nonsign_r.len() as u8;
 
     let mut keys: Vec<[u8; 32]> = Vec::new();
@@ -333,30 +363,26 @@ fn build_message(
 
     let key_index = |k: &[u8; 32]| -> Result<u8> {
         keys.iter().position(|x| x == k).map(|i| i as u8)
-            .ok_or_else(|| anyhow!("internal: pubkey not in deduped list"))
+            .ok_or_else(|| anyhow!("internal: pubkey not in deduped key list"))
     };
 
-    let program_id_index = key_index(&program_id)?;
-    let account_indices: Vec<u8> = metas.iter()
-        .map(|m| key_index(&m.pubkey))
-        .collect::<Result<_>>()?;
-
-    let mut msg = Vec::with_capacity(256);
+    let mut msg = Vec::with_capacity(512);
     msg.push(num_required_sigs);
     msg.push(num_readonly_signed);
     msg.push(num_readonly_unsigned);
     write_compact_u16(&mut msg, keys.len() as u16);
-    for k in &keys {
-        msg.extend_from_slice(k);
-    }
+    for k in &keys { msg.extend_from_slice(k); }
     msg.extend_from_slice(blockhash);
-    write_compact_u16(&mut msg, 1); // one instruction
-    msg.push(program_id_index);
-    write_compact_u16(&mut msg, account_indices.len() as u16);
-    msg.extend_from_slice(&account_indices);
-    write_compact_u16(&mut msg, instruction_data.len() as u16);
-    msg.extend_from_slice(instruction_data);
-
+    write_compact_u16(&mut msg, instructions.len() as u16);
+    for (prog, metas, data) in instructions {
+        let prog_idx = key_index(prog)?;
+        let acct_idxs: Vec<u8> = metas.iter().map(|m| key_index(&m.pubkey)).collect::<Result<_>>()?;
+        msg.push(prog_idx);
+        write_compact_u16(&mut msg, acct_idxs.len() as u16);
+        msg.extend_from_slice(&acct_idxs);
+        write_compact_u16(&mut msg, data.len() as u16);
+        msg.extend_from_slice(data);
+    }
     Ok(msg)
 }
 
@@ -386,5 +412,46 @@ mod tests {
         assert!(pubkey.chars().all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'l' && c != 'O' && c != 'I'),
             "unexpected char in pubkey: {}", pubkey);
         assert!(pubkey.len() >= 32 && pubkey.len() <= 44, "unexpected pubkey length: {}", pubkey.len());
+    }
+
+    #[test]
+    fn signed_tx_includes_compute_budget_instructions() {
+        use crate::mayan_solana::{DEFAULT_MAYAN_SWIFT_PROGRAM, DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU};
+        // Build a signed tx with a dummy key and a zero blockhash.
+        let key = load_signing_key(&"c".repeat(64)).expect("hex key");
+        let broadcaster = SolanaBroadcaster::new(key, "http://localhost");
+        let intent = crate::mayan_solana::MayanSolanaIntent {
+            intent_id: "test".into(),
+            mayan_order_id_hex: "0x9f8e7d6c5b4a3928172e3d4f5a6b7c8d9e0f1a2b3c4d5e6f7081928374651a2b".into(),
+            min_amount_out: 99_850_000,
+            deadline: 1745931645,
+            trader_pubkey_b58: crate::mayan_solana::SYSTEM_PROGRAM_ID.into(),
+            state_account_b58: crate::mayan_solana::SYSTEM_PROGRAM_ID.into(),
+            vault_account_b58: crate::mayan_solana::SYSTEM_PROGRAM_ID.into(),
+            swift_program_id_b58: DEFAULT_MAYAN_SWIFT_PROGRAM.into(),
+            compute_units_estimate: 240_000,
+        };
+        let tx = broadcaster.build_signed_tx(&intent, &[0u8; 32])
+            .expect("build_signed_tx");
+
+        // SetComputeUnitPrice (tag 0x03) with a non-zero 8-byte LE price must appear.
+        // Pattern: {0x09, 0x03, price[8]} — compact-u16(9) length prefix + tag + u64.
+        let found_price = tx.windows(10).find_map(|w| {
+            if w[0] == 0x09 && w[1] == 0x03 {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&w[2..10]);
+                let p = u64::from_le_bytes(buf);
+                if p > 0 { Some(p) } else { None }
+            } else { None }
+        });
+        assert_eq!(
+            found_price,
+            Some(DEFAULT_PRIORITY_FEE_MICROLAMPORTS_PER_CU),
+            "broadcast tx must include SetComputeUnitPrice with the configured fee"
+        );
+
+        // SetComputeUnitLimit (tag 0x02) must also appear.
+        let found_limit = tx.windows(6).any(|w| w[0] == 0x05 && w[1] == 0x02);
+        assert!(found_limit, "broadcast tx must include SetComputeUnitLimit");
     }
 }
