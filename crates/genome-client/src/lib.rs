@@ -1742,7 +1742,16 @@ impl MayanPoller {
 
                 let effective_auction_mode = order_params.auction_mode.unwrap_or(auction_mode_api);
 
-                info!("📡 MayanPoller ORDER_CREATED orderHash={} src={}({}) dst={}({}) {}→{} mode={} sol_fill={} random={}",
+                // Detect Mayan Flash vs Mayan Swift by inspecting the swiftProgram field.
+                // Flash orders carry a program ID that contains "flash" (case-insensitive).
+                let swift_program = order.get("swiftProgram").and_then(|v| v.as_str()).unwrap_or("");
+                let protocol = if swift_program.to_lowercase().contains("flash") {
+                    "mayan_flash"
+                } else {
+                    "mayan_swift"
+                };
+
+                info!("📡 MayanPoller ORDER_CREATED orderHash={} src={}({}) dst={}({}) {}→{} mode={} sol_fill={} proto={} random={}",
                     &order_hash[..20.min(order_hash.len())],
                     src_chain_mayan, src_chain,
                     dst_chain_mayan, dst_chain,
@@ -1750,11 +1759,12 @@ impl MayanPoller {
                     order.get("toTokenSymbol").and_then(|v| v.as_str()).unwrap_or("?"),
                     effective_auction_mode,
                     is_solana_src,
+                    protocol,
                     if order_params.random.is_some() { "✅" } else { "missing" });
 
                 let intent = Intent {
-                    id: format!("mayan_swift:{}", order_hash),
-                    protocol: "mayan_swift".to_string(),
+                    id: format!("{}:{}", protocol, order_hash),
+                    protocol: protocol.to_string(),
                     src_chain,
                     dst_chain,
                     src_token: from_token,
