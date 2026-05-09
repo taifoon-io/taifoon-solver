@@ -729,8 +729,6 @@ impl LambdaController {
         }
 
         // deBridge DLN Solana destination fill — chain_id 100_000_001.
-        // The EVM source-side reward claim (`DlnDestination.claimOrder()`) is a
-        // separate step handled after confirmation via the deBridge EVM adapter.
         let is_dln_solana_dst = is_debridge
             && (intent.dst_chain == 100_000_001
                 || intent.is_solana_destination.unwrap_or(false));
@@ -780,6 +778,60 @@ impl LambdaController {
                 }
                 Err(e) => {
                     let err = format!("dln_solana_send_transaction:{e:#}");
+                    self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "broadcast", error: err });
+                }
+            }
+        }
+
+        // Wormhole NTT Solana fills (EVM→Solana via Guardian VAA relay)
+        let is_wormhole_ntt = proto_lower.contains("wormhole") || proto_lower.contains("ntt");
+        if is_wormhole_ntt && !is_solana_src {
+            use protocol_adapters_solana::wormhole_ntt::{WormholeNttBroadcaster, WormholeNttIntent};
+
+            if self.dry_run {
+                info!("🧪 DRY_RUN: would broadcast Wormhole NTT release for {}", intent.id);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some("dry_run"));
+                let _ = self.wallet.release(&intent.id);
+                return Ok(LambdaExecuteOutcome::Skipped { reason: "dry_run".into() });
+            }
+
+            let ntt_intent = match WormholeNttIntent::from_intent(intent) {
+                Ok(n) => n,
+                Err(e) => {
+                    let err = format!("wormhole_ntt_intent_build:{e}");
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
+            };
+
+            let rpc_url = crate::mayan_solana_estimate::default_solana_rpc();
+            let broadcaster = match WormholeNttBroadcaster::from_env(&rpc_url) {
+                Ok(b) => b,
+                Err(e) => {
+                    let reason = format!("solana_key_not_configured:{e}");
+                    warn!("⚠️  Wormhole NTT {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            };
+
+            self.transition(&intent.id, IntentState::Broadcast, None, None);
+            match broadcaster.send_release_inbound(&ntt_intent).await {
+                Ok(result) => {
+                    info!("🌉 Wormhole NTT confirmed: {} sig={}", intent.id, result.signature);
+                    self.transition(&intent.id, IntentState::Confirmed, Some(&result.signature), None);
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Confirmed {
+                        tx_hash: result.signature,
+                        gas_used: ntt_intent.compute_units_estimate,
+                    });
+                }
+                Err(e) => {
+                    let err = format!("wormhole_ntt_send:{e:#}");
                     self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
                     let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "broadcast", error: err });
