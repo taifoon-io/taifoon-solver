@@ -918,6 +918,7 @@ fn is_supported_fill_token(addr: &str) -> bool {
         "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", // BNB WBNB
         "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab", // Avax WETH.e
         // USDC new chains
+        "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
         "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // Scroll USDC
         "0x2d270e6886d130d724215a266106e6832161eaed", // Ink USDC
         "0xd988097fb8612cc24eec14542bc03424c656005f", // Mode USDC.e
@@ -929,6 +930,7 @@ fn is_supported_fill_token(addr: &str) -> bool {
         "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4", // USDC zkSync Era
         "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91", // WETH zkSync Era
         // USDT new chains
+        "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
         "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // Scroll USDT
         "0x0200c29006150606b650577bbe7b6248f58470c1", // Ink USDT
         "0xf0f161fda2712db8b566946122a5af183995e2ed", // Mode USDT
