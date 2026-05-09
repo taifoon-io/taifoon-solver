@@ -1315,6 +1315,11 @@ fn parse_debridge_ws_message(
     let src_token = hex_to_addr(give.get("token_address")?.as_str()?);
     let dst_token = hex_to_addr(take.get("token_address")?.as_str()?);
 
+    // Skip non-EVM destination chains — same filter as DeBridgePoller logs path.
+    if let Some(name) = debridge_non_evm_chain_name(dst_chain) {
+        tracing::debug!("deBridge WS skip non-EVM dst chain={} ({})", dst_chain, name);
+        return None;
+    }
     // Skip exotic tokens (same filter as DeBridgePoller).
     if !is_supported_fill_token(&dst_token) {
         tracing::debug!("deBridge WS skip exotic dst_token={}", dst_token);
