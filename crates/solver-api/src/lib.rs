@@ -817,7 +817,7 @@ fn token_addrs_for_chain(chain_id: u64) -> (Option<&'static str>, Option<&'stati
         ),
         8453 => (
             Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
-            None,
+            Some("0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2"), // USDT Base
             Some("0x4200000000000000000000000000000000000006"),
         ),
         42161 => (
@@ -829,6 +829,11 @@ fn token_addrs_for_chain(chain_id: u64) -> (Option<&'static str>, Option<&'stati
             Some("0x176211869cA2b568f2A7D4EE941E073a821EE1ff"),
             None,
             None,
+        ),
+        130 => (
+            Some("0x078d782b760474a361dda7ff6e249887ddf39eb0"), // USDC Unichain
+            None,
+            Some("0x4200000000000000000000000000000000000006"),
         ),
         _ => (None, None, None),
     }
