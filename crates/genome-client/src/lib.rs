@@ -1420,15 +1420,26 @@ fn parse_debridge_ws_message(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let allowed_taker_raw = order.get("allowed_taker_dst").and_then(|v| v.as_str());
-    let allowed_taker = allowed_taker_raw.filter(|s| !s.is_empty() && *s != "0x").map(|s| {
-        if s.starts_with("0x") { s.to_string() } else { format!("0x{}", s) }
-    });
+    // allowed_taker_dst and order_authority_address_dst are EVM-fill-only fields.
+    // For Solana-destination orders the fill path (DlnSolanaFiller) does not use them,
+    // and the exclusive-taker check in lambda_controller uses EVM address comparison —
+    // a base58 Solana pubkey in these fields would cause false positive taker-skip.
+    let allowed_taker = if is_solana_dst {
+        None
+    } else {
+        order.get("allowed_taker_dst").and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty() && *s != "0x")
+            .map(|s| if s.starts_with("0x") { s.to_string() } else { format!("0x{}", s) })
+    };
 
     let give_patch = order.get("give_patch_authority_src").and_then(|v| v.as_str())
         .filter(|s| !s.is_empty()).map(|s| format!("0x{}", s.trim_start_matches("0x")));
-    let order_auth_dst = order.get("order_authority_address_dst").and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty()).map(|s| format!("0x{}", s.trim_start_matches("0x")));
+    let order_auth_dst = if is_solana_dst {
+        None
+    } else {
+        order.get("order_authority_address_dst").and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty()).map(|s| format!("0x{}", s.trim_start_matches("0x")))
+    };
     let cancel_ben = order.get("allowed_cancel_beneficiary_src").and_then(|v| v.as_str())
         .filter(|s| !s.is_empty() && *s != "null").map(|s| format!("0x{}", s.trim_start_matches("0x")));
     // external_call: must be populated so the iter-51 skip guard in lambda_controller fires.
@@ -2343,5 +2354,56 @@ mod tests {
         // recipient must be the raw Solana pubkey, not 0x-prefixed truncation
         assert_eq!(intent.recipient, sol_receiver, "recipient was corrupted by hex_to_addr");
         assert!(intent.is_solana_destination.unwrap_or(false));
+    }
+
+    /// Solana-destination WS orders must NOT propagate allowed_taker_dst or
+    /// order_authority_address_dst — those are EVM-only fields. A non-null
+    /// allowed_taker_dst with a base58 pubkey would trigger the exclusive-taker
+    /// check in lambda_controller and produce a false-positive skip.
+    #[test]
+    fn debridge_ws_solana_dst_clears_evm_only_fields() {
+        let usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let sol_receiver = "3g5uxUYgfM6sGZpxpEkCB7LkNhkFT5o5N6TXQVH8nfLk";
+        let sol_taker = "4vMsoUT2BWatFweudnQM1xedRLfJgJ7hswhcpz4xgBTy";
+        let sol_auth  = "7nGtpbiQXpK5j1QGYmNiFjT2JkEnHN8KHYfhj5tU8Zr2";
+        let sol_chain_hex = format!("{:064x}", 100_000_001u64);
+        let evm_chain_hex = format!("{:064x}", 42161u64);
+        let order_id = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+        let amount_hex = format!("{:064x}", 1_000_000u128);
+
+        let msg = serde_json::json!({
+            "Order": {
+                "order_info": {
+                    "order_id": order_id,
+                    "order_info_status": { "Created": { "finalization_info": {} } },
+                    "order": {
+                        "give": {
+                            "chain_id": evm_chain_hex,
+                            "amount": amount_hex,
+                            "token_address": "000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+                        },
+                        "take": {
+                            "chain_id": sol_chain_hex,
+                            "amount": amount_hex,
+                            "token_address": usdc_mint
+                        },
+                        "maker_src": "000000000000000000000000deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                        "receiver_dst": sol_receiver,
+                        "maker_order_nonce": "1",
+                        "allowed_taker_dst": sol_taker,
+                        "order_authority_address_dst": sol_auth
+                    }
+                }
+            }
+        });
+
+        let mut seen = std::collections::HashSet::new();
+        let intent = parse_debridge_ws_message(&msg.to_string(), &mut seen)
+            .expect("Solana-dst order with taker restriction should be accepted");
+
+        assert!(intent.dln_allowed_taker_dst.is_none(),
+            "allowed_taker_dst must be None for Solana-dst orders to prevent false exclusive-taker skip");
+        assert!(intent.dln_order_authority_address_dst.is_none(),
+            "order_authority_address_dst must be None for Solana-dst orders");
     }
 }
