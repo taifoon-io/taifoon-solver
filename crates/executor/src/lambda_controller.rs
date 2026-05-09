@@ -1361,13 +1361,14 @@ impl LambdaController {
                 .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
             let dst_tok = intent.dst_token.to_lowercase();
             let is_stable = matches!(dst_tok.trim(),
-                // USDC on Base, Arbitrum, Optimism, Ethereum, Polygon, Linea
+                // USDC on Base, Arbitrum, Optimism, Ethereum, Polygon, Linea, Unichain
                 "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" |
                 "0xaf88d065e77c8cc2239327c5edb3a432268e5831" |
                 "0x0b2c639c533813f4aa9d7837caf62653d097ff85" |
                 "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" |
                 "0x2791bca1f2de4661ed88a30c99a7a9449aa84174" |
                 "0x176211869ca2b568f2a7d4ee941e073a821ee1ff" |
+                "0x078d782b760474a361dda7ff6e249887ddf39eb0" |
                 // USDT variants
                 "0xdac17f958d2ee523a2206206994597c13d831ec7" |
                 "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" |
@@ -1512,6 +1513,8 @@ fn token_decimals(token: &str) -> u8 {
         "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT Optimism
         // NOTE: BSC USDT (0x55d398) uses 18 decimals — intentionally omitted here
         "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon (6 dec)
+        "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
+        "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
         "usdc", "usdt",
     ];
     if SIX_DEC.iter().any(|&s| lower == s) {

@@ -333,6 +333,8 @@ impl ProfitCalculator {
             "0x55d398326f99059ff775485246999027b3197955", // USDT BSC
             "0x049d68029688eabf473097a2fc38ef61633a3c7a", // USDT Fantom
             "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT Polygon
+            "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
+            "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
             "usdc", "usdt",
         ];
         if SIX_DEC.contains(&addr_lower.as_str()) {
@@ -370,6 +372,8 @@ impl ProfitCalculator {
             "0x55d398326f99059ff775485246999027b3197955",
             "0x049d68029688eabf473097a2fc38ef61633a3c7a",
             "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+            "0x078d782b760474a361dda7ff6e249887ddf39eb0", // USDC Unichain
+            "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
             // DAI
             "0x6b175474e89094c44da98b954eedeac495271d0f",
             "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", // DAI Arbitrum
