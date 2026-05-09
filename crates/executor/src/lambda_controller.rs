@@ -608,6 +608,61 @@ impl LambdaController {
         let is_solana_src = intent.is_solana_source.unwrap_or(false)
             || intent.src_chain == 1_399_811_149;
 
+        // Mayan Flash Solana fills (LP-based, no auction).
+        // Must be checked before the generic is_mayan && is_solana_src block.
+        let is_mayan_flash = proto_lower.contains("flash");
+        if is_mayan_flash && is_solana_src {
+            use protocol_adapters_solana::mayan_flash::{MayanFlashBroadcaster, MayanFlashIntent};
+
+            if self.dry_run {
+                info!("🧪 DRY_RUN: would broadcast Mayan Flash fill for {}", intent.id);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some("dry_run"));
+                let _ = self.wallet.release(&intent.id);
+                return Ok(LambdaExecuteOutcome::Skipped { reason: "dry_run".into() });
+            }
+
+            let flash_intent = match MayanFlashIntent::from_intent(intent) {
+                Ok(f) => f,
+                Err(e) => {
+                    let err = format!("mayan_flash_intent_build:{e}");
+                    self.transition(&intent.id, IntentState::CalldataError, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "calldata_build", error: err });
+                }
+            };
+
+            let rpc_url = crate::mayan_solana_estimate::default_solana_rpc();
+            let broadcaster = match MayanFlashBroadcaster::from_env(&rpc_url) {
+                Ok(b) => b,
+                Err(e) => {
+                    let reason = format!("solana_key_not_configured:{e}");
+                    warn!("⚠️  Mayan Flash {} — {}", intent.id, reason);
+                    self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Skipped { reason });
+                }
+            };
+
+            self.transition(&intent.id, IntentState::Broadcast, None, None);
+            match broadcaster.send_flash_fill(&flash_intent).await {
+                Ok(result) => {
+                    info!("🎉 Mayan Flash confirmed: {} sig={}", intent.id, result.signature);
+                    self.transition(&intent.id, IntentState::Confirmed, Some(&result.signature), None);
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Confirmed {
+                        tx_hash: result.signature,
+                        gas_used: flash_intent.compute_units_estimate,
+                    });
+                }
+                Err(e) => {
+                    let err = format!("mayan_flash_send:{e:#}");
+                    self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
+                    return Ok(LambdaExecuteOutcome::Failed { stage: "broadcast", error: err });
+                }
+            }
+        }
+
         // Mayan Solana source: broadcast via ed25519-signed sendTransaction.
         // This path returns early — Solana intents never reach the EVM wiring section below.
         if is_mayan && is_solana_src {

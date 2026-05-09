@@ -21,11 +21,13 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod keychain;
+pub mod mayan_flash;
 pub mod mayan_solana;
 pub mod send;
 pub mod simulate;
 
 pub use keychain::load_solana_signer;
+pub use mayan_flash::{MayanFlashBroadcaster, MayanFlashIntent, MAYAN_FLASH_PROGRAM_ID};
 pub use mayan_solana::{
     DEFAULT_MAYAN_SWIFT_PROGRAM, MayanSolanaIntent, MayanSolanaSimulator, derive_mayan_vault_pda,
 };
