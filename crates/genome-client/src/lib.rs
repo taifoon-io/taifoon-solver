@@ -1951,10 +1951,18 @@ impl GenomeClient {
         if genome_event.action != "deposit"
             && genome_event.action != "placed"
             && genome_event.action != "executed" {
-            // Log unknown actions on proto/order entities — may reveal deBridge shapes.
-            info!("🔎 UNKNOWN action='{}' entity='{}' protocol={:?} id={:?} addr={}",
-                genome_event.action, genome_event.entity,
-                genome_event.protocol, genome_event.id, genome_event.addr);
+            // Known terminal/lifecycle actions: debug only to avoid log spam.
+            // Unknown actions stay at info so new protocol shapes are discoverable.
+            let known = matches!(genome_event.action.as_str(),
+                "expired" | "claimed" | "executed" | "fill" | "ingest" | "snapshot" | "cancelled" | "refunded");
+            if known {
+                tracing::debug!("genome skip action='{}' entity='{}' protocol={:?}",
+                    genome_event.action, genome_event.entity, genome_event.protocol);
+            } else {
+                info!("🔎 UNKNOWN action='{}' entity='{}' protocol={:?} id={:?} addr={}",
+                    genome_event.action, genome_event.entity,
+                    genome_event.protocol, genome_event.id, genome_event.addr);
+            }
             return None;
         }
 
