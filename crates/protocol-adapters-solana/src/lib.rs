@@ -20,15 +20,19 @@
 
 #![allow(clippy::needless_range_loop)]
 
+pub mod adapter_trait;
 pub mod keychain;
 pub mod mayan_solana;
+pub mod mayan_swift_adapter;
 pub mod send;
 pub mod simulate;
 
+pub use adapter_trait::SolanaFillAdapter;
 pub use keychain::load_solana_signer;
 pub use mayan_solana::{
     DEFAULT_MAYAN_SWIFT_PROGRAM, MayanSolanaIntent, MayanSolanaSimulator, derive_mayan_vault_pda,
 };
+pub use mayan_swift_adapter::MayanSwiftSolanaAdapter;
 pub use send::{SolanaBroadcaster, SolanaSendResult, SOLANA_PRIVATE_KEY_ENV};
 pub use simulate::{
     SolanaEstimateOutcome, SolanaSimulator, classify_solana_simulate_result,

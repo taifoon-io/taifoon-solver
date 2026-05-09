@@ -881,9 +881,26 @@ fn debridge_non_evm_chain_name(chain_id: u64) -> Option<&'static str> {
     }
 }
 
+/// Returns true if `addr` looks like a Solana base58 mint address
+/// (not 0x-prefixed, length 32–44 characters).
+pub(crate) fn is_solana_address(addr: &str) -> bool {
+    !addr.starts_with("0x") && !addr.starts_with("0X") && addr.len() >= 32 && addr.len() <= 44
+}
+
 /// Returns true when `addr` is a token the solver can actually fill:
 /// USDC / USDT (any chain) or WETH / native-ETH.
 fn is_supported_fill_token(addr: &str) -> bool {
+    // Solana SPL token mints — check before the EVM lowercase path.
+    if is_solana_address(addr) {
+        const SOLANA_MINTS: &[&str] = &[
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC (Solana)
+            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  // USDT (Solana)
+            "So11111111111111111111111111111111111111112",      // Wrapped SOL
+            "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",  // wETH (Wormhole-wrapped)
+        ];
+        return SOLANA_MINTS.iter().any(|s| *s == addr);
+    }
+
     let lower = addr.to_lowercase();
     // Native ETH sentinel
     if lower == "0x0000000000000000000000000000000000000000" || lower == "native" {
