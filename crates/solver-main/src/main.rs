@@ -653,7 +653,9 @@ async fn main() -> Result<()> {
                         LifiBridgeResult::Resolved(res) => {
                             info!("🔍 LiFi bridge resolved via API: {} → {} (deposit_tx={:?} src_chain={:?})",
                                 hash, res.bridge, res.sending_tx_hash, res.sending_chain_id);
-                            if bridge.is_empty() { bridge = res.bridge; }
+                            // li.quest is authoritative: always prefer its resolved bridge over
+                            // genome metadata (genome can lag or misclassify the underlying protocol).
+                            bridge = res.bridge;
                             api_sending_tx = res.sending_tx_hash;
                             api_sending_chain = res.sending_chain_id;
                         }

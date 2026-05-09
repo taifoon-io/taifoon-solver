@@ -356,12 +356,15 @@ impl WalletManager {
         Ok(())
     }
 
-    /// Release reservations whose intents have been stuck in a pre-execution state
+    /// Release reservations whose intents have been stuck in a non-terminal state
     /// for longer than `max_age_secs`. Prevents budget exhaustion from crash-orphaned
     /// reservations that will never be resolved by normal fill/skip/revert paths.
     ///
-    /// Targets: INTENT_DETECTED, SKIP_UNPROFITABLE, SKIP_RULE (all pre-broadcast).
-    /// CONFIRMED / CLAIM_PENDING / CLAIMED intents are never touched.
+    /// Targets: all states except CLAIM_PENDING/CLAIMED (which represent a
+    /// deBridge claimUnlock in-flight where capital is still at risk).
+    /// BROADCAST/PENDING_CONFIRMATION/CONFIRMED are included: the explicit
+    /// wallet.release() call in lambda_controller always runs on success, and
+    /// after 4 h any reservation in those states is crash-orphaned.
     pub fn release_stale_reservations(&self, max_age_secs: i64) -> Result<usize, WalletError> {
         let conn = self.conn.lock().unwrap();
         let cutoff = (Utc::now() - Duration::seconds(max_age_secs)).to_rfc3339();
@@ -369,7 +372,7 @@ impl WalletManager {
             "DELETE FROM reservations WHERE intent_id IN (
                SELECT r.intent_id FROM reservations r
                JOIN intents i ON i.intent_id = r.intent_id
-               WHERE i.state IN ('INTENT_DETECTED','SKIP_UNPROFITABLE','SKIP_RULE')
+               WHERE i.state NOT IN ('CLAIM_PENDING','CLAIMED')
                  AND r.created_at < ?1
              )",
             params![cutoff],

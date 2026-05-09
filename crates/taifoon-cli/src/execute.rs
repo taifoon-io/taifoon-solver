@@ -200,7 +200,8 @@ pub async fn participate(
                         LifiBridgeResult::Resolved(res) => {
                             info!("🔍 LiFi bridge resolved: {} → {} (deposit_tx={:?})",
                                 hash, res.bridge, res.sending_tx_hash);
-                            if bridge.is_empty() { bridge = res.bridge; }
+                            // li.quest is authoritative; prefer its resolved bridge over genome metadata.
+                            bridge = res.bridge;
                             api_sending_tx = res.sending_tx_hash;
                             api_sending_chain = res.sending_chain_id;
                         }
