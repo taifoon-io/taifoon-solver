@@ -1508,13 +1508,13 @@ pub async fn fetch_mayan_order_params(
         .map(|i| &data[i * 64..(i + 1) * 64])
         .collect();
 
-    // The Order struct begins at the start. Slot layout (0-indexed):
-    // 0=tokenIn, 1=amountIn, 2=payloadType, 3=trader, 4=tokenOut,
-    // 5=destChainId, 6=destAddr, 7=minAmountOut, 8=gasDrop,
-    // 9=cancelFee, 10=refundFee, 11=deadline, 12=referrerAddr, 13=referrerBps,
-    // 14=auctionMode, 15=random
-    // If the first slot looks like a small offset (< 0x1000 = 4096), it's an ABI
-    // offset pointer — skip it and shift by 1.
+    // Slot layout after selector (0-indexed, no offset pointer — slot 0 is tokenIn address,
+    // which is always > 4096 so offset_shift stays 0):
+    // 0=tokenIn, 1=amountIn, then Order struct fields inline:
+    // 2=payloadType, 3=trader, 4=destAddr, 5=destChainId, 6=referrerAddr,
+    // 7=tokenOut, 8=minAmountOut, 9=gasDrop, 10=cancelFee, 11=refundFee,
+    // 12=deadline, 13=referrerBps, 14=auctionMode, 15=random
+    // (matches MayanSwiftCreate::Order field order in rebalancer.rs / on-chain ABI)
     let offset_shift: usize = if slots.first().map_or(false, |s| {
         u64::from_str_radix(s, 16).unwrap_or(u64::MAX) < 4096
     }) { 1 } else { 0 };
@@ -1527,12 +1527,12 @@ pub async fn fetch_mayan_order_params(
             let r = slot(15);
             if r.len() == 64 && r != "0".repeat(64) { Some(r.to_string()) } else { None }
         },
-        cancel_fee: parse_u64(slot(9)),
-        refund_fee: parse_u64(slot(10)),
-        gas_drop: parse_u64(slot(8)),
-        deadline: parse_u64(slot(11)),
+        gas_drop: parse_u64(slot(9)),
+        cancel_fee: parse_u64(slot(10)),
+        refund_fee: parse_u64(slot(11)),
+        deadline: parse_u64(slot(12)),
         referrer_addr: {
-            let r = slot(12);
+            let r = slot(6);
             if r.len() == 64 && r != "0".repeat(64) { Some(format!("0x{}", r)) } else { None }
         },
         referrer_bps: u8::from_str_radix(slot(13).trim_start_matches('0'), 16).ok(),
