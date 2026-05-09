@@ -2071,7 +2071,7 @@ impl GenomeClient {
             // Known terminal/lifecycle actions: debug only to avoid log spam.
             // Unknown actions stay at info so new protocol shapes are discoverable.
             let known = matches!(genome_event.action.as_str(),
-                "expired" | "claimed" | "executed" | "fill" | "ingest" | "snapshot" | "cancelled" | "refunded");
+                "expired" | "claimed" | "fill" | "ingest" | "snapshot" | "cancelled" | "refunded");
             if known {
                 tracing::debug!("genome skip action='{}' entity='{}' protocol={:?}",
                     genome_event.action, genome_event.entity, genome_event.protocol);
