@@ -1339,6 +1339,14 @@ fn parse_debridge_ws_message(
         .filter(|s| !s.is_empty()).map(|s| format!("0x{}", s.trim_start_matches("0x")));
     let cancel_ben = order.get("allowed_cancel_beneficiary_src").and_then(|v| v.as_str())
         .filter(|s| !s.is_empty() && *s != "null").map(|s| format!("0x{}", s.trim_start_matches("0x")));
+    // external_call: must be populated so the iter-51 skip guard in lambda_controller fires.
+    // If this field is absent from the WS message we treat it as empty (None = no calldata).
+    let external_call = order.get("external_call").and_then(|v| v.as_str())
+        .filter(|s| {
+            let clean = s.trim_start_matches("0x");
+            !clean.is_empty() && clean.chars().any(|c| c != '0')
+        })
+        .map(|s| format!("0x{}", s.trim_start_matches("0x")));
 
     // Get tx_hash from finalization_info if present
     let tx_hash = status.get("Created")
@@ -1387,6 +1395,7 @@ fn parse_debridge_ws_message(
         dln_order_authority_address_dst: order_auth_dst,
         dln_allowed_taker_dst: allowed_taker,
         dln_allowed_cancel_beneficiary_src: cancel_ben,
+        dln_external_call: external_call,
         detected_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
