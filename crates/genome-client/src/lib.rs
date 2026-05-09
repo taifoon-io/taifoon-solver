@@ -1167,10 +1167,17 @@ impl DeBridgeWsPoller {
                     continue;
                 }
             };
-            req.headers_mut().insert(
-                "Authorization",
-                format!("Bearer {}", self.api_key).parse().unwrap(),
-            );
+            let auth_val = match format!("Bearer {}", self.api_key)
+                .parse::<reqwest::header::HeaderValue>()
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("deBridge WS: invalid API key (non-ASCII?): {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    continue;
+                }
+            };
+            req.headers_mut().insert("Authorization", auth_val);
 
             let (ws_stream, _) = match connect_async_tls_with_config(req, None, false, None).await {
                 Ok(s) => s,
