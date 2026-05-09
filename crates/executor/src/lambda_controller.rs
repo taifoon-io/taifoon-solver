@@ -391,6 +391,7 @@ impl LambdaController {
                 None => {
                     let err = format!("proof_fetch (tried {:?}): {}", proof_candidates, last_err);
                     self.transition(&intent.id, IntentState::ProofMissing, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "proof_fetch", error: err });
                 }
             }
@@ -651,6 +652,7 @@ impl LambdaController {
                 Err(e) => {
                     let err = format!("solana_send_transaction:{e:#}");
                     self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
+                    let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Failed { stage: "broadcast", error: err });
                 }
             }
@@ -1083,6 +1085,7 @@ impl LambdaController {
             Err(e) => {
                 let err = format!("send_transaction:{e}");
                 self.transition(&intent.id, IntentState::Reverted, None, Some(&err));
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Failed {
                     stage: "broadcast",
                     error: err,
@@ -1110,6 +1113,7 @@ impl LambdaController {
                     Some(&tx_hash),
                     Some(&err),
                 );
+                let _ = self.wallet.release(&intent.id);
                 return Ok(LambdaExecuteOutcome::Failed {
                     stage: "receipt",
                     error: err,
@@ -1129,6 +1133,7 @@ impl LambdaController {
                 Some(&tx_hash),
                 Some(&err),
             );
+            let _ = self.wallet.release(&intent.id);
             self.append_outcome(OutcomeRecord {
                 ts: started_at,
                 intent_id: intent.id.clone(),
