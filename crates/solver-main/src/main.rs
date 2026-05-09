@@ -1020,7 +1020,15 @@ async fn debridge_claim_retry_tick(
         Ok(v) => v,
         Err(e) => { warn!("claim_retry: list_intents failed: {}", e); return; }
     };
-    let mut pending: Vec<_> = confirmed.iter().filter(|r| {
+    // Also recover intents stuck in CLAIM_PENDING from before the rollback-on-failure fix.
+    // lambda_claim_debridge returns NotEligible if the order is already claimed on-chain,
+    // so re-attempting is safe. Cap at 50 to avoid thundering-herd on startup.
+    let claim_pending = match wallet.list_intents(Some("CLAIM_PENDING"), 50) {
+        Ok(v) => v,
+        Err(e) => { warn!("claim_retry: list_intents(CLAIM_PENDING) failed: {}", e); vec![] }
+    };
+    let all_candidates: Vec<_> = confirmed.iter().chain(claim_pending.iter()).collect();
+    let mut pending: Vec<_> = all_candidates.iter().copied().filter(|r| {
         let p = r.protocol.to_lowercase();
         p.contains("debridge") || p.contains("dln")
     }).collect();
@@ -1050,7 +1058,7 @@ async fn debridge_claim_retry_tick(
     }
 
     if pending.is_empty() { return; }
-    info!("claim_retry: {} CONFIRMED deBridge fill(s) need claimUnlock", pending.len());
+    info!("claim_retry: {} deBridge fill(s) need claimUnlock (CONFIRMED + CLAIM_PENDING recovery)", pending.len());
 
     for record in pending {
         // DeBridgePoller sets intent.id = "debridge_dln:0x<orderId>"
