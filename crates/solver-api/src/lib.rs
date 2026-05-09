@@ -807,12 +807,12 @@ fn token_addrs_for_chain(chain_id: u64) -> (Option<&'static str>, Option<&'stati
         ),
         10 => (
             Some("0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"),
-            None,
+            Some("0x94b008aA00579c1307B0EF2c499aD98a8ce58e58"), // USDT Optimism
             Some("0x4200000000000000000000000000000000000006"),
         ),
         137 => (
             Some("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
-            None,
+            Some("0xc2132D05D31c914a87C6611C10748AEb04B58e8F"), // USDT Polygon
             Some("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),
         ),
         8453 => (
@@ -828,12 +828,37 @@ fn token_addrs_for_chain(chain_id: u64) -> (Option<&'static str>, Option<&'stati
         59144 => (
             Some("0x176211869cA2b568f2A7D4EE941E073a821EE1ff"),
             None,
-            None,
+            Some("0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"), // WETH Linea
         ),
         130 => (
             Some("0x078d782b760474a361dda7ff6e249887ddf39eb0"), // USDC Unichain
             None,
             Some("0x4200000000000000000000000000000000000006"),
+        ),
+        324 => (
+            Some("0x1d17CBcF0D6D143135aE902365D2E5e2A16538D4"), // USDC zkSync Era
+            None,
+            Some("0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91"), // WETH zkSync Era
+        ),
+        534352 => (
+            Some("0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4"), // USDC Scroll
+            Some("0xf55BEC9cafDbE8730f096Aa55dad6D22d44099Df"), // USDT Scroll
+            Some("0x5300000000000000000000000000000000000004"), // WETH Scroll
+        ),
+        57073 => (
+            Some("0x2d270e6886d130d724215a266106e6832161eaed"), // USDC Ink
+            Some("0x0200C29006150606B650577BBe7B6248f58470C1"), // USDT Ink
+            Some("0x4200000000000000000000000000000000000006"), // WETH Ink (OP Stack)
+        ),
+        34443 => (
+            Some("0xd988097fb8612cc24eeC14542bC03424c656005f"), // USDC.e Mode
+            Some("0xf0F161fDA2712DB8b566946122a5af183995e2eD"), // USDT Mode
+            Some("0x4200000000000000000000000000000000000006"), // WETH Mode (OP Stack)
+        ),
+        43114 => (
+            Some("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"), // USDC Avalanche native
+            Some("0x9702230A8Ea53601f5cD2dc00fDbC13d4dF4A8c7"), // USDT Avalanche native
+            None,
         ),
         _ => (None, None, None),
     }

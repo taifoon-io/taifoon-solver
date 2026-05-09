@@ -249,6 +249,13 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow!("wallet-manager open: {e}"))?,
     );
     solver_api.set_wallet_manager(wallet_manager.clone());
+    // Release any reservations that were orphaned by a crash or kill during a
+    // previous run. 4-hour threshold: well past the longest normal fill window.
+    match wallet_manager.release_stale_reservations(4 * 3600) {
+        Ok(0) => {},
+        Ok(n) => warn!("💼 Released {} stale reservation(s) from previous run", n),
+        Err(e) => warn!("💼 release_stale_reservations failed: {e}"),
+    }
     info!(
         "💼 Wallet manager: db={} budget=${}",
         wallet_db_path, wallet_budget_usd

@@ -12,7 +12,7 @@ use axum::{
     routing::get,
     Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -354,6 +354,27 @@ impl WalletManager {
             params![intent_id, amount_usd, Utc::now().to_rfc3339()],
         )?;
         Ok(())
+    }
+
+    /// Release reservations whose intents have been stuck in a pre-execution state
+    /// for longer than `max_age_secs`. Prevents budget exhaustion from crash-orphaned
+    /// reservations that will never be resolved by normal fill/skip/revert paths.
+    ///
+    /// Targets: INTENT_DETECTED, SKIP_UNPROFITABLE, SKIP_RULE (all pre-broadcast).
+    /// CONFIRMED / CLAIM_PENDING / CLAIMED intents are never touched.
+    pub fn release_stale_reservations(&self, max_age_secs: i64) -> Result<usize, WalletError> {
+        let conn = self.conn.lock().unwrap();
+        let cutoff = (Utc::now() - Duration::seconds(max_age_secs)).to_rfc3339();
+        let n = conn.execute(
+            "DELETE FROM reservations WHERE intent_id IN (
+               SELECT r.intent_id FROM reservations r
+               JOIN intents i ON i.intent_id = r.intent_id
+               WHERE i.state IN ('INTENT_DETECTED','SKIP_UNPROFITABLE','SKIP_RULE')
+                 AND r.created_at < ?1
+             )",
+            params![cutoff],
+        )?;
+        Ok(n)
     }
 
     /// Drop a previously reserved hold without recording revenue. Safe to call
