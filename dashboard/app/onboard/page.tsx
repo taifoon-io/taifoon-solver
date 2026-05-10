@@ -547,7 +547,7 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                 disabled={step === 0}
                 onClick={() => setStep((s) => Math.max(0, s - 1))}
               >
-                ← BACK
+                ← Back
               </Button>
               {step < STEPS.length - 1 ? (
                 <Button
@@ -555,7 +555,7 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                   disabled={!canAdvance}
                   onClick={() => setStep((s) => s + 1)}
                 >
-                  CONTINUE →
+                  Continue →
                 </Button>
               ) : provisionResult ? (
                 <Button
@@ -563,7 +563,7 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                   size="md"
                   onClick={() => router.push(`/portal/${provisionResult.solver_id}`)}
                 >
-                  OPEN MY PORTAL →
+                  Open my portal →
                 </Button>
               ) : (
                 <Button
@@ -572,7 +572,7 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                   disabled={provisioning || !canAdvance}
                   onClick={handleProvision}
                 >
-                  {provisioning ? 'REGISTERING…' : 'REGISTER & LAUNCH →'}
+                  {provisioning ? 'Registering…' : 'Register & launch →'}
                 </Button>
               )}
             </div>
