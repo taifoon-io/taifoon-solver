@@ -825,8 +825,26 @@ async fn main() -> Result<()> {
                                 child.mayan_order_id.as_deref().map(|s| &s[..s.len().min(20)]),
                                 child.mayan_auction_mode);
                         } else {
-                            info!("⚠️  LiFi→Mayan: could not resolve Mayan order for tx {} — skip", &lookup_tx[..lookup_tx.len().min(18)]);
-                            dispatched.remove(&dedup_key);
+                            // Mayan explorer hasn't indexed the order yet — retry with back-off.
+                            // Uses the same lifi_retry_counts budget (8 attempts) as the li.quest
+                            // pending path so the total window stays bounded.
+                            let retry_count = lifi_retry_counts.entry(intent.id.clone()).or_insert(0);
+                            if *retry_count < 8 {
+                                *retry_count += 1;
+                                let attempt = *retry_count;
+                                let delay_secs = if attempt <= 3 { 15u64 } else { 30 };
+                                let retry_intent = intent.clone();
+                                let retry_tx = lifi_retry_tx.clone();
+                                dispatched.remove(&dedup_key);
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                                    info!("🔄 LiFi→Mayan retry #{} for {} (explorer lag, delay={}s)", attempt, retry_intent.id, delay_secs);
+                                    let _ = retry_tx.send(retry_intent).await;
+                                });
+                            } else {
+                                info!("⏭️  LiFi→Mayan give-up after 8 retries (explorer never indexed): {}", intent.id);
+                                lifi_retry_counts.remove(&intent.id);
+                            }
                             continue;
                         }
                     }
