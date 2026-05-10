@@ -228,6 +228,12 @@ function FillRow({ rec }: { rec: OutcomeRecord }) {
 
 // ── Main watch page (inner — uses hooks that need Suspense) ─────────────────
 
+interface HostedSolverRef {
+  solver_id: string
+  name: string
+  evm_address: string
+}
+
 function WatchInner() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -239,6 +245,7 @@ function WatchInner() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastAt, setLastAt] = useState<string | null>(null)
+  const [solverRef, setSolverRef] = useState<HostedSolverRef | null>(null)
 
   // Resolve address: URL param first, then localStorage
   useEffect(() => {
@@ -255,6 +262,21 @@ function WatchInner() {
       }
     } catch {}
   }, [searchParams, router])
+
+  // Look up whether this address belongs to a registered hosted solver
+  useEffect(() => {
+    if (!address) return
+    fetch('/api/hosting/solvers')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: { solvers?: HostedSolverRef[] } | null) => {
+        if (!d?.solvers) return
+        const match = d.solvers.find(
+          (s) => s.evm_address.toLowerCase() === address.toLowerCase()
+        )
+        setSolverRef(match ?? null)
+      })
+      .catch(() => null)
+  }, [address])
 
   const refresh = useCallback(async (addr: string) => {
     try {
@@ -338,6 +360,17 @@ function WatchInner() {
                 </span>
                 <Badge tone="mint">PINNED</Badge>
               </div>
+              {solverRef && (
+                <>
+                  <span className="text-[var(--border-default)]">/</span>
+                  <Link
+                    href={`/portal/${solverRef.solver_id}`}
+                    className="font-mono text-[11px] tracking-[0.2em] uppercase text-[var(--brand-blue)] hover:underline transition-colors"
+                  >
+                    {solverRef.name} PORTAL →
+                  </Link>
+                </>
+              )}
               {lastAt && (
                 <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
                   refreshed {fmtAge(lastAt)}
