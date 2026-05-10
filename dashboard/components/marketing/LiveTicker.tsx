@@ -79,6 +79,17 @@ function makeRow(id: number): TickerRow {
 
 export function LiveTicker() {
   const [rows, setRows] = useState<TickerRow[]>([])
+  const [solverId, setSolverId] = useState<string>('taifoon')
+
+  useEffect(() => {
+    fetch('/api/hosting/solvers', { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        const first = d?.solvers?.[0]
+        if (first?.solver_id) setSolverId(first.solver_id)
+      })
+      .catch(() => null)
+  }, [])
 
   useEffect(() => {
     let id = 0
@@ -106,7 +117,7 @@ export function LiveTicker() {
           </span>
         </div>
         <span className="font-mono text-[10px] tracking-[0.18em] uppercase text-[var(--text-tertiary)]">
-          { 'solver_b3e9a2' }
+          solver_{solverId}
         </span>
       </div>
 
