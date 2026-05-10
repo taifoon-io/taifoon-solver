@@ -158,6 +158,10 @@ impl SkipRules {
     /// Returns `Some(reason_string)` when an active rule fires.
     /// `intent_amount_usd` and `current_gas_gwei` are caller-supplied —
     /// the executor already has both from its pre-flight gas estimate.
+    ///
+    /// `fill_deadline_secs` is a unified deadline in Unix seconds — pass
+    /// `intent.fill_deadline.map(|d| d as u64)` for Across intents or
+    /// `intent.deadline` for Mayan intents (whichever is present).
     pub fn evaluate(
         &self,
         protocol: &str,
@@ -165,7 +169,7 @@ impl SkipRules {
         dst_chain: u64,
         intent_amount_usd: Option<f64>,
         current_gas_gwei: Option<f64>,
-        fill_deadline: Option<u32>,
+        fill_deadline_secs: Option<u64>,
     ) -> Option<String> {
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -187,9 +191,9 @@ impl SkipRules {
                 if g <= max { continue; }
             }
             if let Some(max_deadline_secs) = r.predicate.max_fill_deadline_secs {
-                let Some(dl) = fill_deadline else { continue; };
+                let Some(dl) = fill_deadline_secs else { continue; };
                 // Skip if deadline is more than max_deadline_secs in the future.
-                if (dl as u64) <= now_secs + max_deadline_secs { continue; }
+                if dl <= now_secs + max_deadline_secs { continue; }
             }
             // All present predicates matched — fire.
             let reason = r.description.clone().unwrap_or_else(|| {
@@ -272,12 +276,16 @@ mod tests {
             .unwrap_or_default()
             .as_secs();
         // deadline 2 hours in the future → skip (> now + 3600)
-        let far_deadline = (now + 7200) as u32;
+        let far_deadline = now + 7200;
         assert!(r.evaluate("across", 1, 8453, None, None, Some(far_deadline)).is_some());
         // deadline 30 min in the future → keep (< now + 3600)
-        let near_deadline = (now + 1800) as u32;
+        let near_deadline = now + 1800;
         assert!(r.evaluate("across", 1, 8453, None, None, Some(near_deadline)).is_none());
         // no fill_deadline provided → keep (can't evaluate, predicate requires it)
         assert!(r.evaluate("across", 1, 8453, None, None, None).is_none());
+        // global rule (empty protocol) fires for any protocol including mayan_swift
+        let global_r = SkipRules::from_wire(vec![rule(r#"{"max_fill_deadline_secs":3600}"#, "")]);
+        let mayan_far = now + 7200;
+        assert!(global_r.evaluate("mayan_swift", 8453, 42161, None, None, Some(mayan_far)).is_some());
     }
 }

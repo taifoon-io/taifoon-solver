@@ -497,13 +497,18 @@ async fn main() -> Result<()> {
                 None
             }
         };
+        // Unified deadline for skip-rule evaluation: Across uses fill_deadline (u32),
+        // Mayan uses deadline (u64). Both are Unix seconds; prefer fill_deadline when set.
+        let effective_deadline_secs: Option<u64> = intent
+            .fill_deadline.map(|d| d as u64)
+            .or(intent.deadline);
         if let Some(reason) = skip_rules.evaluate(
             &intent.protocol,
             intent.src_chain,
             intent.dst_chain,
             skip_rule_amount_usd,
             None,
-            intent.fill_deadline,
+            effective_deadline_secs,
         ) {
             info!("⏭️  skip-rule fired for {} — {}", intent.id, reason);
             if let Some(log) = rule_skip_log.as_ref() {
@@ -880,8 +885,11 @@ async fn main() -> Result<()> {
             }
             // Skip zero-amount intents. Only check input amount — absent output_amount
             // is not a skip signal (deBridge/Across don't populate it).
+            // Mayan amounts are decimal strings (e.g. "0.0", "5.0"); raw ints (e.g. "0")
+            // also need to be caught. Parse as f64 to handle both representations.
             let amount_is_zero = intent_ref.amount == "0"
-                || intent_ref.amount.trim_start_matches("0x").trim_start_matches('0').is_empty();
+                || intent_ref.amount.trim_start_matches("0x").trim_start_matches('0').is_empty()
+                || intent_ref.amount.parse::<f64>().map_or(false, |f| f == 0.0);
             if amount_is_zero {
                 info!("⏭️  {} skip (zero input amount): {}", intent_ref.protocol, intent_ref.id);
                 continue;
