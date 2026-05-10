@@ -29,21 +29,79 @@ export default function DocsPage() {
           </p>
 
           <div className="mt-12 space-y-5">
+            {/* ── Quick start ──────────────────────────────────────────── */}
             <Card padding="md">
               <CardHeader title="Quick start" />
               <Snippet
                 variant="tabbed"
                 tabs={[
-                  { label: 'INSTALL', code: 'cargo install taifoon-cli' },
                   {
-                    label: 'ONBOARD',
-                    code: 'taifoon-cli onboard --chains base,solana --protocols across,debridge,mayan',
+                    label: 'CLONE',
+                    code: 'git clone https://github.com/yawningmonsoon/taifoon-solver\ncd taifoon-solver',
                   },
-                  { label: 'RUN', code: 'taifoon-cli run --stream prod' },
+                  {
+                    label: 'BUILD',
+                    code: 'cargo build --release -p taifoon-solver',
+                  },
+                  {
+                    label: 'RUN',
+                    code: 'cargo run --release -p taifoon-solver -- --stream prod',
+                  },
                 ]}
               />
             </Card>
 
+            {/* ── Environment variables ────────────────────────────────── */}
+            <Card padding="md">
+              <CardHeader title="Environment variables" />
+              <p className="text-sm text-[var(--text-secondary)] leading-relaxed mb-4">
+                Copy{' '}
+                <code className="text-[var(--brand-blue)] font-mono text-[12px]">.env.example</code>
+                {' '}to{' '}
+                <code className="text-[var(--brand-blue)] font-mono text-[12px]">.env</code>
+                {' '}and fill in the values before starting the solver.
+              </p>
+              <Snippet
+                variant="default"
+                lang="env"
+                code={`SOLVER_PRIVATE_KEY=0x...          # EVM hot wallet private key
+SOLVER_ADDRESS=0x...            # Corresponding EVM address
+MAX_NOTIONAL_USD=5000           # Per-fill exposure cap in USD
+MIN_PROFIT_USD=0.10             # Skip fills below this profit threshold
+API_PORT=8082                   # Solver HTTP API + dashboard port`}
+              />
+            </Card>
+
+            {/* ── Keychain setup ───────────────────────────────────────── */}
+            <Card padding="md">
+              <CardHeader title="Keychain setup (macOS)" />
+              <p className="text-sm text-[var(--text-secondary)] leading-relaxed mb-4">
+                Store credentials in the system keychain instead of a plaintext{' '}
+                <code className="text-[var(--brand-blue)] font-mono text-[12px]">.env</code>
+                {' '}file. The solver reads from the{' '}
+                <code className="text-[var(--brand-blue)] font-mono text-[12px]">mamba-messiah-key</code>
+                {' '}service name at startup.
+              </p>
+              <Snippet
+                variant="tabbed"
+                tabs={[
+                  {
+                    label: 'STORE KEY',
+                    code: 'security add-generic-password \\\n  -s mamba-messiah-key \\\n  -a solver \\\n  -w "$(cat ~/.solver_private_key)"',
+                  },
+                  {
+                    label: 'VERIFY',
+                    code: 'security find-generic-password -s mamba-messiah-key -w',
+                  },
+                  {
+                    label: 'DELETE',
+                    code: 'security delete-generic-password -s mamba-messiah-key',
+                  },
+                ]}
+              />
+            </Card>
+
+            {/* ── Architecture ─────────────────────────────────────────── */}
             <Card padding="md">
               <CardHeader title="Architecture" />
               <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
@@ -51,9 +109,16 @@ export default function DocsPage() {
                 a profitability calculator, a wallet manager, a protocol-adapter
                 layer (per-protocol calldata builders), and an executor. Each pod
                 owns one wallet and one set of protocol/chain registrations.
+                The sidecar portfolio manager exposes inventory and P&amp;L via the
+                HTTP API on{' '}
+                <code className="text-[var(--brand-blue)] font-mono text-[12px]">
+                  localhost:{'{'}API_PORT{'}'}/api/solver/*
+                </code>
+                .
               </p>
             </Card>
 
+            {/* ── Lambda lifecycle ─────────────────────────────────────── */}
             <Card padding="md">
               <CardHeader title="Lambda lifecycle" />
               <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
