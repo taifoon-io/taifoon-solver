@@ -298,14 +298,14 @@ function WatchInner() {
     return (
       <>
         <NavBar />
-        <main className="flex-1 max-w-[860px] mx-auto px-6 py-20 flex flex-col items-center gap-6 text-center">
+        <main className="flex-1 max-w-[860px] mx-auto px-6 py-20 flex flex-col items-center gap-8 text-center">
           <Tag>Portfolio Watch</Tag>
           <h1 className="tf-display tf-gradient-silver text-[2rem]">Pin your wallet</h1>
           <p className="text-[var(--text-secondary)] text-sm max-w-[480px] leading-relaxed">
             Enter any EVM address to see its cross-chain inventory alongside the solver&apos;s live fill feed.
             No signing required — balances are public on-chain reads.
           </p>
-          <WalletPin onPin={(addr) => setAddress(addr)} />
+          <AddressEntry onPin={(addr) => setAddress(addr)} />
           <p className="text-[var(--text-tertiary)] text-[11px] font-mono">
             Or go directly to{' '}
             <code className="text-[var(--brand-blue)]">/watch?address=0x…</code>
@@ -506,6 +506,46 @@ function WatchInner() {
       </main>
       <Footer />
     </>
+  )
+}
+
+function AddressEntry({ onPin }: { onPin: (addr: string) => void }) {
+  const router = useRouter()
+  const [input, setInput] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  function handlePin() {
+    const addr = input.trim()
+    if (!isValidEvm(addr)) {
+      setError('Must be a valid 0x… EVM address (42 chars)')
+      return
+    }
+    try { localStorage.setItem(STORAGE_KEY, addr) } catch {}
+    onPin(addr)
+    router.replace(`/watch?address=${encodeURIComponent(addr)}`)
+  }
+
+  return (
+    <div className="w-full max-w-[480px] flex flex-col gap-3">
+      <div className="flex gap-2">
+        <input
+          autoFocus
+          value={input}
+          onChange={(e) => { setInput(e.target.value); setError(null) }}
+          onKeyDown={(e) => e.key === 'Enter' && handlePin()}
+          placeholder="0x… EVM address"
+          spellCheck={false}
+          autoComplete="off"
+          className="flex-1 h-12 px-4 font-mono text-sm bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] text-[var(--text-primary)] placeholder:text-[var(--text-disabled)] focus:border-[var(--brand-blue)] outline-none transition-colors"
+        />
+        <Button variant="primary" onClick={handlePin}>
+          WATCH →
+        </Button>
+      </div>
+      {error && (
+        <p className="text-[11px] text-[var(--danger)] font-mono">{error}</p>
+      )}
+    </div>
   )
 }
 

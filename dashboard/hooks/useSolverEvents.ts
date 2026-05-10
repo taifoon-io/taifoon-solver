@@ -80,6 +80,14 @@ export function chainName(id: number): string {
   const m: Record<number, string> = {
     1: 'ETH', 10: 'OP', 137: 'MATIC', 8453: 'BASE', 42161: 'ARB',
     56: 'BSC', 59144: 'LINEA', 324: 'ZKSYNC', 1399811149: 'SOL',
+    // extended — covers chains appearing in live genome stream
+    0: 'SOL', 100: 'GNO', 130: 'UNICHAIN', 169: 'MANTA', 200: 'SOL',
+    252: 'FRAX', 999: 'HYPER', 1101: 'ZKEVM', 1135: 'LISK', 1868: 'TAIKO',
+    2222: 'KAVA', 7777777: 'ZORA', 34443: 'MODE', 43114: 'AVAX',
+    57073: 'INK', 81457: 'BLAST', 534352: 'SCROLL',
+    42220: 'CELO', 167000: 'TAIKO', 143: 'LINEA2', 7700: 'CANTO',
+    // large chain IDs from genome (e.g. Across chain ID format)
+    34268394551451: 'ACROSS',
   }
   return m[id] ?? `c${id}`
 }
@@ -164,11 +172,14 @@ export function useSolverEvents() {
         const d = wrapper.data ?? wrapper
 
         if (evType === 'intent_detected') {
-          setIntents(prev => [{
-            id: d.id, protocol: d.protocol, timestamp: d.timestamp,
-            stage: 'detected' as LambdaStage, src_chain: d.src_chain, dst_chain: d.dst_chain,
-            amount: d.amount, token: d.token,
-          }, ...prev].slice(0, 150))
+          setIntents(prev => {
+            if (prev.some(i => i.id === d.id)) return prev
+            return [{
+              id: d.id, protocol: d.protocol, timestamp: d.timestamp,
+              stage: 'detected' as LambdaStage, src_chain: d.src_chain, dst_chain: d.dst_chain,
+              amount: d.amount, token: d.token,
+            }, ...prev].slice(0, 150)
+          })
           bump(d.protocol, { seen: 1 })
           pushEvent({ ts: Date.now(), type: 'detected', protocol: d.protocol, intent_id: d.id,
             detail: `${chainName(d.src_chain)} → ${chainName(d.dst_chain)} ${String(d.amount).slice(0, 10)}` })

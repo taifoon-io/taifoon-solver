@@ -104,8 +104,11 @@ function IntentRow({ intent }: { intent: Intent }) {
   const isSkip = intent.stage === 'skipped' || intent.stage === 'failed' || intent.stage === 'reverted'
 
   const amtNum = parseFloat(intent.amount) || 0
-  const decimals = amtNum > 1e15 ? 18 : amtNum > 1e5 ? 6 : 0
-  const amtDisplay = decimals > 0 ? (amtNum / Math.pow(10, decimals)).toFixed(2) : amtNum.toFixed(2)
+  // Raw amounts come in token-native units. Heuristic: >=1e15 → 18-dec (ETH/WETH),
+  // >=1e4 → 6-dec (USDC/USDT). Cap display at 9999999 to hide absurd Wormhole notionals.
+  const decimals = amtNum >= 1e15 ? 18 : amtNum >= 1e4 ? 6 : 0
+  const amtHuman = decimals > 0 ? amtNum / Math.pow(10, decimals) : amtNum
+  const amtDisplay = amtHuman > 9_999_999 ? '>9.9M' : amtHuman < 0.001 && amtHuman > 0 ? '<0.01' : amtHuman.toFixed(2)
 
   return (
     <div
@@ -129,13 +132,15 @@ function IntentRow({ intent }: { intent: Intent }) {
           <span className="font-mono text-xs text-[var(--text-secondary)]">{amtDisplay}</span>
         </div>
         <div className="flex items-center gap-2">
-          {intent.profit_usd !== undefined && intent.profit_usd !== null && (
+          {intent.profit_usd !== undefined && intent.profit_usd !== null
+            && Math.abs(intent.profit_usd) >= 0.05
+            && intent.stage !== 'detected' && (
             <span
               className={`font-mono text-xs ${
                 intent.profit_usd > 0 ? 'text-[var(--success)]' : 'text-[var(--text-tertiary)]'
               }`}
             >
-              ${intent.profit_usd.toFixed(2)}
+              {intent.profit_usd > 0 ? '+' : ''}${intent.profit_usd.toFixed(2)}
             </span>
           )}
           {intent.tx_hash && (
