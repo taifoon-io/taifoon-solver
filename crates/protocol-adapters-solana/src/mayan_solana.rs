@@ -162,7 +162,11 @@ impl MayanSolanaIntent {
             }
         };
 
-        let min_amount_out = {
+        let min_amount_out = if let Some(v) = intent.mayan_min_amount_out {
+            // Prefer the on-chain uint64 from slot 8 of the MayanSwift order (decoded by
+            // fetch_mayan_order_params). This matches what the Swift program enforces.
+            v
+        } else {
             let raw = intent
                 .output_amount
                 .as_deref()
