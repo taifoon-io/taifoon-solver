@@ -364,12 +364,14 @@ impl OutcomeLog {
         // fills_total: confirmed/execute rows regardless of whether actual_profit_usd
         // is populated yet (fills pending confirmation still count).
         // realized_usd_total: only rows where actual_profit_usd is known.
-        // last_24h_count: all rows in the last 24 h.
+        // last_24h_count: executed fills (not skips) in the last 24 h — matches the
+        //   dashboard "LAST 24H" pill which is labeled as fills, not all events.
         let (total_realized, total_fills, last_24h_count): (f64, i64, i64) = conn.query_row(
             "SELECT
                 COALESCE(SUM(CASE WHEN actual_profit_usd IS NOT NULL THEN actual_profit_usd ELSE 0.0 END), 0.0),
                 COALESCE(SUM(CASE WHEN decision IN ('confirmed', 'execute', 'executed') THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN ts >= datetime('now', '-1 day') THEN 1 ELSE 0 END), 0)
+                COALESCE(SUM(CASE WHEN decision IN ('confirmed', 'execute', 'executed')
+                                   AND ts >= datetime('now', '-1 day') THEN 1 ELSE 0 END), 0)
              FROM solver_outcomes",
             [],
             |r| Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
