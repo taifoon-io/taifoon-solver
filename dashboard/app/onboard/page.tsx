@@ -169,8 +169,9 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
     if (step === 0) return !!name && !!email
     if (step === 1) return chains.size > 0 && protocols.size > 0
     // Step 2: wallet must be connected AND the SIWE signature captured so
-    // the server can flip `siwe_verified=1` on the row.
-    if (step === 2) return isValidEvm(evmAddress) && !!siwe
+    // the server can flip `siwe_verified=1` on the row. If a Solana address
+    // is entered it must be valid before allowing advance.
+    if (step === 2) return isValidEvm(evmAddress) && !!siwe && (!solanaAddress || isValidSolana(solanaAddress))
     return true
   })()
 
