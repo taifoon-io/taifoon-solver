@@ -218,23 +218,41 @@ export default function PortalPage() {
         {/* Solver list */}
         <div className="max-w-[1400px] mx-auto px-6 py-8 space-y-3">
           {!solver && !loadError && (
-            <Card padding="lg" className="text-center">
-              <div className="text-[var(--text-secondary)]">
-                Loading solver state…
+            <Card padding="lg">
+              <div className="flex flex-col items-center py-8 gap-4">
+                <div className="w-12 h-12 rounded-full border border-[var(--border-default)] flex items-center justify-center">
+                  <span className="w-2 h-2 rounded-full bg-[var(--brand-blue)] animate-pulse" />
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-[var(--text-secondary)] font-mono">Connecting to solver…</div>
+                  <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
+                    Make sure the solver API is running on port 8082
+                  </div>
+                </div>
               </div>
             </Card>
           )}
           {loadError && (
-            <Card padding="lg" className="text-center">
-              <div className="text-[var(--danger)]">
-                Failed to reach solver API: {loadError}
+            <Card padding="lg">
+              <div className="flex flex-col items-center py-8 gap-4">
+                <div className="w-12 h-12 rounded-full border border-[var(--danger)]/40 flex items-center justify-center bg-[rgba(255,107,107,0.05)]">
+                  <span className="text-[var(--danger)] font-mono text-lg">!</span>
+                </div>
+                <div className="text-center max-w-[400px]">
+                  <div className="text-sm text-[var(--danger)] font-mono">Solver API unreachable</div>
+                  <div className="text-[11px] text-[var(--text-tertiary)] mt-1 font-mono">{loadError}</div>
+                  <div className="text-[11px] text-[var(--text-tertiary)] mt-2">
+                    Start the solver with{' '}
+                    <code className="bg-[var(--bg-raised)] px-1 py-0.5 rounded font-mono">cargo run --bin taifoon-solver</code>
+                  </div>
+                </div>
               </div>
             </Card>
           )}
           {solver && visible.length === 0 && (
             <Card padding="lg" className="text-center">
-              <div className="text-[var(--text-secondary)]">
-                No solvers match this filter.
+              <div className="text-[var(--text-secondary)] text-sm">
+                No solvers match the &ldquo;{filter}&rdquo; filter.
               </div>
             </Card>
           )}

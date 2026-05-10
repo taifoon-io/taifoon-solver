@@ -94,7 +94,21 @@ interface CrossChainVolumeProps {
   className?: string
 }
 
-export function CrossChainVolume({ volumes, className = '' }: CrossChainVolumeProps) {
+export function CrossChainVolume({ volumes: volumesProp, className = '' }: CrossChainVolumeProps) {
+  // Fetch real DefiLlama volumes from our server-side cached route.
+  const [liveVolumes, setLiveVolumes] = useState<Record<string, number> | null>(null)
+  useEffect(() => {
+    fetch('/api/defillama/volumes')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data && !data.error) setLiveVolumes(data)
+      })
+      .catch(() => null)
+  }, [])
+
+  // Merge: prop override > live DefiLlama > BASELINES fallback
+  const volumes = volumesProp ?? liveVolumes ?? undefined
+
   // Resolve baselines, honoring overrides.
   const protos: ProtocolBaseline[] = useMemo(
     () =>
@@ -380,8 +394,8 @@ export function CrossChainVolume({ volumes, className = '' }: CrossChainVolumePr
 
       {/* Honest source footer */}
       <div className="px-4 py-2 border-t border-[var(--border-subtle)] flex items-center justify-between font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--text-disabled)]">
-        <span>seeded · approximate · rolling 24h</span>
-        <span>source: defillama bridges + perturbation</span>
+        <span>{liveVolumes ? 'live baselines · rolling 24h' : 'seeded · approximate · rolling 24h'}</span>
+        <span>source: defillama bridges{liveVolumes ? ' · live' : ' + fallback'}</span>
       </div>
     </div>
   )
