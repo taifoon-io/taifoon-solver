@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import {
   NavBar,
   Footer,
@@ -14,7 +13,6 @@ import {
 import { ChainOrbits } from '@/components/marketing/ChainOrbits'
 import { LiveTicker } from '@/components/marketing/LiveTicker'
 import { CrossChainVolume } from '@/components/marketing/CrossChainVolume'
-import { Counter } from '@/components/marketing/Counter'
 import { protocolColors } from '@/lib/tokens'
 
 const PROTOCOLS = [
@@ -33,29 +31,25 @@ export default function LandingPage() {
       <NavBar />
       <main className="flex-1">
         <Hero />
-        <ProtocolMarquee />
         <Phases />
-        <Flywheel />
-        <DashboardPreview />
-        <FinalCTA />
+        <LiveData />
+        <Install />
       </main>
       <Footer />
     </>
   )
 }
 
-// ── Cinematic hero ────────────────────────────────────────────────────────
+// ── Hero — calm, specific, no theater ────────────────────────────────────
 function Hero() {
   return (
     <section
       aria-label="Hero"
-      className="relative overflow-hidden min-h-[760px] flex items-center"
+      className="relative overflow-hidden min-h-[720px] flex items-center"
     >
-      {/* layers, back to front: chain-orbits → glow → vignette → content
-          ChainOrbits already includes the tf-grid 3D infinite plane.    */}
       <ChainOrbits />
-      <div className="absolute inset-0 glow-bg pointer-events-none" />
-      {/* vignette so the headline stays legible over the geometry */}
+      {/* legibility vignette — moved here from ChainOrbits so the geometry
+          component stays pure and the hero owns its own readability */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
@@ -64,201 +58,116 @@ function Hero() {
         }}
       />
 
-      <div className="relative w-full max-w-[1280px] mx-auto px-6 py-24 grid lg:grid-cols-[1.15fr_1fr] gap-12 items-center">
+      <div className="relative w-full max-w-[1280px] mx-auto px-6 py-24 grid lg:grid-cols-[1.1fr_1fr] gap-12 items-center">
         {/* Left — copy */}
         <div>
           <div className="inline-flex items-center gap-3 font-mono text-[11px] tracking-[0.25em] text-[var(--text-secondary)] mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--solana-mint)] pulse-live" />
-            TAIFOON · SOLVERS · SOLANA + EVM
+            taifoon · solvers · solana + evm
           </div>
 
           <h1
             className="tf-display tf-gradient-silver"
-            style={{ fontSize: 'clamp(3rem, 7.5vw, 6.25rem)' }}
+            style={{ fontSize: 'clamp(2.75rem, 6.5vw, 5.5rem)' }}
           >
-            One solver.
+            The bridge-solver
             <br />
-            <span className="tf-gradient-solana">Every protocol.</span>
-            <br />
-            Every chain.
+            runtime.
           </h1>
 
-          <p className="mt-8 text-[var(--text-secondary)] max-w-[540px] leading-[1.7] text-[16px]">
-            The autonomous bridge-solver runtime, unbundled from
-            taifoon.io and packaged for hackathon teams. 31 protocols,
-            38+ chains, Solana and EVM under one cryptographic root.
-            Spin up, watch fills land, keep the spread.
+          <p className="mt-8 text-[var(--text-secondary)] max-w-[560px] leading-[1.7] text-[16px]">
+            A single Rust binary that speaks 31 cross-chain protocols
+            across Solana and EVM. Anchor IDLs, JITO bundles, EIP-1559,
+            calldata simulation. Sub-100ms SSE from indexer to your
+            cockpit. Open source, MIT.
           </p>
 
           <div className="mt-10 flex flex-wrap items-center gap-3">
             <Button href="/onboard" variant="primary" size="lg">
-              <span className="text-[var(--text-tertiary)]">{'>'}</span>
-              SPIN UP A SOLVER →
+              Spin up a solver
             </Button>
             <Button href="/portal" variant="secondary" size="lg">
-              OPEN THE PORTAL
+              Open the portal
             </Button>
           </div>
 
-          {/* Live KPI strip — these tick up so the hero feels alive */}
-          <div className="mt-14 grid grid-cols-2 sm:grid-cols-4 gap-x-10 gap-y-6">
-            <KPI label="$ FILLED · 24H" value={
-              <Counter base={28430} step={4.2} format="usd" prefix="$" />
-            } tone="mint" />
-            <KPI label="FILLS · 24H" value={
-              <Counter base={2841} step={1} format="int" />
-            } tone="blue" />
-            <KPI label="PROTOCOLS" value="31" tone="default" />
-            <KPI label="CHAINS" value="38+" tone="default" />
+          {/* Single honest fact line — no ticking counters, no fake numbers */}
+          <div className="mt-14 flex flex-wrap items-baseline gap-x-6 gap-y-2 font-mono text-[11px] tracking-[0.18em] uppercase text-[var(--text-tertiary)]">
+            <span><span className="text-[var(--text-primary)]">31</span> protocols</span>
+            <span aria-hidden>·</span>
+            <span><span className="text-[var(--text-primary)]">38+</span> chains</span>
+            <span aria-hidden>·</span>
+            <span><span className="text-[var(--text-primary)]">SVM + EVM</span></span>
+            <span aria-hidden>·</span>
+            <span><span className="text-[var(--text-primary)]">MIT</span></span>
+            <span aria-hidden>·</span>
+            <span><span className="text-[var(--text-primary)]">Rust 1.83</span></span>
           </div>
         </div>
 
-        {/* Right — the runtime, visibly working */}
+        {/* Right — the runtime, visibly working. One focal motion. */}
         <div className="lg:pl-4">
           <CrossChainVolume />
-
-          <div className="mt-4 flex items-center justify-between font-mono text-[10px] tracking-[0.2em] uppercase text-[var(--text-tertiary)]">
-            <span>Volume firehose · all 31 protocols</span>
-            <PortalLink />
-          </div>
         </div>
       </div>
     </section>
   )
 }
 
-function PortalLink() {
-  return (
-    <Link href="/portal" className="hover:text-[var(--brand-blue)] transition-colors">
-      SEE LIVE PORTAL →
-    </Link>
-  )
-}
-
-function KPI({
-  label,
-  value,
-  tone,
-}: {
-  label: string
-  value: React.ReactNode
-  tone: 'mint' | 'blue' | 'default'
-}) {
-  const c = {
-    mint: 'text-[var(--solana-mint)]',
-    blue: 'text-[var(--brand-blue)]',
-    default: 'text-[var(--text-primary)]',
-  }
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span className="font-mono text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)]">
-        {label}
-      </span>
-      <span className={`font-mono text-[26px] tracking-[-0.01em] ${c[tone]}`}>
-        {value}
-      </span>
-    </div>
-  )
-}
-
-// ── Protocol marquee ──────────────────────────────────────────────────────
-function ProtocolMarquee() {
-  const items = [...PROTOCOLS, ...PROTOCOLS]
-  return (
-    <section
-      aria-label="Indexed protocols"
-      className="border-y border-[var(--border-subtle)]"
-    >
-      <div className="max-w-[1400px] mx-auto px-6 py-8">
-        <div className="tf-tag text-center mb-5">[ INDEXED PROTOCOLS ]</div>
-        <div
-          className="overflow-hidden"
-          style={{
-            maskImage:
-              'linear-gradient(to right, transparent, black 8%, black 92%, transparent)',
-            WebkitMaskImage:
-              'linear-gradient(to right, transparent, black 8%, black 92%, transparent)',
-          }}
-        >
-          <div className="marquee-track flex gap-3">
-            {items.map((p, i) => {
-              const key = p.toLowerCase().split(' ')[0]
-              const color = protocolColors[key] ?? '#94B0C4'
-              return (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-2 px-3 h-8 rounded-[2px] border whitespace-nowrap"
-                  style={{
-                    borderColor: 'var(--border-default)',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  <span className="w-1 h-1" style={{ background: color }} />
-                  <span className="text-[11px] font-mono tracking-[0.12em]">{p}</span>
-                </span>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-// ── Phases ────────────────────────────────────────────────────────────────
+// ── Phases — four phases that all describe what the runtime does ────────
 const PHASES = [
   {
     n: 1,
     step: 'Detect',
-    title: 'The market sees it after we do',
-    body: '31 protocols, 38+ chains. Every intent, every order, every order-book delta — collected at the node-runner level before it reaches any public feed. SSE delivers raw signal to your solver in under 100 ms.',
-    stat: 'real-time',
-    stat_value: '31 protocols',
+    title: 'Indexed at the node-runner level',
+    body: 'Every intent, order, and book delta from 31 protocols across 38+ chains, captured before it reaches any public feed. Server-sent events deliver raw signal in under 100 ms.',
+    stat: 'latency',
+    stat_value: '<100ms',
     tone: 'blue' as const,
   },
   {
     n: 2,
     step: 'Prove',
-    title: 'Profitability, not promises',
-    body: 'Every intent runs through a gas-aware, slippage-aware, MEV-aware profitability gate before a single byte of calldata is built. Skipped, dry-run, executed — every outcome is logged and visible.',
-    stat: 'gate',
-    stat_value: '12 stages',
+    title: 'Profitability gate, twelve stages',
+    body: 'Gas-aware, slippage-aware, MEV-aware. Every intent runs through the gate before a byte of calldata is built. Skipped, dry-run, executed — every outcome is logged.',
+    stat: 'stages',
+    stat_value: '12',
     tone: 'blue' as const,
   },
   {
     n: 3,
     step: 'Settle',
     title: 'Solana and EVM, same runtime',
-    body: 'A single Rust binary that speaks Across V3, deBridge DLN, Mayan Swift, Wormhole, LayerZero, CCTP — Anchor IDLs, JITO bundles, priority fees on the SVM side; EIP-1559, calldata simulation, revert-aware retries on the EVM side.',
-    stat: 'fluent',
+    body: 'One Rust binary. Across V3, deBridge DLN, Mayan Swift, Wormhole, LayerZero, CCTP. Anchor IDLs, JITO bundles, priority fees on the SVM side; EIP-1559, calldata simulation, revert-aware retries on the EVM side.',
+    stat: 'targets',
     stat_value: 'SVM + EVM',
     tone: 'mint' as const,
   },
   {
     n: 4,
-    step: 'Compound',
-    title: 'Every fill funds the next one',
-    body: 'Solvers earn protocol fees. Fees fund more wallets. More wallets fill more intents. The flywheel is autonomous. The runtime is open. The edge belongs to the operator.',
-    stat: 'flywheel',
-    stat_value: '∞',
-    tone: 'mint' as const,
+    step: 'Stream',
+    title: 'SSE to your cockpit, sub-second',
+    body: 'Lambda lifecycle bar, twelve stages per intent. P&L attribution per protocol, per chain, per wallet. Drill into every tx hash, gas cost, profit calculation. No polling.',
+    stat: 'transport',
+    stat_value: 'SSE',
+    tone: 'blue' as const,
   },
 ]
 
 function Phases() {
   return (
-    <section aria-label="The engine — four phases" className="max-w-[1280px] mx-auto px-6 py-32">
+    <section aria-label="The binary — four phases" className="max-w-[1280px] mx-auto px-6 py-32">
       <div className="grid lg:grid-cols-[1fr_2fr] gap-12">
         <div>
-          <Tag>The engine</Tag>
+          <Tag>The binary</Tag>
           <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2rem,4vw,3.5rem)]">
-            One grid.
+            Four phases.
             <br />
-            Every solver.
+            One process.
           </h2>
           <p className="mt-6 text-[var(--text-secondary)] leading-relaxed max-w-[480px]">
             The same indexer, proof system, and signal layer that powers
-            taifoon.io — exposed as a runtime you can spin up in minutes.
+            taifoon.io — packaged as a runtime you can spin up in minutes.
           </p>
         </div>
 
@@ -300,174 +209,111 @@ function Phases() {
   )
 }
 
-// ── Flywheel ──────────────────────────────────────────────────────────────
-function Flywheel() {
+// ── Live data + portal preview ───────────────────────────────────────────
+function LiveData() {
   return (
-    <section aria-label="The flywheel economy" className="border-y border-[var(--border-subtle)]">
+    <section aria-label="The portal" className="border-y border-[var(--border-subtle)]">
       <div className="max-w-[1280px] mx-auto px-6 py-32">
-        <div className="text-center mb-16">
-          <Tag>The economy</Tag>
-          <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2.25rem,4vw,3.5rem)]">
-            Every participant
-            <br />
-            feeds the same flywheel.
-          </h2>
-          <p className="mt-6 text-[var(--text-secondary)] leading-relaxed max-w-[640px] mx-auto">
-            Taifoon&apos;s grid pays the people who make it stronger. Solvers
-            earn execution fees from the autonomous DeFi economy — the more
-            you fill, the more the protocol funds the next solver.
-          </p>
-        </div>
+        <div className="grid lg:grid-cols-[1fr_1.1fr] gap-16 items-start">
+          <div>
+            <Tag>The portal</Tag>
+            <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2rem,4vw,3.25rem)]">
+              Every fill,
+              <br />
+              every stage.
+            </h2>
+            <p className="mt-6 text-[var(--text-secondary)] leading-relaxed">
+              The portal is the operator&apos;s cockpit. Every stage of the
+              lambda lifecycle, every dry-run, every revert, every fee
+              paid — broadcast over SSE at sub-second latency.
+            </p>
 
-        <div className="grid md:grid-cols-3 gap-px bg-[var(--border-subtle)]">
-          {[
-            {
-              tag: 'Solvers',
-              tone: 'blue' as const,
-              contributes:
-                'GPU-aware solver pods that execute intents end-to-end. One process, many wallets.',
-              receives:
-                'Execution fees from every successful fill. Auto-scaled by the protocol when demand spikes.',
-            },
-            {
-              tag: 'Protocols',
-              tone: 'mint' as const,
-              contributes:
-                '31 cross-chain bridges, intent systems, and aggregators — pre-integrated in the adapter layer.',
-              receives:
-                'Tighter spreads, faster fills, more reliable settlement on every supported chain.',
-            },
-            {
-              tag: 'Operators',
-              tone: 'violet' as const,
-              contributes:
-                'A wallet, a chain selection, a profitability heuristic. The smallest possible footprint.',
-              receives:
-                'A live portal, on-chain attribution, and a slice of the autonomous DeFi economy.',
-            },
-          ].map((row) => (
-            <div key={row.tag} className="bg-[var(--bg-base)] p-8">
-              <Tag tone={row.tone}>{row.tag}</Tag>
-              <div className="mt-6">
-                <div className="tf-stat-prefix uppercase tracking-[0.24em] mb-2">
-                  contributes
-                </div>
-                <p className="text-sm text-[var(--text-primary)] leading-relaxed">
-                  {row.contributes}
-                </p>
+            {/* 31 protocols as a calm 4-column grid (the marquee was
+                kinetic begging). Static. Sortable by eye. */}
+            <div className="mt-10">
+              <div className="font-mono text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)] mb-3">
+                Indexed protocols
               </div>
-              <div className="mt-6">
-                <div className="tf-stat-prefix uppercase tracking-[0.24em] mb-2">
-                  receives
-                </div>
-                <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-                  {row.receives}
-                </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
+                {PROTOCOLS.map((p) => {
+                  const key = p.toLowerCase().split(' ')[0]
+                  const color = protocolColors[key] ?? '#94B0C4'
+                  return (
+                    <div
+                      key={p}
+                      className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]"
+                    >
+                      <span
+                        className="w-1 h-1 shrink-0"
+                        style={{ background: color }}
+                      />
+                      <span className="truncate">{p}</span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
 
-// ── Dashboard preview ─────────────────────────────────────────────────────
-function DashboardPreview() {
-  return (
-    <section aria-label="Live operator cockpit preview" className="relative max-w-[1280px] mx-auto px-6 py-32">
-      <div className="absolute inset-0 tf-coordinate-grid opacity-50 pointer-events-none" />
-      <div className="grid lg:grid-cols-[1fr_1.1fr] gap-16 items-center">
-        <div>
-          <Tag>The cockpit</Tag>
-          <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2rem,4vw,3.25rem)]">
-            A glass box
-            <br />
-            for every fill.
-          </h2>
-          <p className="mt-6 text-[var(--text-secondary)] leading-relaxed">
-            The portal isn&apos;t a vanity dashboard — it&apos;s the operator&apos;s
-            cockpit. Every stage of the lambda lifecycle, every dry-run,
-            every revert, every fee paid, broadcast over server-sent
-            events at sub-second latency.
-          </p>
-          <ul className="mt-8 space-y-3 text-sm text-[var(--text-secondary)]">
-            <Bullet>Lambda lifecycle bar — twelve stages, one row per intent.</Bullet>
-            <Bullet>P&amp;L attribution per protocol, per chain, per wallet.</Bullet>
-            <Bullet>SSE stream from the Rust core — no polling, no lag.</Bullet>
-            <Bullet>Drill into every tx hash, gas cost, profit calc.</Bullet>
-          </ul>
-          <div className="mt-10 flex gap-3">
-            <Button href="/portal" variant="primary">
-              OPEN THE PORTAL →
-            </Button>
-            <Button href="/portal/demo" variant="ghost">
-              LIVE DEMO
-            </Button>
+            <div className="mt-10 flex gap-3">
+              <Button href="/portal" variant="primary">
+                Open the portal
+              </Button>
+              <Button href="/portal/demo" variant="ghost">
+                Live demo
+              </Button>
+            </div>
+          </div>
+
+          <div className="relative">
+            <Card padding="none" className="overflow-hidden">
+              <LiveTicker />
+            </Card>
           </div>
         </div>
-
-        <div className="relative">
-          <Card padding="none" className="overflow-hidden">
-            <LiveTicker />
-          </Card>
-        </div>
       </div>
     </section>
   )
 }
 
-function Bullet({ children }: { children: React.ReactNode }) {
+// ── Install — one snippet, no headline restating the homepage ────────────
+function Install() {
   return (
-    <li className="flex gap-3">
-      <span className="mt-2 w-1.5 h-1.5 rounded-[1px] bg-[var(--brand-blue)] shrink-0" />
-      <span className="leading-relaxed">{children}</span>
-    </li>
-  )
-}
-
-// ── Final CTA — folded Colosseum framing into copy + tabbed snippet ──────
-function FinalCTA() {
-  return (
-    <section aria-label="Get started" className="max-w-[1100px] mx-auto px-6 py-32 text-center">
+    <section aria-label="Install" className="max-w-[860px] mx-auto px-6 py-32">
       <Tag>Get on the grid</Tag>
-      <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2.5rem,6vw,4.5rem)]">
-        Your solver is
-        <br />
-        one command away.
+      <h2 className="tf-display tf-gradient-silver mt-6 text-[clamp(2rem,4vw,3rem)]">
+        Three commands.
       </h2>
-      <p className="mt-6 text-[var(--text-secondary)] max-w-[560px] mx-auto leading-relaxed">
-        Open-source, MIT, free for hackathon teams — Solana Colosseum
-        included. Fork the runtime, fork the indexer, run your solver
-        on testnet by lunch.
+      <p className="mt-6 text-[var(--text-secondary)] max-w-[560px] leading-relaxed">
+        Open source, MIT. Fork the runtime, fork the indexer, run on
+        testnet by lunch.
       </p>
 
-      <div className="mt-12 max-w-[640px] mx-auto text-left">
+      <div className="mt-12">
         <Snippet
           variant="tabbed"
           tabs={[
             {
-              label: 'INSTALL',
+              label: 'install',
               code: 'curl -fsSL solver.taifoon.dev/install.sh | sh',
             },
             {
-              label: 'ONBOARD',
+              label: 'onboard',
               code: 'taifoon-cli onboard --chains base,solana --protocols across,debridge,mayan',
             },
             {
-              label: 'RUN',
+              label: 'run',
               code: 'taifoon-cli run --stream prod',
             },
           ]}
         />
       </div>
 
-      <div className="mt-10 flex justify-center gap-3 flex-wrap">
+      <div className="mt-10 flex gap-3 flex-wrap">
         <Button href="/onboard" variant="primary" size="lg">
-          SPIN UP A SOLVER →
+          Spin up a solver
         </Button>
         <Button href="/portal" variant="secondary" size="lg">
-          OPEN THE PORTAL
+          Open the portal
         </Button>
       </div>
     </section>

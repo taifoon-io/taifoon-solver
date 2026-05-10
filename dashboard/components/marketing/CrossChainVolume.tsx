@@ -240,18 +240,6 @@ export function CrossChainVolume({ volumes: volumesProp, className = '' }: Cross
     return layers
   }, [samples, protos])
 
-  // ── Leaderboard ──────────────────────────────────────────────────────
-  const leaderboard = useMemo(() => {
-    const sorted = [...protos]
-      .map((p) => ({ ...p, total: running[p.key] ?? p.daily }))
-      .sort((a, b) => b.total - a.total)
-    const max = sorted[0]?.total ?? 1
-    return sorted.slice(0, 8).map((row) => ({
-      ...row,
-      share: row.total / max,
-    }))
-  }, [protos, running])
-
   return (
     <div
       className={`rounded-[var(--r-sm)] border border-[var(--border-default)] bg-[var(--bg-elevated)] overflow-hidden ${className}`}
@@ -351,49 +339,8 @@ export function CrossChainVolume({ volumes: volumesProp, className = '' }: Cross
         </div>
       </div>
 
-      {/* Leaderboard */}
-      <div className="px-4 pt-4 pb-3 border-t border-[var(--border-subtle)] mt-3">
-        <div className="flex items-center justify-between mb-3">
-          <span className="font-mono text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)]">
-            top protocols · 24h
-          </span>
-          <span className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--text-disabled)]">
-            re-orders live
-          </span>
-        </div>
-        <ul className="space-y-1.5">
-          {leaderboard.map((row) => (
-            <li
-              key={row.key}
-              className="flex items-center gap-3"
-              style={{ transition: 'transform 600ms var(--ease-out)' }}
-            >
-              <span
-                className="font-mono text-[10px] tracking-[0.12em] uppercase shrink-0"
-                style={{ color: row.color, width: 96 }}
-              >
-                {row.label}
-              </span>
-              <div className="flex-1 h-1 rounded-full bg-[var(--bg-raised)] overflow-hidden">
-                <div
-                  className="h-full"
-                  style={{
-                    width: `${(row.share * 100).toFixed(1)}%`,
-                    background: row.color,
-                    transition: 'width 800ms var(--ease-out)',
-                  }}
-                />
-              </div>
-              <span className="font-mono text-[10px] tabular-nums text-[var(--text-secondary)] shrink-0">
-                ${formatBig(row.total)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
       {/* Honest source footer */}
-      <div className="px-4 py-2 border-t border-[var(--border-subtle)] flex items-center justify-between font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--text-disabled)]">
+      <div className="px-4 py-2 border-t border-[var(--border-subtle)] mt-3 flex items-center justify-between font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--text-disabled)]">
         <span>{liveVolumes ? 'live baselines · rolling 24h' : 'seeded · approximate · rolling 24h'}</span>
         <span>source: defillama bridges{liveVolumes ? ' · live' : ' + fallback'}</span>
       </div>
