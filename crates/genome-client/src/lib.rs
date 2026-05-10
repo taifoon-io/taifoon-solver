@@ -2109,7 +2109,11 @@ impl GenomeClient {
         // Mayan Swift orders arrive via MayanPoller (REST API) with correct decimal
         // amounts. The SSE stream puts the 32-byte order hash in input_amount, which
         // parses as a ~$648T notional. Drop SSE Mayan events here; MayanPoller handles them.
-        let proto_hint = genome_event.protocol.as_deref().unwrap_or("");
+        // Check both `protocol` and `id` fields — some SSE events carry the protocol slug
+        // only in `id` with `protocol` absent.
+        let proto_hint = genome_event.protocol.as_deref()
+            .or(genome_event.id.as_deref())
+            .unwrap_or("");
         if proto_hint.contains("mayan") || proto_hint.contains("swift") {
             return None;
         }
