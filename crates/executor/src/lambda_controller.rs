@@ -1374,9 +1374,10 @@ impl LambdaController {
             Some(&tx_hash),
             None,
         );
-        // The terminal transition above auto-releases the reservation, but we
-        // call release() explicitly so a future change to wallet-manager
-        // semantics doesn't silently leave funds locked.
+        // Confirmed is NOT terminal (deBridge continues to ClaimPending→Claimed),
+        // so release() must be called explicitly here to free the budget reservation.
+        // For deBridge: the fill capital was spent on-chain; the claimUnlock is tracked
+        // separately and does not require a budget hold.
         let _ = self.wallet.release(&intent.id);
 
         self.append_outcome(OutcomeRecord {
