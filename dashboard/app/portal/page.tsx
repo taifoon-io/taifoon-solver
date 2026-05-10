@@ -31,6 +31,18 @@ interface OutcomeRecord {
   actual_profit_usd: number | null
 }
 
+interface HostedSolver {
+  solver_id: string
+  name: string
+  evm_address: string
+  signing_mode: string
+  chains: string
+  protocols: string
+  registered_at: string
+  active: boolean
+  donut_accrued_usd: number
+}
+
 const SOLVER_API_BASE =
   (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SOLVER_API_URL) || ''
 
@@ -74,6 +86,7 @@ export default function PortalPage() {
   const [lastFill, setLastFill] = useState<OutcomeRecord | null>(null)
   const [status, setStatus] = useState<SolverStatus>('connecting')
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [hostedSolvers, setHostedSolvers] = useState<HostedSolver[]>([])
 
   const lastSseAtRef = useRef<number>(Date.now())
 
@@ -82,10 +95,11 @@ export default function PortalPage() {
 
     const refresh = async () => {
       try {
-        const [pRes, plRes, oRes] = await Promise.all([
+        const [pRes, plRes, oRes, hRes] = await Promise.all([
           fetch(`${SOLVER_API_BASE}/api/solver/portfolio`, { cache: 'no-store' }),
           fetch(`${SOLVER_API_BASE}/api/solver/pnl`, { cache: 'no-store' }),
           fetch(`${SOLVER_API_BASE}/api/solver/outcomes?limit=1`, { cache: 'no-store' }),
+          fetch(`${SOLVER_API_BASE}/api/hosting/solvers`, { cache: 'no-store' }),
         ])
         if (cancelled) return
         if (pRes.ok) setPortfolio(await pRes.json())
@@ -93,6 +107,10 @@ export default function PortalPage() {
         if (oRes.ok) {
           const recs = (await oRes.json()) as OutcomeRecord[]
           setLastFill(recs[0] ?? null)
+        }
+        if (hRes.ok) {
+          const d = await hRes.json()
+          setHostedSolvers(d.solvers ?? [])
         }
         setLoadError(null)
       } catch (e) {
@@ -157,7 +175,7 @@ export default function PortalPage() {
     return []
   }, [solver, filter])
 
-  const fleetCount = solver ? 1 : 0
+  const fleetCount = Math.max(solver ? 1 : 0, hostedSolvers.length)
   const liveCount = solver?.status === 'live' ? 1 : 0
   const fillsTotal = solver?.fills_total ?? 0
   const totalPnl = solver?.pnl_total ?? 0
@@ -259,6 +277,9 @@ export default function PortalPage() {
           {visible.map((s) => (
             <SolverCard key={s.address} solver={s} />
           ))}
+          {hostedSolvers.filter(h => !solver || h.evm_address.toLowerCase() !== solver.address.toLowerCase()).map((h) => (
+            <HostedSolverCard key={h.solver_id} hosted={h} />
+          ))}
         </div>
 
         {/* Onboarding hint */}
@@ -289,6 +310,69 @@ export default function PortalPage() {
       </main>
       <Footer />
     </>
+  )
+}
+
+function HostedSolverCard({ hosted }: { hosted: HostedSolver }) {
+  const protocols = hosted.protocols.split(',').filter(Boolean)
+  const chains = hosted.chains.split(',').filter(Boolean)
+  const modeLabel = hosted.signing_mode === 'self_hosted' ? 'SELF-HOSTED'
+    : hosted.signing_mode === 'remote_signer' ? 'REMOTE SIGNER'
+    : 'SESSION KEY'
+  return (
+    <Link href={`/portal/${hosted.solver_id}`} className="block group">
+      <Card
+        padding="md"
+        className="transition-all group-hover:border-[var(--brand-blue)]/40 group-hover:bg-[var(--bg-elevated)]"
+      >
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-[15px] text-[var(--text-primary)] tracking-[0.04em] font-mono">
+                {hosted.name}
+              </span>
+              <Badge tone="neutral">
+                {modeLabel}
+              </Badge>
+              <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
+                {hosted.evm_address.slice(0, 6)}…{hosted.evm_address.slice(-4)}
+              </span>
+            </div>
+            <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+              {protocols.map((p) => {
+                const color = protocolColors[p.toLowerCase()] ?? '#94B0C4'
+                return (
+                  <span key={p} className="text-[10px] font-mono tracking-[0.12em] uppercase px-2 py-0.5 rounded-[2px] border"
+                    style={{ color, borderColor: `${color}30` }}>
+                    {p}
+                  </span>
+                )
+              })}
+              {chains.length > 0 && (
+                <>
+                  <span className="text-[var(--text-tertiary)] text-[10px]">·</span>
+                  <span className="text-[10px] text-[var(--text-tertiary)] font-mono tracking-[0.12em]">
+                    {chains.join(' · ')}
+                  </span>
+                </>
+              )}
+            </div>
+            <div className="mt-3 text-[11px] font-mono text-[var(--text-tertiary)] tracking-[0.08em]">
+              registered{' '}
+              <span className="text-[var(--text-secondary)]">
+                {new Date(hosted.registered_at).toLocaleDateString()}
+              </span>
+              {hosted.donut_accrued_usd > 0 && (
+                <> · donut <span className="text-[var(--solana-mint)]">${hosted.donut_accrued_usd.toFixed(4)}</span></>
+              )}
+            </div>
+          </div>
+          <div className="font-mono text-[var(--text-tertiary)] group-hover:text-[var(--brand-blue)] transition-colors">
+            →
+          </div>
+        </div>
+      </Card>
+    </Link>
   )
 }
 

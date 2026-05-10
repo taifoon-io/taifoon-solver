@@ -11,8 +11,8 @@ import { protocolColors } from '@/lib/tokens'
 const STEPS = [
   { label: 'Identity', description: 'Name & operator email' },
   { label: 'Chains & protocols', description: 'What you want to solve' },
-  { label: 'Wallet', description: 'Generate or import' },
-  { label: 'Launch', description: 'Copy the run command' },
+  { label: 'Wallet & signing', description: 'Key authority model' },
+  { label: 'Launch', description: 'Register & get your portal' },
 ]
 
 const CHAIN_OPTIONS = [
@@ -41,6 +41,21 @@ const PROTOCOL_OPTIONS = [
   { id: 'celer', label: 'Celer cBridge', tier: 3 },
 ] as const
 
+type SigningMode = 'self_hosted' | 'remote_signer' | 'session_key'
+
+interface ProvisionResult {
+  solver_id: string
+  api_token: string
+  portal_url: string
+  watch_url: string
+  signing_mode: string
+  tsul_note: string
+}
+
+function isValidEvm(addr: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(addr.trim())
+}
+
 export default function OnboardPage() {
   const router = useRouter()
   const [step, setStep] = useState(0)
@@ -53,53 +68,118 @@ export default function OnboardPage() {
   const [chains, setChains] = useState<Set<string>>(new Set(['base', 'solana', 'arbitrum']))
   const [protocols, setProtocols] = useState<Set<string>>(new Set(['across', 'debridge', 'mayan']))
 
-  // Step 2
-  const [walletMode, setWalletMode] = useState<'generate' | 'import'>('generate')
-  const [importKey, setImportKey] = useState('')
-  const [generatedWallet, setGeneratedWallet] = useState({
-    address: '0x————————————————————',
-    solana: '—————————————————',
-  })
-  const [solverId, setSolverId] = useState('spinr_pending')
+  // Step 2 — key authority
+  const [signingMode, setSigningMode] = useState<SigningMode>('self_hosted')
+  const [evmAddress, setEvmAddress] = useState('')
+  const [solanaAddress, setSolanaAddress] = useState('')
+  const [webhookUrl, setWebhookUrl] = useState('')
+  const [safeAddress, setSafeAddress] = useState('')
+  const [addressError, setAddressError] = useState<string | null>(null)
 
-  // Random/preview values are computed client-side after mount to keep the
-  // render pure and avoid SSR/CSR hydration mismatches. The setState calls
-  // are intentional post-mount initialization, not synchronization.
-  useEffect(() => {
-    queueMicrotask(() => {
-      setGeneratedWallet({
-        address: '0x' + Math.random().toString(16).slice(2, 10) + 'b3e9a2c4d5...',
-        solana: 'Sol' + Math.random().toString(36).slice(2, 8) + '...DLN',
-      })
-      setSolverId('spinr_' + Math.random().toString(36).slice(2, 8))
-    })
-  }, [])
+  // Step 3 — provisioning
+  const [provisioning, setProvisioning] = useState(false)
+  const [provisionResult, setProvisionResult] = useState<ProvisionResult | null>(null)
+  const [provisionError, setProvisionError] = useState<string | null>(null)
 
   const launchCmd = useMemo(() => {
-    return `# 1. Clone the solver runtime
+    const addr = evmAddress || '<your_evm_address>'
+    const protos = Array.from(protocols).join(',')
+    if (signingMode === 'remote_signer') {
+      return `# Your solver signs transactions locally — you approve each fill.
+# 1. Clone & build
 git clone https://github.com/yawningmonsoon/taifoon-solver
-cd taifoon-solver
+cd taifoon-solver && cargo build --release -p solver-main
 
-# 2. Configure your solver
+# 2. Configure
 export SOLVER_PRIVATE_KEY=0x<your_funded_evm_key>
-export SOLVER_ADDRESS=<your_evm_address>
-export PROTOCOL_FILTER=${Array.from(protocols).join(',')}
+export SOLVER_ADDRESS=${addr}
+export PROTOCOL_FILTER=${protos}
+export SIGNER_MODE=remote
+export SIGNER_WEBHOOK_URL=${webhookUrl || 'http://localhost:9000/sign'}
+
+# 3. Run
+./target/release/taifoon-solver`
+    }
+    if (signingMode === 'session_key') {
+      return `# You hold the Safe master key — Taifoon holds a scoped session key.
+# Session key can ONLY call: fillRelay, fulfillOrder, fulfillSimple.
+# Safe spend limit + session key scope enforced at contract level.
+
+# 1. Deploy or connect your Safe: https://safe.global
+# 2. Add Taifoon as a signer with module: TaifoonSessionModule
+#    (restricts to fill-function selectors only, daily spend cap)
+# 3. Your solver runs in Taifoon's hosted fleet:
+#    solver_id: ${evmAddress ? evmAddress.slice(2, 10) : '<id>'}
+#    portal: /portal/${evmAddress ? evmAddress.slice(2, 10).toLowerCase() : '<id>'}
+# 4. Revoke at any time from your Safe interface.`
+    }
+    // self_hosted
+    return `# You run the solver binary on your own machine.
+# Taifoon NEVER holds your key. All fills signed locally.
+
+# 1. Clone & build
+git clone https://github.com/yawningmonsoon/taifoon-solver
+cd taifoon-solver && cargo build --release -p solver-main
+
+# 2. Store key in macOS keychain (recommended)
+security add-generic-password -a "$USER" -s mamba-messiah-key \\
+  -w "0x<your_funded_evm_key>"
+
+# 3. Run
+export SOLVER_ADDRESS=${addr}
+export PROTOCOL_FILTER=${protos}
 export MIN_PROFIT_USD=0.10
 export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
-
-# 3. Build & run (Docker)
-docker compose up -d
-
-# — OR — run directly with cargo:
-cargo run -p solver-main --release`
-  }, [name, chains, protocols, walletMode, solverId])
+./target/release/taifoon-solver`
+  }, [name, chains, protocols, signingMode, evmAddress, webhookUrl])
 
   const canAdvance = (() => {
     if (step === 0) return !!name && !!email
     if (step === 1) return chains.size > 0 && protocols.size > 0
-    if (step === 2) return walletMode === 'generate' || importKey.length > 12
+    if (step === 2) return isValidEvm(evmAddress)
     return true
   })()
+
+  async function handleProvision() {
+    if (provisionResult) {
+      // Already provisioned — just navigate
+      router.push(`/portal/${provisionResult.solver_id}`)
+      return
+    }
+
+    setProvisioning(true)
+    setProvisionError(null)
+
+    try {
+      const res = await fetch('/api/hosting/provision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          evm_address: evmAddress.trim(),
+          solana_address: solanaAddress.trim() || undefined,
+          signing_mode: signingMode,
+          signer_webhook_url: signingMode === 'remote_signer' ? webhookUrl : undefined,
+          safe_address: signingMode === 'session_key' ? safeAddress : undefined,
+          email: email || undefined,
+          chains: Array.from(chains).join(','),
+          protocols: Array.from(protocols).join(','),
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+        throw new Error(err.error || `HTTP ${res.status}`)
+      }
+
+      const result: ProvisionResult = await res.json()
+      setProvisionResult(result)
+    } catch (e) {
+      setProvisionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setProvisioning(false)
+    }
+  }
 
   return (
     <>
@@ -111,10 +191,10 @@ cargo run -p solver-main --release`
             <h1 className="tf-display tf-gradient-silver mt-4 text-[clamp(2rem,4vw,3rem)]">
               Spin up your solver.
             </h1>
-            <p className="mt-3 text-[var(--text-secondary)] max-w-[560px] leading-relaxed">
-              Four phases. About five minutes. End state: a registered
-              solver pod, on-chain on Base + Solana, that you can monitor
-              live in the portal.
+            <p className="mt-3 text-[var(--text-secondary)] max-w-[580px] leading-relaxed">
+              Four steps. Under five minutes. You retain full key authority —
+              Taifoon never holds your private key. Every fill routes 70% of the
+              TSUL donut to your wallet, perpetually.
             </p>
           </div>
 
@@ -124,7 +204,7 @@ cargo run -p solver-main --release`
             <StepBody>
               {step === 0 && (
                 <div className="space-y-5">
-                  <Field label="Solver name" hint="Shown in the portal. e.g. colosseum-prod-01">
+                  <Field label="Solver name" hint="Shown in the fleet portal. e.g. colosseum-prod-01">
                     <input
                       autoFocus
                       value={name}
@@ -133,7 +213,7 @@ cargo run -p solver-main --release`
                       className="w-full bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] px-4 h-11 text-sm focus:border-[var(--brand-cyan)] outline-none"
                     />
                   </Field>
-                  <Field label="Operator email" hint="We'll send your registration receipt and ops alerts here.">
+                  <Field label="Operator email" hint="Registration receipt and fill alerts.">
                     <input
                       type="email"
                       value={email}
@@ -229,94 +309,233 @@ cargo run -p solver-main --release`
                       })}
                     </div>
                     <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">
-                      Selected {protocols.size} protocol{protocols.size === 1 ? '' : 's'}, {chains.size} chain
-                      {chains.size === 1 ? '' : 's'}. You can change these later.
+                      {protocols.size} protocol{protocols.size === 1 ? '' : 's'} · {chains.size} chain
+                      {chains.size === 1 ? '' : 's'} selected. You can change these later.
                     </p>
                   </div>
                 </div>
               )}
 
               {step === 2 && (
-                <div className="space-y-5">
-                  <div className="grid grid-cols-2 gap-3">
-                    <ModeCard
-                      active={walletMode === 'generate'}
-                      onClick={() => setWalletMode('generate')}
-                      title="Generate"
-                      description="A fresh keypair is created locally. Your seed is written to ~/.taifoon/solver.toml."
-                      tone="cyan"
-                    />
-                    <ModeCard
-                      active={walletMode === 'import'}
-                      onClick={() => setWalletMode('import')}
-                      title="Import"
-                      description="Paste an existing private key. Useful when re-onboarding an existing solver."
-                      tone="violet"
-                    />
+                <div className="space-y-6">
+                  {/* Key authority model */}
+                  <div>
+                    <SectionLabel>Signing mode — Taifoon never holds your private key</SectionLabel>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <ModeCard
+                        active={signingMode === 'self_hosted'}
+                        onClick={() => setSigningMode('self_hosted')}
+                        title="Self-hosted"
+                        description="Run the solver binary on your own machine. You sign all fills locally. Full custody."
+                        tone="cyan"
+                        badge="Recommended"
+                      />
+                      <ModeCard
+                        active={signingMode === 'remote_signer'}
+                        onClick={() => setSigningMode('remote_signer')}
+                        title="Remote signer"
+                        description="Taifoon builds unsigned transactions. Your local webhook approves each fill. Non-custodial."
+                        tone="violet"
+                        badge="Non-custodial"
+                      />
+                      <ModeCard
+                        active={signingMode === 'session_key'}
+                        onClick={() => setSigningMode('session_key')}
+                        title="Safe session key"
+                        description="Deploy a Safe multisig. Grant Taifoon a scoped session key (fill-functions only, spend cap)."
+                        tone="cyan"
+                        badge="DeFi-native"
+                      />
+                    </div>
                   </div>
 
-                  {walletMode === 'generate' && (
-                    <Card padding="md" className="bg-[var(--bg-raised)]">
-                      <CardHeader title="Preview address" />
-                      <div className="space-y-2 font-mono text-xs">
-                        <div className="flex justify-between gap-4">
-                          <span className="text-[var(--text-tertiary)]">EVM</span>
-                          <span className="text-[var(--brand-cyan)] truncate">{generatedWallet.address}</span>
-                        </div>
-                        <div className="flex justify-between gap-4">
-                          <span className="text-[var(--text-tertiary)]">Solana</span>
-                          <span className="text-[var(--brand-violet)] truncate">{generatedWallet.solana}</span>
-                        </div>
-                      </div>
-                      <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">
-                        This is a preview only. Your real wallet is generated on-device when you run the CLI.
-                      </p>
-                    </Card>
-                  )}
+                  {/* EVM address — always required */}
+                  <Field
+                    label="Your EVM address"
+                    hint="This address receives 70% of the TSUL donut on every fill — perpetually, on-chain."
+                  >
+                    <input
+                      value={evmAddress}
+                      onChange={(e) => {
+                        setEvmAddress(e.target.value)
+                        setAddressError(null)
+                      }}
+                      onBlur={() => {
+                        if (evmAddress && !isValidEvm(evmAddress))
+                          setAddressError('Must be a valid 0x… EVM address (42 chars)')
+                      }}
+                      placeholder="0x…"
+                      spellCheck={false}
+                      autoComplete="off"
+                      className="w-full bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] px-4 h-11 text-sm font-mono focus:border-[var(--brand-cyan)] outline-none"
+                    />
+                    {addressError && (
+                      <p className="mt-1 text-[11px] text-[var(--danger)]">{addressError}</p>
+                    )}
+                  </Field>
 
-                  {walletMode === 'import' && (
+                  {/* Solana address — optional */}
+                  <Field
+                    label="Solana address (optional)"
+                    hint="Required only for Mayan Swift Solana-side fills."
+                  >
+                    <input
+                      value={solanaAddress}
+                      onChange={(e) => setSolanaAddress(e.target.value)}
+                      placeholder="Base58 pubkey…"
+                      spellCheck={false}
+                      autoComplete="off"
+                      className="w-full bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] px-4 h-11 text-sm font-mono focus:border-[var(--brand-cyan)] outline-none"
+                    />
+                  </Field>
+
+                  {/* Mode-specific fields */}
+                  {signingMode === 'remote_signer' && (
                     <Field
-                      label="Private key"
-                      hint="Hex EVM key or Solana base58 — never leaves your machine."
+                      label="Signer webhook URL"
+                      hint="Your local signer endpoint. Receives POST {calldata, to, value} → returns {signature}."
                     >
                       <input
-                        type="password"
-                        value={importKey}
-                        onChange={(e) => setImportKey(e.target.value)}
-                        placeholder="0x… or 5J…"
+                        value={webhookUrl}
+                        onChange={(e) => setWebhookUrl(e.target.value)}
+                        placeholder="http://localhost:9000/sign"
+                        spellCheck={false}
+                        className="w-full bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] px-4 h-11 text-sm font-mono focus:border-[var(--brand-violet)] outline-none"
+                      />
+                    </Field>
+                  )}
+
+                  {signingMode === 'session_key' && (
+                    <Field
+                      label="Safe address"
+                      hint="The Safe multisig you control. You add Taifoon's session key as a module with restricted selectors."
+                    >
+                      <input
+                        value={safeAddress}
+                        onChange={(e) => setSafeAddress(e.target.value)}
+                        placeholder="0x… Safe address"
+                        spellCheck={false}
                         className="w-full bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] px-4 h-11 text-sm font-mono focus:border-[var(--brand-cyan)] outline-none"
                       />
                     </Field>
                   )}
+
+                  {/* TSUL info box */}
+                  <div className="rounded-[var(--r-md)] border border-[var(--solana-mint)]/20 bg-[var(--solana-mint)]/5 px-4 py-3">
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--solana-mint)] mb-1.5 font-bold">
+                      TSUL Rule #4
+                    </div>
+                    <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+                      From the moment your address is registered, 70% of every 49 bps fill fee routes
+                      to your wallet automatically via{' '}
+                      <code className="font-mono text-[var(--brand-cyan)]">BuildersRegistry.recordRevenueTouch()</code>.
+                      Perpetual. Irrevocable. No claim required — push-based.
+                    </p>
+                  </div>
                 </div>
               )}
 
               {step === 3 && (
                 <div className="space-y-5">
-                  <div className="grid grid-cols-3 gap-3">
-                    <Summary label="Solver" value={name || '—'} />
-                    <Summary label="Chains" value={Array.from(chains).join(', ')} />
-                    <Summary label="Protocols" value={`${protocols.size} selected`} />
-                  </div>
-                  <Snippet code={launchCmd} lang="bash" />
-                  <Card padding="md" className="bg-[var(--bg-raised)]">
-                    <CardHeader title="What happens when you run this" />
-                    <ol className="space-y-2 text-sm text-[var(--text-secondary)] list-none pl-0">
-                      <Step n={1}>
-                        The solver binary starts and connects to the Genome SSE intent stream.
-                        Your EVM keypair signs fill transactions on-chain.
-                      </Step>
-                      <Step n={2}>
-                        The built-in API server starts on port 8082. Point your dashboard to{' '}
-                        <code className="font-mono text-[var(--brand-cyan)]">SOLVER_API_INTERNAL_URL=http://localhost:8082</code>.
-                      </Step>
-                      <Step n={3}>
-                        Open your portal at{' '}
-                        <code className="font-mono text-[var(--brand-cyan)]">/portal/&lt;your-address&gt;</code>{' '}
-                        to watch the live intent stream, fills, and P&amp;L.
-                      </Step>
-                    </ol>
-                  </Card>
+                  {!provisionResult ? (
+                    <>
+                      <div className="grid grid-cols-3 gap-3">
+                        <Summary label="Solver" value={name || '—'} />
+                        <Summary label="Chains" value={Array.from(chains).join(', ')} />
+                        <Summary label="Protocols" value={`${protocols.size} selected`} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Summary label="EVM Address" value={evmAddress ? `${evmAddress.slice(0, 10)}…${evmAddress.slice(-6)}` : '—'} />
+                        <Summary label="Signing Mode" value={signingMode.replace('_', ' ')} />
+                      </div>
+
+                      <Snippet code={launchCmd} lang="bash" />
+
+                      {signingMode !== 'self_hosted' && (
+                        <Card padding="md" className="bg-[var(--bg-raised)]">
+                          <CardHeader title="What happens when you click Register" />
+                          <ol className="space-y-2 text-sm text-[var(--text-secondary)] list-none pl-0">
+                            <Step n={1}>
+                              Your address is registered in the Taifoon fleet. Your{' '}
+                              <code className="font-mono text-[var(--brand-cyan)]">solver_id</code>{' '}
+                              is the first 8 hex chars of your address.
+                            </Step>
+                            <Step n={2}>
+                              You get a one-time API token for your portal. Save it — it won&apos;t be shown again.
+                            </Step>
+                            <Step n={3}>
+                              TSUL donut routing activates: every fill tied to your address credits 70% to you on-chain.
+                            </Step>
+                          </ol>
+                        </Card>
+                      )}
+
+                      {signingMode === 'self_hosted' && (
+                        <Card padding="md" className="bg-[var(--bg-raised)]">
+                          <CardHeader title="Self-hosted: your machine, your key" />
+                          <ol className="space-y-2 text-sm text-[var(--text-secondary)] list-none pl-0">
+                            <Step n={1}>
+                              Your private key never leaves your machine. Store it in macOS Keychain
+                              or pass via <code className="font-mono text-[var(--brand-cyan)]">SOLVER_PRIVATE_KEY</code>.
+                            </Step>
+                            <Step n={2}>
+                              Register below to join the fleet dashboard and activate TSUL donut routing for your address.
+                            </Step>
+                            <Step n={3}>
+                              Run the command above. Your portal goes live as soon as the first intent is detected.
+                            </Step>
+                          </ol>
+                        </Card>
+                      )}
+
+                      {provisionError && (
+                        <div className="rounded-[var(--r-md)] border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-4 py-3 text-[12px] text-[var(--danger)] font-mono">
+                          {provisionError}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    /* Post-provision success screen */
+                    <div className="space-y-4">
+                      <div className="rounded-[var(--r-md)] border border-[var(--solana-mint)]/40 bg-[var(--solana-mint)]/5 px-5 py-4">
+                        <div className="text-[var(--solana-mint)] text-sm font-bold mb-1">
+                          ✓ Registered — solver_id: {provisionResult.solver_id}
+                        </div>
+                        <p className="text-[12px] text-[var(--text-secondary)]">
+                          {provisionResult.tsul_note}
+                        </p>
+                      </div>
+
+                      <Card padding="md" className="bg-[var(--bg-raised)]">
+                        <CardHeader title="Your API token — save this now" />
+                        <div className="font-mono text-[11px] bg-black/30 rounded px-3 py-2 break-all text-[var(--brand-cyan)] border border-[var(--border-subtle)]">
+                          {provisionResult.api_token}
+                        </div>
+                        <p className="mt-2 text-[11px] text-[var(--danger)]">
+                          This token is shown once and not stored. Use it as <code>SOLVER_API_TOKEN</code> env var.
+                        </p>
+                      </Card>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <a
+                          href={provisionResult.portal_url}
+                          className="block rounded-[var(--r-md)] border border-[var(--brand-blue)]/30 bg-[var(--brand-blue)]/5 px-4 py-3 text-center hover:border-[var(--brand-blue)] transition-all"
+                        >
+                          <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Solver Portal</div>
+                          <div className="font-mono text-[12px] text-[var(--brand-blue)]">/portal/{provisionResult.solver_id}</div>
+                        </a>
+                        <a
+                          href={provisionResult.watch_url}
+                          className="block rounded-[var(--r-md)] border border-[var(--solana-mint)]/30 bg-[var(--solana-mint)]/5 px-4 py-3 text-center hover:border-[var(--solana-mint)] transition-all"
+                        >
+                          <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Wallet Watch</div>
+                          <div className="font-mono text-[12px] text-[var(--solana-mint)] truncate">/watch?address=…</div>
+                        </a>
+                      </div>
+
+                      <Snippet code={launchCmd} lang="bash" />
+                    </div>
+                  )}
                 </div>
               )}
             </StepBody>
@@ -338,21 +557,39 @@ cargo run -p solver-main --release`
                 >
                   CONTINUE →
                 </Button>
+              ) : provisionResult ? (
+                <Button
+                  variant="mint"
+                  size="md"
+                  onClick={() => router.push(`/portal/${provisionResult.solver_id}`)}
+                >
+                  OPEN MY PORTAL →
+                </Button>
               ) : (
                 <Button
                   variant="mint"
                   size="md"
-                  onClick={() => router.push('/portal/19b3d79a')}
+                  disabled={provisioning || !canAdvance}
+                  onClick={handleProvision}
                 >
-                  VIEW LIVE SOLVER →
+                  {provisioning ? 'REGISTERING…' : 'REGISTER & LAUNCH →'}
                 </Button>
               )}
             </div>
           </Card>
 
           <p className="mt-6 text-center text-xs text-[var(--text-tertiary)]">
-            Need help? <a href="mailto:hello@taifoon.dev" className="text-[var(--brand-cyan)] hover:underline">hello@taifoon.dev</a> · or DM
-            <a href="https://github.com/yawningmonsoon" target="_blank" rel="noreferrer" className="text-[var(--brand-cyan)] hover:underline ml-1">
+            Need help?{' '}
+            <a href="mailto:hello@taifoon.dev" className="text-[var(--brand-cyan)] hover:underline">
+              hello@taifoon.dev
+            </a>{' '}
+            · DM{' '}
+            <a
+              href="https://github.com/yawningmonsoon"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--brand-cyan)] hover:underline ml-1"
+            >
               yawningmonsoon
             </a>
           </p>
@@ -397,33 +634,37 @@ function ModeCard({
   title,
   description,
   tone,
+  badge,
 }: {
   active: boolean
   onClick: () => void
   title: string
   description: string
   tone: 'cyan' | 'violet'
+  badge?: string
 }) {
   const c = tone === 'cyan' ? 'var(--brand-cyan)' : 'var(--brand-violet)'
+  const hex = tone === 'cyan' ? '#00D9FF' : '#9945FF'
   return (
     <button
       onClick={onClick}
-      className={`text-left p-5 rounded-[var(--r-lg)] border transition-all ${
+      className={`text-left p-4 rounded-[var(--r-lg)] border transition-all relative ${
         active ? '' : 'border-[var(--border-default)] bg-[var(--bg-raised)] hover:border-[var(--border-strong)]'
       }`}
-      style={
-        active
-          ? { borderColor: c, background: `${c === 'var(--brand-cyan)' ? '#00D9FF' : '#9945FF'}10` }
-          : undefined
-      }
+      style={active ? { borderColor: c, background: `${hex}10` } : undefined}
     >
-      <div
-        className="text-base font-bold mb-1"
-        style={{ color: active ? c : 'var(--text-primary)' }}
-      >
+      {badge && (
+        <div
+          className="absolute top-2 right-2 text-[8px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+          style={{ color: c, background: `${hex}20` }}
+        >
+          {badge}
+        </div>
+      )}
+      <div className="text-sm font-bold mb-1" style={{ color: active ? c : 'var(--text-primary)' }}>
         {title}
       </div>
-      <div className="text-xs text-[var(--text-secondary)] leading-relaxed">{description}</div>
+      <div className="text-[11px] text-[var(--text-secondary)] leading-relaxed">{description}</div>
     </button>
   )
 }

@@ -12,6 +12,9 @@ use axum::{
     middleware::{self, Next},
     body::Body,
 };
+
+pub mod hosting;
+use hosting::{HostingRegistry, HostingRegistryState};
 use wallet_manager::WalletManager;
 use portfolio_sidecar::{ActionLogEntry, PortfolioSidecar, rebalancer::BridgeAction};
 use futures::stream::{Stream, StreamExt};
@@ -186,6 +189,10 @@ pub struct ApiState {
     /// inject after the router is built.
     lambda_controller:
         std::sync::OnceLock<Arc<executor::LambdaController>>,
+    /// Hosting registry — tracks all provisioned solvers under the common
+    /// hosting framework. Each registered address receives 70% of the TSUL
+    /// donut on every fill. Lazy-init on first use (path from HOSTING_DB_PATH).
+    hosting_registry: std::sync::OnceLock<HostingRegistryState>,
 }
 
 /// Main solver API
@@ -244,8 +251,24 @@ impl SolverApi {
                 pnl_cache: Arc::new(RwLock::new(PnlCache::default())),
                 sidecar: std::sync::OnceLock::new(),
                 lambda_controller: std::sync::OnceLock::new(),
+                hosting_registry: std::sync::OnceLock::new(),
             }),
         }
+    }
+
+    /// Get or lazily-initialize the hosting registry. Path defaults to
+    /// `./outcomes/hosting.sqlite` but can be overridden via `HOSTING_DB_PATH`.
+    fn hosting_registry(&self) -> HostingRegistryState {
+        self.state.hosting_registry.get_or_init(|| {
+            let path = std::env::var("HOSTING_DB_PATH")
+                .unwrap_or_else(|_| "./outcomes/hosting.sqlite".to_string());
+            Arc::new(
+                HostingRegistry::new(&path).unwrap_or_else(|e| {
+                    tracing::warn!("[hosting] failed to open {} ({}), falling back to :memory:", path, e);
+                    HostingRegistry::new(":memory:").expect("in-memory hosting registry")
+                })
+            )
+        }).clone()
     }
 
     /// Inject the `LambdaController` so the Claims-tab retry endpoint can fire
@@ -318,10 +341,21 @@ impl SolverApi {
             .route("/api/solver/pnl", get(pnl_handler))
             .with_state(self.state.clone());
 
+        // Hosting registry routes — public read + provision (no auth).
+        // Operator-only mutation (pause/delete) would require auth but isn't
+        // needed for the demo.
+        let registry = self.hosting_registry();
+        let hosting_api = Router::new()
+            .route("/api/hosting/provision", post(hosting::provision_handler))
+            .route("/api/hosting/solvers", get(hosting::list_solvers_handler))
+            .route("/api/hosting/solvers/:solver_id", get(hosting::get_solver_handler))
+            .with_state(registry);
+
         Router::new()
             .route("/health", get(health_handler))
             .merge(solver_api)
             .merge(public_api)
+            .merge(hosting_api)
             .layer(tower_http::cors::CorsLayer::permissive())
     }
 
