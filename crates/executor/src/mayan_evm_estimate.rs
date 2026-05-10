@@ -186,6 +186,16 @@ impl MayanEvmEstimateAdapter {
     }
 
     fn build_order_params(&self, intent: &Intent) -> Result<MayanForwarder::OrderParams> {
+        // mayan_random is required: it's part of the orderId hash. A zero random
+        // produces the wrong orderId, the on-chain hash check fails, and the fill
+        // reverts. Bail early with a clear message rather than wasting an eth_call.
+        if intent.mayan_random.is_none() {
+            anyhow::bail!(
+                "mayan_random missing for {} — on-chain calldata decode likely failed; cannot build valid orderId",
+                intent.id
+            );
+        }
+
         let trader_str = intent.trader.as_deref().unwrap_or(&intent.depositor);
         let trader = address_to_bytes32(trader_str)?;
         let token_out = address_to_bytes32(&intent.dst_token)?;
@@ -473,6 +483,9 @@ mod tests {
             swift_dest_chain_wormhole_id: Some(30),
             trader: Some("0x6a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d".into()),
             deadline: Some(1745931634),
+            // mayan_random is required for build_order_params (part of orderId hash).
+            mayan_random: Some("0x0102030405060708091011121314151617181920212223242526272829303132".into()),
+            mayan_min_amount_out: Some(99_850_000),
             ..Default::default()
         }
     }
