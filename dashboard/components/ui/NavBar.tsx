@@ -4,10 +4,11 @@ import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import { cn } from './cn'
 
-const links = [
+const links: { href: string; label: string; volt?: boolean }[] = [
   { href: '/', label: 'HOME' },
   { href: '/portal', label: 'PORTAL' },
   { href: '/analytics', label: 'ANALYTICS' },
+  { href: '/builders/bounties', label: 'ROUTES', volt: true },
   { href: '/t3rn', label: 'LWC' },
   { href: '/onboard', label: 'ONBOARD' },
   { href: '/docs', label: 'DOCS' },
@@ -44,8 +45,10 @@ export function NavBar() {
                 className={cn(
                   'font-mono text-[13px] tracking-[0.16em] transition-colors',
                   active
-                    ? 'text-[var(--brand-blue)]'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                    ? l.volt ? 'text-[var(--solana-mint)]' : 'text-[var(--brand-blue)]'
+                    : l.volt
+                      ? 'text-[var(--solana-mint)]/70 hover:text-[var(--solana-mint)]'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
                 )}
               >
                 {l.label}
@@ -116,8 +119,8 @@ export function NavBar() {
                   className={cn(
                     'font-mono text-[13px] tracking-[0.16em] transition-colors py-1',
                     active
-                      ? 'text-[var(--brand-blue)]'
-                      : 'text-[var(--text-secondary)]',
+                      ? l.volt ? 'text-[var(--solana-mint)]' : 'text-[var(--brand-blue)]'
+                      : l.volt ? 'text-[var(--solana-mint)]/70' : 'text-[var(--text-secondary)]',
                   )}
                 >
                   {active ? `[ ${l.label} ]` : l.label}
