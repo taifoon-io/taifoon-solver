@@ -201,19 +201,16 @@ impl MayanEvmEstimateAdapter {
         let token_out = address_to_bytes32(&intent.dst_token)?;
         let dest_addr = address_to_bytes32(&intent.recipient)?;
 
-        let amount_in = parse_u64_amount(&intent.amount, "amount")?;
         // Prefer the on-chain uint64 decoded by fetch_mayan_order_params — it is in the
         // token's native decimals (e.g. 6 for USDC) and must match the on-chain value
-        // exactly for the orderId hash check to pass. The explorer API's `toAmount` is a
-        // human-readable decimal that parse_u64_amount would incorrectly scale by 1e18.
-        let min_amount_out = if let Some(raw) = intent.mayan_min_amount_out {
-            raw
-        } else {
-            match intent.output_amount.as_deref() {
-                Some(s) => parse_u64_amount(s, "output_amount")?,
-                None => amount_in,
-            }
-        };
+        // exactly for the orderId hash check to pass.
+        //
+        // When mayan_min_amount_out is None (on-chain value was 0 = no minimum, or the RPC
+        // calldata decode returned only partial results), use 0. The explorer API's `toAmount`
+        // is a human-readable decimal (e.g. "659.52" USDC) that parse_u64_amount would
+        // incorrectly scale by 1e18 — using it here would produce u64::MAX → revert.
+        // If mayan_random was also None, build_order_params already bailed before reaching here.
+        let min_amount_out = intent.mayan_min_amount_out.unwrap_or(0);
 
         let dst_chain_wh = intent.swift_dest_chain_wormhole_id.unwrap_or_else(|| {
             match intent.dst_chain {
@@ -413,36 +410,6 @@ fn address_to_bytes32(addr: &str) -> Result<FixedBytes<32>> {
     let mut arr = [0u8; 32];
     arr[12..].copy_from_slice(&bytes);
     Ok(FixedBytes(arr))
-}
-
-fn parse_u64_amount(s: &str, field: &str) -> Result<u64> {
-    // Mayan's OrderParams uses uint64 for amounts (their on-chain norm). USDC
-    // at 6 decimals fits comfortably (max ~1.8e13 USD). Native ETH at 18
-    // decimals would overflow above ~18 ETH; we cap and warn.
-    //
-    // MayanPoller stores human-readable decimals from the explorer API (e.g.
-    // "0.0216374004" ETH). Detect the decimal point and convert to 18-decimal
-    // wei representation so the u64 parse succeeds.
-    let s = if s.contains('.') {
-        // Parse as f64 and convert to wei (18 decimals). Precision loss above
-        // ~18 ETH but acceptable for amount-in estimation.
-        let f: f64 = s.parse().map_err(|e| anyhow::anyhow!("invalid {} decimal: {}", field, e))?;
-        let wei = (f * 1e18) as u128;
-        format!("{}", wei)
-    } else {
-        s.to_string()
-    };
-    let big = U256::from_str_radix(&s, 10)
-        .map_err(|e| anyhow::anyhow!("invalid {}: {}", field, e))?;
-    if big > U256::from(u64::MAX) {
-        warn!(
-            "Mayan amount field {} exceeds u64::MAX ({}); capping at u64::MAX. \
-             18-decimal native amounts above ~18 ETH need a different ABI shape.",
-            field, big
-        );
-        return Ok(u64::MAX);
-    }
-    Ok(big.try_into().unwrap_or(u64::MAX))
 }
 
 async fn emit_attempt(

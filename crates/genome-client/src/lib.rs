@@ -1551,18 +1551,19 @@ pub struct MayanOrderParams {
 ///   slot 1: amountIn (uint256)
 ///   slot 2: payloadType (uint8)
 ///   slot 3: trader (bytes32)
-///   slot 4: tokenOut (bytes32)
+///   slot 4: destAddr (bytes32)
 ///   slot 5: destChainId (uint16)
-///   slot 6: destAddr (bytes32)
-///   slot 7: minAmountOut (uint64)
-///   slot 8: gasDrop (uint64)
-///   slot 9: cancelFee (uint64)
-///  slot 10: refundFee (uint64)
-///  slot 11: deadline (uint64)
-///  slot 12: referrerAddr (bytes32)
+///   slot 6: referrerAddr (bytes32)
+///   slot 7: tokenOut (bytes32)
+///   slot 8: minAmountOut (uint64)
+///   slot 9: gasDrop (uint64)
+///  slot 10: cancelFee (uint64)
+///  slot 11: refundFee (uint64)
+///  slot 12: deadline (uint64)
 ///  slot 13: referrerBps (uint8)
 ///  slot 14: auctionMode (uint8)
 ///  slot 15: random (bytes32)
+/// Matches MayanSwiftCreate::Order field order in rebalancer.rs (ABI-verified).
 pub async fn fetch_mayan_order_params(
     http: &reqwest::Client,
     src_chain: u64,
