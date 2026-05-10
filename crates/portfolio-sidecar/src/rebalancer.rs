@@ -1078,6 +1078,13 @@ impl Rebalancer {
 
         // Send ETH with the swap (router accepts ETH and wraps it internally)
         let router: Address = router_addr.parse().context("parse router")?;
+
+        // Pre-flight guard: router must be an allowed Uniswap router;
+        // recipient in swap params is solver_addr (enforces no external fund drain).
+        TxGuard::from_deployments(self.solver_addr)
+            .enforce(router, &swap_calldata, &[self.solver_addr])
+            .context("tx_guard blocked ETH→USDC swap")?;
+
         let wallet = EthereumWallet::from(self.signer.clone());
         let wp = ProviderBuilder::new().with_recommended_fillers().wallet(wallet.clone())
             .on_http(rpc.parse().context("parse rpc")?);
