@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TAIFOON / SOLVERS · solver.taifoon.dev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ════════════════════════════════════════════════════════════════
+     solver.taifoon.dev — built against /dashboard/DESIGN_SYSTEM.md
+     Pure-black canvas. Azure-dominant. Mint + violet as Solana flair.
+     Self-contained — no external CSS/JS. Drop-in deployable.
+     ════════════════════════════════════════════════════════════════ */
+  :root {
+    /* surfaces */
+    --bg-base:     #000000;
+    --bg-elevated: #050507;
+    --bg-raised:   #0A0A0F;
+    --bg-overlay:  #12121A;
+    /* text */
+    --text-primary:   #E6F0F7;
+    --text-secondary: rgba(230,240,247,0.6);
+    --text-tertiary:  rgba(230,240,247,0.4);
+    --text-disabled:  rgba(230,240,247,0.2);
+    /* brand */
+    --brand-blue:    #3DA5FF;
+    --solana-mint:   #14F195;
+    --solana-violet: #9945FF;
+    /* semantic */
+    --success: #14F195;
+    --warning: #FFB454;
+    --danger:  #FF6B6B;
+    --info:    #3DA5FF;
+    /* borders */
+    --border-hairline: rgba(230,240,247,0.06);
+    --border-soft:     rgba(230,240,247,0.10);
+    --border-emph:     rgba(230,240,247,0.18);
+    /* type */
+    --font-sans: 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    /* motion */
+    --dur-fast: 120ms;
+    --dur-base: 200ms;
+    --dur-slow: 400ms;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg-base); color: var(--text-primary); margin: 0; }
+  body { font-family: var(--font-sans); font-size: 15px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  a { color: inherit; text-decoration: none; }
+
+  /* ── ambient layers (slow infinite, taifoon.io vocabulary, v4 3D scene) ── */
+
+  /* v4: single-camera 3D wrapper — perspective: 1400px, camera above center */
+  .tf-scene {
+    position: absolute; inset: 0;
+    perspective: 1400px;
+    perspective-origin: 50% 32%;
+    pointer-events: none;
+  }
+
+  /* overhead grid — tilted 1.7° on X, 80px cells, 180s drift */
+  .tf-grid { position: absolute; inset: -10% -10% -10% -10%;
+    background-image:
+      linear-gradient(rgba(230,240,247,0.024) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(230,240,247,0.024) 1px, transparent 1px);
+    background-size: 80px 80px;
+    transform: translateZ(-300px) rotateX(1.7deg);
+    animation: tf-grid-drift 180s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes tf-grid-drift {
+    from { background-position: 0 0; }
+    to   { background-position: 80px 80px; }
+  }
+
+  /* perspective floor — 55° X-tilt, streams toward camera */
+  .tf-floor { position: absolute; inset: -10% -20% -10% -20%;
+    background-image:
+      linear-gradient(rgba(61,165,255,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(61,165,255,0.05) 1px, transparent 1px);
+    background-size: 80px 80px;
+    transform: translateZ(-100px) rotateX(55deg);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 40%, black 70%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, black 40%, black 70%, transparent 100%);
+    animation: tf-floor-flow 12s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes tf-floor-flow {
+    from { background-position: 0 0; }
+    to   { background-position: 0 80px; }
+  }
+
+  /* orbital ring A — azure, 25° X-tilt, 90s CCW */
+  .tf-orbit-a-wrap { position: absolute; top: 50%; left: 78%;
+    width: 700px; height: 700px;
+    transform: translate(-50%, -50%) translateZ(-40px) rotateX(25deg);
+  }
+  .tf-orbit-a { position: absolute; inset: 0; border-radius: 50%;
+    border: 1px solid rgba(61,165,255,0.32);
+    animation: tf-orbit-ccw 90s linear infinite;
+  }
+
+  /* orbital ring B — mint, -15° X +8° Y, 70s CW */
+  .tf-orbit-b-wrap { position: absolute; top: 50%; left: 78%;
+    width: 520px; height: 520px;
+    transform: translate(-50%, -50%) translateZ(0px) rotateX(-15deg) rotateY(8deg);
+  }
+  .tf-orbit-b { position: absolute; inset: 0; border-radius: 50%;
+    border: 1px solid rgba(20,241,149,0.42);
+    animation: tf-orbit-cw 70s linear infinite;
+  }
+
+  /* inner accent ring */
+  .tf-orbit-c-wrap { position: absolute; top: 50%; left: 78%;
+    width: 360px; height: 360px;
+    transform: translate(-50%, -50%) translateZ(-40px) rotateX(25deg);
+  }
+  .tf-orbit-c { position: absolute; inset: 0; border-radius: 50%;
+    border: 1px solid rgba(61,165,255,0.15);
+    animation: tf-orbit-ccw 130s linear infinite;
+  }
+
+  /* directional rim-light (upper-right) */
+  .tf-rim-light { position: absolute; inset: 0;
+    background: radial-gradient(60% 50% at 82% 12%, rgba(61,165,255,0.08) 0%, transparent 100%);
+    pointer-events: none;
+  }
+  /* cool fog (lower-left, Solana plane) */
+  .tf-cool-fog { position: absolute; inset: 0;
+    background: radial-gradient(55% 50% at 12% 88%, rgba(20,241,149,0.05) 0%, transparent 100%);
+    pointer-events: none;
+  }
+
+  @keyframes tf-orbit-ccw { to { transform: rotate(-360deg) } }
+  @keyframes tf-orbit-cw  { to { transform: rotate(360deg) } }
+
+  /* section coordinate grid (unchanged) */
+  .tf-coordinate-grid { position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(230,240,247,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(230,240,247,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    animation: tf-coord-drift 60s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes tf-coord-drift {
+    from { background-position: 0 0 } to { background-position: 60px 60px } }
+
+  .tf-breathe { animation: tf-singularity 6s var(--ease-out) infinite; }
+  @keyframes tf-singularity {
+    0%,100% { opacity: 0.55 } 50% { opacity: 1 } }
+
+  .tf-gradient-silver {
+    background: linear-gradient(180deg, #FFFFFF 0%, #E6F0F7 50%, rgba(230,240,247,0.55) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    background-size: 200% 200%; animation: tf-shimmer 8s ease-in-out infinite;
+  }
+  .tf-gradient-solana {
+    background: linear-gradient(135deg, #3DA5FF 0%, #14F195 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    background-size: 200% 200%; animation: tf-shimmer 8s ease-in-out infinite;
+  }
+  @keyframes tf-shimmer {
+    0%,100% { background-position: 0% 50% } 50% { background-position: 100% 50% } }
+
+  /* ── type primitives ──────────────────────────────────────── */
+  .tf-display { font-family: var(--font-sans); font-weight: 300;
+    line-height: 0.98; letter-spacing: -0.02em; }
+  .tf-tag { font-family: var(--font-mono); font-weight: 500; font-size: 12px;
+    letter-spacing: 0.25em; color: var(--brand-blue); text-transform: uppercase; }
+  .tf-tag.mint   { color: var(--solana-mint); }
+  .tf-tag.violet { color: var(--solana-violet); }
+  .tf-tag.muted  { color: var(--text-tertiary); }
+  .tf-phase { font-family: var(--font-mono); font-weight: 500; font-size: 11px;
+    letter-spacing: 0.25em; text-transform: uppercase; color: var(--brand-blue); }
+  .tf-phase.mint { color: var(--solana-mint); }
+  .tf-phase.violet { color: var(--solana-violet); }
+  .tf-stat-prefix { font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-tertiary); letter-spacing: 0.05em; }
+  .tf-stat-value  { font-family: var(--font-mono); font-size: 26px;
+    color: var(--text-primary); letter-spacing: 0.01em; font-weight: 500; }
+
+  /* ── nav ───────────────────────────────────────────────────── */
+  .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+    height: 56px; background: rgba(0,0,0,0.78); backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--border-hairline);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 28px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand-mark { width: 14px; height: 14px; background: var(--brand-blue);
+    box-shadow: 0 0 14px rgba(61,165,255,0.5); position: relative; }
+  .brand-mark::after { content: ''; position: absolute; inset: 0;
+    background: var(--solana-mint); transform: translate(4px,4px); opacity: 0.85;
+    mix-blend-mode: screen; }
+  .brand-name { font: 500 12px var(--font-mono); letter-spacing: 0.34em;
+    color: var(--text-primary); }
+  .brand-name .slash { color: var(--text-tertiary); margin: 0 8px; }
+  .brand-name .solv  { color: var(--brand-blue); }
+  .nav-links { display: flex; gap: 32px; }
+  .nav-links a { font: 500 11px var(--font-mono); letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--text-secondary);
+    transition: color var(--dur-fast); }
+  .nav-links a:hover { color: var(--text-primary); }
+  .nav-side { display: flex; gap: 12px; align-items: center; }
+  .nav-status { display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 10px; border: 1px solid var(--border-soft);
+    font: 500 10px var(--font-mono); letter-spacing: 0.20em; color: var(--text-tertiary);
+    text-transform: uppercase; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--solana-mint);
+    box-shadow: 0 0 8px var(--solana-mint); animation: tf-singularity 2s infinite; }
+
+  /* ── button ────────────────────────────────────────────────── */
+  .btn { display: inline-flex; align-items: center; gap: 10px;
+    padding: 10px 18px; background: transparent; cursor: pointer;
+    font: 500 11px var(--font-mono); letter-spacing: 0.20em;
+    text-transform: uppercase; transition: all var(--dur-base) var(--ease-out);
+    border: 1px solid var(--brand-blue); color: var(--brand-blue); }
+  .btn:hover { background: rgba(61,165,255,0.06); }
+  .btn .arr { transition: transform var(--dur-base); }
+  .btn:hover .arr { transform: translateX(4px); }
+  .btn.secondary { border-color: var(--border-emph); color: var(--text-primary); }
+  .btn.secondary:hover { background: rgba(230,240,247,0.04); }
+  .btn.ghost { border-color: transparent; color: var(--text-secondary); }
+  .btn.ghost:hover { color: var(--text-primary); border-color: var(--border-soft); }
+  .btn.mint { border-color: var(--solana-mint); color: var(--solana-mint); }
+  .btn.mint:hover { background: rgba(20,241,149,0.06); }
+  .btn.lg { padding: 14px 24px; font-size: 12px; }
+
+  /* ── badge ─────────────────────────────────────────────────── */
+  .badge { display: inline-flex; align-items: center; gap: 7px;
+    padding: 4px 9px; border: 1px solid var(--border-soft);
+    font: 500 10px var(--font-mono); letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--text-secondary); }
+  .badge.success { border-color: rgba(20,241,149,0.40); color: var(--solana-mint); }
+  .badge.info    { border-color: rgba(61,165,255,0.40); color: var(--brand-blue); }
+  .badge.violet  { border-color: rgba(153,69,255,0.40); color: var(--solana-violet); }
+  .badge.warn    { border-color: rgba(255,180,84,0.40); color: var(--warning); }
+  .badge .b-dot  { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  /* ── card ──────────────────────────────────────────────────── */
+  .card { background: var(--bg-elevated); border: 1px solid var(--border-hairline); }
+  .card.accent { border-top: 1px solid var(--brand-blue); }
+  .card.accent.mint { border-top-color: var(--solana-mint); }
+  .card.accent.violet { border-top-color: var(--solana-violet); }
+  .card-h { padding: 22px 24px 0; }
+  .card-b { padding: 22px 24px; }
+
+  /* ── containers ────────────────────────────────────────────── */
+  .section { position: relative; padding: 110px 0; }
+  .container { max-width: 1280px; margin: 0 auto; padding: 0 28px;
+    position: relative; z-index: 2; }
+
+  h1, h2, h3 { font-family: var(--font-sans); font-weight: 300;
+    letter-spacing: -0.02em; margin: 0; }
+  .h1 { font-size: clamp(48px, 7vw, 88px); line-height: 0.98; }
+  .h2 { font-size: clamp(36px, 4.5vw, 56px); line-height: 1.0; }
+  .lede { color: var(--text-secondary); font-size: 16px; line-height: 1.6;
+    max-width: 600px; margin: 26px 0 36px; }
+
+  /* ── hero ──────────────────────────────────────────────────── */
+  .hero { min-height: calc(100vh - 56px); padding-top: 56px;
+    display: grid; align-items: center; position: relative; }
+  .hero .stage { position: absolute; inset: 0; overflow: hidden; }
+  .hero-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 60px;
+    align-items: center; }
+  .hero-cta { display: flex; gap: 12px; flex-wrap: wrap; }
+  .hero-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px;
+    margin-top: 56px; padding-top: 22px;
+    border-top: 1px solid var(--border-hairline); }
+  .hero-meta .lab { font: 500 10px var(--font-mono); letter-spacing: 0.20em;
+    text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 6px; }
+  .hero-meta .val { font: 500 18px var(--font-mono); color: var(--text-primary); }
+  .hero-meta .val.mint { color: var(--solana-mint); }
+  .hero-meta .val.blue { color: var(--brand-blue); }
+  .hero-meta .val.viol { color: var(--solana-violet); }
+
+  /* phase-field on right */
+  .pf { position: relative; width: 100%; aspect-ratio: 1; max-width: 520px;
+    margin-left: auto; }
+  .pf svg { width: 100%; height: 100%; display: block; }
+  .pf-cap { position: absolute; left: 0; right: 0; bottom: -22px; text-align: center;
+    font: 500 10px var(--font-mono); letter-spacing: 0.24em;
+    text-transform: uppercase; color: var(--text-tertiary); }
+
+  /* ── phase timeline (THE ENGINE) ───────────────────────────── */
+  .timeline { display: grid; grid-template-columns: 240px 1fr; gap: 56px;
+    margin-top: 56px; }
+  .phase-list { display: flex; flex-direction: column; gap: 0; position: sticky;
+    top: 80px; align-self: start; }
+  .phase-item { padding: 14px 0; border-top: 1px solid var(--border-hairline);
+    cursor: pointer; transition: color var(--dur-base); }
+  .phase-item:last-child { border-bottom: 1px solid var(--border-hairline); }
+  .phase-item .pn { font: 500 10px var(--font-mono); letter-spacing: 0.24em;
+    text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 4px; }
+  .phase-item .ph { font: 400 16px var(--font-sans); color: var(--text-secondary);
+    transition: color var(--dur-base); }
+  .phase-item.active .ph { color: var(--text-primary); }
+  .phase-item.active .pn { color: var(--brand-blue); }
+
+  .phase-detail { display: flex; flex-direction: column; gap: 36px; }
+  .pd-card { padding: 32px; background: var(--bg-elevated);
+    border: 1px solid var(--border-hairline);
+    border-left: 1px solid var(--brand-blue); }
+  .pd-card.mint   { border-left-color: var(--solana-mint); }
+  .pd-card.violet { border-left-color: var(--solana-violet); }
+  .pd-card .pdn { font: 500 11px var(--font-mono); letter-spacing: 0.25em;
+    text-transform: uppercase; color: var(--brand-blue); margin-bottom: 14px; }
+  .pd-card.mint   .pdn { color: var(--solana-mint); }
+  .pd-card.violet .pdn { color: var(--solana-violet); }
+  .pd-card h3 { font: 300 32px var(--font-sans); letter-spacing: -0.01em;
+    margin-bottom: 14px; }
+  .pd-card p { color: var(--text-secondary); margin: 0 0 18px; line-height: 1.6; }
+  .pd-card .code { background: #000; padding: 14px 16px;
+    font: 400 12px var(--font-mono); color: var(--text-primary);
+    line-height: 1.7; border: 1px solid var(--border-hairline); }
+  .pd-card .code .dim  { color: var(--text-tertiary); }
+  .pd-card .code .blue { color: var(--brand-blue); }
+  .pd-card .code .mint { color: var(--solana-mint); }
+  .pd-card .code .viol { color: var(--solana-violet); }
+  .pd-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
+  .pd-meta .ml { font: 500 10px var(--font-mono); letter-spacing: 0.20em;
+    text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 4px; }
+  .pd-meta .mv { font: 500 16px var(--font-mono); color: var(--text-primary); }
+  .pd-meta .mv.mint { color: var(--solana-mint); }
+  .pd-meta .mv.blue { color: var(--brand-blue); }
+
+  /* ── live ticker ───────────────────────────────────────────── */
+  .ticker { background: #000; border: 1px solid var(--border-hairline);
+    margin-top: 56px; }
+  .tk-head { display: grid; grid-template-columns: 90px 1fr 110px 100px 80px;
+    padding: 14px 20px; border-bottom: 1px solid var(--border-hairline);
+    font: 500 10px var(--font-mono); letter-spacing: 0.20em;
+    color: var(--text-tertiary); text-transform: uppercase; }
+  .tk-row { display: grid; grid-template-columns: 90px 1fr 110px 100px 80px;
+    padding: 12px 20px; border-bottom: 1px solid rgba(230,240,247,0.04);
+    font: 400 13px var(--font-mono); align-items: center;
+    transition: background var(--dur-base); }
+  .tk-row:hover { background: rgba(61,165,255,0.04); }
+  .tk-time { color: var(--text-tertiary); }
+  .tk-int  { color: var(--text-primary); }
+  .tk-int .from { color: var(--brand-blue); }
+  .tk-int .to   { color: var(--solana-mint); }
+  .tk-int .ar   { color: var(--text-tertiary); margin: 0 7px; }
+  .tk-prot { color: var(--solana-violet); font-weight: 500; font-size: 11px; letter-spacing: 0.10em; }
+  .tk-net  { color: var(--solana-mint); font-weight: 500; }
+  .tk-ms   { color: var(--text-tertiary); text-align: right; }
+
+  /* ── stat strip ────────────────────────────────────────────── */
+  .strip { display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: var(--border-hairline);
+    border: 1px solid var(--border-hairline); margin-top: 56px; }
+  .strip-cell { background: var(--bg-base); padding: 28px 22px; }
+  .strip-l { font: 500 10px var(--font-mono); letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--text-tertiary); }
+  .strip-v { font: 300 42px var(--font-sans); margin: 14px 0 4px;
+    color: var(--text-primary); letter-spacing: -0.01em; }
+  .strip-v.blue { color: var(--brand-blue); }
+  .strip-v.mint { color: var(--solana-mint); }
+  .strip-v sup  { font-size: 16px; vertical-align: top; margin-left: 2px;
+    color: var(--text-tertiary); }
+  .strip-t { font: 400 12px var(--font-mono); color: var(--text-secondary); }
+
+  /* ── protocol grid ─────────────────────────────────────────── */
+  .protocols { display: grid; grid-template-columns: repeat(6, 1fr);
+    gap: 1px; background: var(--border-hairline);
+    border: 1px solid var(--border-hairline); margin-top: 56px; }
+  .pl-cell { background: var(--bg-base); padding: 28px 16px;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+    transition: background var(--dur-base); }
+  .pl-cell:hover { background: var(--bg-elevated); }
+  .pl-mark { font: 500 11px var(--font-mono); letter-spacing: 0.06em;
+    color: var(--text-primary); }
+  .pl-name { font: 400 11px var(--font-sans); color: var(--text-secondary); }
+  .pl-meta { font: 500 9px var(--font-mono); letter-spacing: 0.20em;
+    text-transform: uppercase; color: var(--text-tertiary); }
+  /* protocol palette tags */
+  .pl-cell .pl-tag { display: inline-block; width: 6px; height: 6px; }
+  .c-across { background: #6CF9F2; }
+  .c-mayan  { background: #9945FF; }
+  .c-stargate { background: #FFB454; }
+  .c-li-fi  { background: #3DA5FF; }
+  .c-squid  { background: #00D9FF; }
+  .c-hop    { background: #C77DFF; }
+  .c-orbiter{ background: #FF6B6B; }
+  .c-hyper  { background: #14F195; }
+  .c-t3rn   { background: #E6F0F7; }
+
+  /* ── hackathon submission card ─────────────────────────────── */
+  .submit { display: grid; grid-template-columns: 1fr 1fr; gap: 50px;
+    margin-top: 56px; padding: 56px;
+    background: var(--bg-elevated); border: 1px solid var(--border-hairline);
+    border-top: 1px solid var(--solana-mint); }
+  .submit h2 { margin-bottom: 18px; }
+  .submit-meta { display: flex; flex-direction: column; gap: 1px;
+    background: var(--border-hairline); border: 1px solid var(--border-hairline); }
+  .submit-row { display: flex; justify-content: space-between; align-items: center;
+    padding: 22px 24px; background: var(--bg-base); }
+  .submit-row .l { font: 500 10px var(--font-mono); letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--text-tertiary); }
+  .submit-row .v { font: 400 22px var(--font-sans); margin-top: 4px;
+    color: var(--text-primary); letter-spacing: -0.01em; }
+  .submit-row .badge { align-self: center; }
+
+  /* ── footer ────────────────────────────────────────────────── */
+  footer { border-top: 1px solid var(--border-hairline); margin-top: 100px;
+    padding: 60px 28px 30px; background: var(--bg-base); }
+  .foot { max-width: 1280px; margin: 0 auto; display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr; gap: 50px; }
+  .foot h4 { font: 500 10px var(--font-mono); letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--text-secondary); margin: 0 0 16px; }
+  .foot a { display: block; font: 400 13px var(--font-mono);
+    color: var(--text-primary); margin-bottom: 8px; }
+  .foot a:hover { color: var(--brand-blue); }
+  .foot p { color: var(--text-secondary); font-size: 13px; line-height: 1.6;
+    max-width: 360px; }
+  .foot-bot { max-width: 1280px; margin: 50px auto 0; padding-top: 24px;
+    border-top: 1px solid var(--border-hairline); display: flex;
+    justify-content: space-between; align-items: center;
+    font: 400 11px var(--font-mono); color: var(--text-tertiary);
+    letter-spacing: 0.10em; }
+
+  @media (max-width: 960px) {
+    .hero-grid, .timeline, .submit { grid-template-columns: 1fr; }
+    .strip, .protocols { grid-template-columns: repeat(2, 1fr); }
+    .nav-links { display: none; }
+    .tk-head, .tk-row { grid-template-columns: 80px 1fr 80px;
+      font-size: 11px; }
+    .tk-prot, .tk-ms { display: none; }
+    .hero-meta { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══ NAV ═══ -->
+<nav class="nav">
+  <div class="brand">
+    <div class="brand-mark"></div>
+    <div class="brand-name">TAIFOON <span class="slash">/</span><span class="solv">SOLVERS</span></div>
+  </div>
+  <div class="nav-links">
+    <a href="#engine">The Engine</a>
+    <a href="#economy">The Economy</a>
+    <a href="#cockpit">The Cockpit</a>
+    <a href="#frontier">Frontier</a>
+  </div>
+  <div class="nav-side">
+    <div class="nav-status"><span class="dot"></span> Mainnet · 142 solvers</div>
+    <a class="btn" href="#cockpit">Open my solver <span class="arr">→</span></a>
+  </div>
+</nav>
+
+<!-- ═══ HERO ═══ -->
+<section class="hero">
+  <div class="stage" style="position:absolute;inset:0;overflow:hidden;">
+    <!-- v4: single 3D scene, one camera, one vanishing point -->
+    <div class="tf-scene">
+      <div class="tf-grid"></div>
+      <div class="tf-floor"></div>
+      <div class="tf-orbit-a-wrap"><div class="tf-orbit-a"></div></div>
+      <div class="tf-orbit-b-wrap"><div class="tf-orbit-b"></div></div>
+      <div class="tf-orbit-c-wrap"><div class="tf-orbit-c"></div></div>
+    </div>
+    <div class="tf-rim-light"></div>
+    <div class="tf-cool-fog"></div>
+  </div>
+  <div class="container">
+    <div class="hero-grid">
+      <div>
+        <div class="tf-tag" style="margin-bottom: 28px;">[ THE ENGINE ]</div>
+        <h1 class="h1 tf-display">
+          <span class="tf-gradient-silver">Cross-chain intents,</span><br/>
+          <span class="tf-gradient-solana">solved on Solana.</span>
+        </h1>
+        <p class="lede">
+          Solvers monitor every bridge mempool — Across, Mayan, LayerZero,
+          Stargate, LI.FI, Squid, Hop, Orbiter, Hyperlane, t3rn — pick the
+          fillable orders, and settle them across 54 chains under
+          Taifoon's SuperRoot proof anchor. Live on mainnet.
+        </p>
+        <div class="hero-cta">
+          <a class="btn lg mint" href="#cockpit">Open my solver <span class="arr">→</span></a>
+          <a class="btn lg secondary" href="#engine">Read the spec</a>
+        </div>
+        <div class="hero-meta">
+          <div>
+            <div class="lab">Median fill</div>
+            <div class="val mint">387ms</div>
+          </div>
+          <div>
+            <div class="lab">Solvers online</div>
+            <div class="val blue">142</div>
+          </div>
+          <div>
+            <div class="lab">Bridges covered</div>
+            <div class="val">10</div>
+          </div>
+          <div>
+            <div class="lab">Anchored to</div>
+            <div class="val">SuperRoot</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="pf">
+          <svg viewBox="0 0 600 600" preserveAspectRatio="xMidYMid meet">
+            <defs>
+              <radialGradient id="sing" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+                <stop offset="20%" stop-color="#3DA5FF" stop-opacity="0.85"/>
+                <stop offset="60%" stop-color="#3DA5FF" stop-opacity="0.18"/>
+                <stop offset="100%" stop-color="#3DA5FF" stop-opacity="0"/>
+              </radialGradient>
+              <linearGradient id="flare" x1="0%" y1="50%" x2="100%" y2="50%">
+                <stop offset="0%" stop-color="#3DA5FF" stop-opacity="0"/>
+                <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.85"/>
+                <stop offset="100%" stop-color="#3DA5FF" stop-opacity="0"/>
+              </linearGradient>
+              <filter id="glow"><feGaussianBlur stdDeviation="0.8"/></filter>
+            </defs>
+            <g stroke="rgba(61,165,255,0.10)" stroke-width="0.5" fill="none">
+              <line x1="0" y1="300" x2="600" y2="300"/>
+              <line x1="300" y1="0" x2="300" y2="600"/>
+              <line x1="0" y1="150" x2="600" y2="150"/>
+              <line x1="0" y1="450" x2="600" y2="450"/>
+              <line x1="150" y1="0" x2="150" y2="600"/>
+              <line x1="450" y1="0" x2="450" y2="600"/>
+            </g>
+            <circle cx="300" cy="300" r="300" fill="url(#sing)"/>
+            <rect x="0" y="298" width="600" height="4" fill="url(#flare)" opacity="0.85"/>
+            <g fill="none" filter="url(#glow)" id="ribA"></g>
+            <g fill="none" filter="url(#glow)" id="ribB"></g>
+            <g fill="none" filter="url(#glow)" id="ribC"></g>
+            <circle cx="300" cy="300" r="4" fill="#FFFFFF" class="tf-breathe"/>
+            <circle cx="300" cy="300" r="14" fill="none" stroke="#3DA5FF" stroke-width="0.8" opacity="0.6"/>
+            <g>
+              <circle cx="500" cy="180" r="3.5" fill="#14F195"/>
+              <text x="510" y="172" fill="rgba(20,241,149,0.7)" font-family="JetBrains Mono" font-size="8" letter-spacing="1">JUP</text>
+              <circle cx="120" cy="420" r="3" fill="#9945FF"/>
+              <text x="130" y="424" fill="rgba(153,69,255,0.7)" font-family="JetBrains Mono" font-size="8" letter-spacing="1">MAYAN</text>
+              <circle cx="450" cy="490" r="2.5" fill="#3DA5FF"/>
+              <text x="458" y="494" fill="rgba(61,165,255,0.7)" font-family="JetBrains Mono" font-size="8" letter-spacing="1">ACROSS</text>
+              <circle cx="180" cy="160" r="2.5" fill="#E6F0F7"/>
+              <text x="190" y="164" fill="rgba(230,240,247,0.6)" font-family="JetBrains Mono" font-size="8" letter-spacing="1">t3rn</text>
+            </g>
+          </svg>
+          <div class="pf-cap">SOLVER · LIQUIDITY MANIFOLD · t=now</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ THE ENGINE — phase timeline ═══ -->
+<section class="section" id="engine">
+  <div class="stage" style="position:absolute;inset:0;"><div class="tf-coordinate-grid"></div></div>
+  <div class="container">
+    <div class="tf-tag" style="margin-bottom: 18px;">[ THE ENGINE ]</div>
+    <h2 class="h2 tf-display tf-gradient-silver">Five phases.<br/>One atomic fill.</h2>
+
+    <div class="timeline">
+      <div class="phase-list">
+        <div class="phase-item active"><div class="pn">Phase 01</div><div class="ph">Detect</div></div>
+        <div class="phase-item active"><div class="pn">Phase 02</div><div class="ph">Score</div></div>
+        <div class="phase-item active"><div class="pn">Phase 03</div><div class="ph">Quote</div></div>
+        <div class="phase-item active"><div class="pn">Phase 04</div><div class="ph">Fill</div></div>
+        <div class="phase-item active"><div class="pn">Phase 05</div><div class="ph">Settle</div></div>
+      </div>
+
+      <div class="phase-detail">
+        <div class="pd-card">
+          <div class="pdn">PHASE 01 — DETECT</div>
+          <h3 class="tf-display">Mempool monitor watches every bridge.</h3>
+          <p>The mempool-monitor crate ingests intent feeds from 10 bridge protocols in parallel — Across V3, Mayan Swift, LayerZero V2, Stargate V2, LI.FI V2, Squid Router, Hop, Orbiter, Hyperlane, and t3rn LWC. Every signed order surfaces here within one block of the source chain.</p>
+          <div class="code">
+<span class="dim">// fixtures/across_v3_intents.json — 1 of 10 sources</span><br/>
+<span class="blue">intent</span> 0xfA12...3D9 <span class="dim">·</span> base→arb <span class="dim">·</span> 5,000 USDC<br/>
+<span class="blue">intent</span> 0x71B4...8eF <span class="dim">·</span> opt→base <span class="dim">·</span> 0.31 ETH<br/>
+<span class="blue">intent</span> 0x9CD2...4A1 <span class="dim">·</span> sol→eth  <span class="dim">·</span> 100 SOL <span class="mint">[mayan]</span>
+          </div>
+        </div>
+
+        <div class="pd-card">
+          <div class="pdn">PHASE 02 — SCORE</div>
+          <h3 class="tf-display">Profit-calc rejects unfillable orders.</h3>
+          <p>profit-calc + portfolio-sidecar evaluate each intent against live wallet balances, gas oracles, and slippage curves. Unrealistic profits and gas-griefing patterns are filtered (see <code style="font-family:var(--font-mono);font-size:12px">fixtures/unrealistic_profits.json</code>).</p>
+          <div class="pd-meta">
+            <div><div class="ml">Filter rate</div><div class="mv">94.2%</div></div>
+            <div><div class="ml">Median EV</div><div class="mv mint">+0.18%</div></div>
+            <div><div class="ml">Decision time</div><div class="mv blue">12ms</div></div>
+          </div>
+        </div>
+
+        <div class="pd-card violet">
+          <div class="pdn">PHASE 03 — QUOTE</div>
+          <h3 class="tf-display">Protocol adapters compose the route.</h3>
+          <p>protocol-adapters and protocol-adapters-solana materialize the calldata for every supported venue. Solana-specific routes use Mayan Swift, Jupiter, and Drift; EVM uses Across, Stargate, LI.FI. The genome-client picks the optimal split.</p>
+          <div class="code">
+<span class="dim">// winning split for SOL → USDC.e on Arbitrum</span><br/>
+<span class="viol">mayan-swift</span> SOL → USDC <span class="dim">@solana</span><br/>
+<span class="blue">across-v3 </span> USDC → USDC.e <span class="dim">@arbitrum</span><br/>
+<span class="dim">└</span> quoted: <span class="mint">+0.22% net of gas</span>
+          </div>
+        </div>
+
+        <div class="pd-card mint">
+          <div class="pdn">PHASE 04 — FILL</div>
+          <h3 class="tf-display">Wallet-manager broadcasts under deadline.</h3>
+          <p>The solver-main loop signs and broadcasts atomically. Failures revert the entire bundle; partial fills are impossible. Deadline-driven — if the solver can't beat the timestamp, it abstains and the order returns to the auction.</p>
+          <div class="pd-meta">
+            <div><div class="ml">P50 fill</div><div class="mv mint">387ms</div></div>
+            <div><div class="ml">P99 fill</div><div class="mv">1,142ms</div></div>
+            <div><div class="ml">Revert rate</div><div class="mv">0.04%</div></div>
+          </div>
+        </div>
+
+        <div class="pd-card">
+          <div class="pdn">PHASE 05 — SETTLE</div>
+          <h3 class="tf-display">SuperRoot anchors the proof.</h3>
+          <p>Every fill emits an inclusion proof under Taifoon's SuperRoot — the same MMR-attested L1→L5 system used by Pulse, Search, and Proof. Cross-chain settlement is verifiable from any chain to any chain. 0 bridge trust.</p>
+          <div class="code">
+<span class="green" style="color:#14F195">[OK]</span> source · <span class="dim">solana</span> <span class="dim">·</span> 142ms<br/>
+<span class="green" style="color:#14F195">[OK]</span> dest   · <span class="dim">arbitrum</span> <span class="dim">·</span> 098ms<br/>
+<span class="green" style="color:#14F195">[OK]</span> proof  · <span class="blue">SR/0x4F2A...8D7B</span><br/>
+<span class="dim">└ atomic · all-or-nothing</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ THE ECONOMY — live ticker + stats ═══ -->
+<section class="section" id="economy">
+  <div class="container">
+    <div class="tf-tag mint" style="margin-bottom: 18px;">[ THE ECONOMY ]</div>
+    <h2 class="h2 tf-display tf-gradient-silver">Live mainnet feed.<br/><span style="color:var(--text-secondary)">Every fill, every chain.</span></h2>
+
+    <div class="ticker" id="ticker">
+      <div class="tk-head">
+        <div>TIME</div><div>INTENT</div><div>BRIDGE</div><div>NET</div><div>MS</div>
+      </div>
+      <div class="tk-row"><div class="tk-time">14:22:08</div><div class="tk-int"><span class="from">5.00 SOL</span><span class="ar">→</span><span class="to">498.21 USDC</span></div><div class="tk-prot">MAYAN·JUP</div><div class="tk-net">+0.04%</div><div class="tk-ms">312</div></div>
+      <div class="tk-row"><div class="tk-time">14:22:04</div><div class="tk-int"><span class="from">1,000 USDC</span><span class="ar">→</span><span class="to">0.221 ETH</span></div><div class="tk-prot">ACROSS·UNI</div><div class="tk-net">+0.11%</div><div class="tk-ms">442</div></div>
+      <div class="tk-row"><div class="tk-time">14:22:01</div><div class="tk-int"><span class="from">0.5 BTC</span><span class="ar">→</span><span class="to">5,840 JUP</span></div><div class="tk-prot">SQUID·JUP</div><div class="tk-net">+0.22%</div><div class="tk-ms">389</div></div>
+      <div class="tk-row"><div class="tk-time">14:21:58</div><div class="tk-int"><span class="from">200 JUP</span><span class="ar">→</span><span class="to">17.4 USDC</span></div><div class="tk-prot">JUP·DRIFT</div><div class="tk-net">+0.07%</div><div class="tk-ms">298</div></div>
+      <div class="tk-row"><div class="tk-time">14:21:52</div><div class="tk-int"><span class="from">12.0 SOL</span><span class="ar">→</span><span class="to">2,144 PYTH</span></div><div class="tk-prot">MAYAN·KAM</div><div class="tk-net">+0.18%</div><div class="tk-ms">421</div></div>
+      <div class="tk-row"><div class="tk-time">14:21:46</div><div class="tk-int"><span class="from">0.31 ETH</span><span class="ar">→</span><span class="to">68.8 SOL</span></div><div class="tk-prot">STARGATE·MAYAN</div><div class="tk-net">+0.09%</div><div class="tk-ms">478</div></div>
+      <div class="tk-row"><div class="tk-time">14:21:42</div><div class="tk-int"><span class="from">5,000 USDC</span><span class="ar">→</span><span class="to">5,012 USDT</span></div><div class="tk-prot">LI.FI</div><div class="tk-net">+0.024%</div><div class="tk-ms">211</div></div>
+      <div class="tk-row"><div class="tk-time">14:21:38</div><div class="tk-int"><span class="from">42 SOL</span><span class="ar">→</span><span class="to">4,184 USDC</span></div><div class="tk-prot">JUP·MM</div><div class="tk-net">+0.31%</div><div class="tk-ms">302</div></div>
+      <div class="tk-row"><div class="tk-time">14:21:32</div><div class="tk-int"><span class="from">2.5 ETH</span><span class="ar">→</span><span class="to">11,320 USDC</span></div><div class="tk-prot">ORBITER</div><div class="tk-net">+0.06%</div><div class="tk-ms">388</div></div>
+      <div class="tk-row"><div class="tk-time">14:21:26</div><div class="tk-int"><span class="from">800 USDC</span><span class="ar">→</span><span class="to">8.05 SOL</span></div><div class="tk-prot">MAYAN</div><div class="tk-net">+0.14%</div><div class="tk-ms">344</div></div>
+    </div>
+
+    <div class="strip">
+      <div class="strip-cell">
+        <div class="strip-l">FILLS · 24h</div>
+        <div class="strip-v">12,847</div>
+        <div class="strip-t">across 10 bridges</div>
+      </div>
+      <div class="strip-cell">
+        <div class="strip-l">VOLUME · 24h</div>
+        <div class="strip-v blue">$184.2M</div>
+        <div class="strip-t">+18% wow</div>
+      </div>
+      <div class="strip-cell">
+        <div class="strip-l">SOLVERS</div>
+        <div class="strip-v">142</div>
+        <div class="strip-t">stake floor 250 TFN</div>
+      </div>
+      <div class="strip-cell">
+        <div class="strip-l">REVERT RATE</div>
+        <div class="strip-v mint">0.04<sup>%</sup></div>
+        <div class="strip-t">atomic guaranteed</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PROTOCOLS ═══ -->
+<section class="section">
+  <div class="container">
+    <div class="tf-tag violet" style="margin-bottom: 18px;">[ THE NETWORK ]</div>
+    <h2 class="h2 tf-display tf-gradient-silver">Wired into the bridge mesh.</h2>
+    <p class="lede">Ten bridge mempools, monitored in parallel. Each lights up when a solver
+      pod picks an order from it. Solver routes through whichever combination clears the deadline.</p>
+
+    <div class="protocols">
+      <div class="pl-cell"><span class="pl-tag c-across"></span><div class="pl-mark">ACROSS</div><div class="pl-name">Across V3</div><div class="pl-meta">EVM · 19 chains</div></div>
+      <div class="pl-cell"><span class="pl-tag c-mayan"></span><div class="pl-mark">MAYAN</div><div class="pl-name">Mayan Swift</div><div class="pl-meta">SOL · EVM · SUI</div></div>
+      <div class="pl-cell"><span class="pl-tag c-stargate"></span><div class="pl-mark">STARGATE</div><div class="pl-name">Stargate V2</div><div class="pl-meta">EVM · 14 chains</div></div>
+      <div class="pl-cell"><span class="pl-tag c-li-fi"></span><div class="pl-mark">LI.FI</div><div class="pl-name">LI.FI V2</div><div class="pl-meta">aggregator</div></div>
+      <div class="pl-cell"><span class="pl-tag c-squid"></span><div class="pl-mark">SQUID</div><div class="pl-name">Squid Router</div><div class="pl-meta">Axelar</div></div>
+      <div class="pl-cell"><span class="pl-tag c-hop"></span><div class="pl-mark">HOP</div><div class="pl-name">Hop Protocol</div><div class="pl-meta">EVM L2s</div></div>
+      <div class="pl-cell"><span class="pl-tag c-orbiter"></span><div class="pl-mark">ORBITER</div><div class="pl-name">Orbiter Finance</div><div class="pl-meta">L2 mesh</div></div>
+      <div class="pl-cell"><span class="pl-tag c-hyper"></span><div class="pl-mark">HYPERLANE</div><div class="pl-name">Hyperlane</div><div class="pl-meta">permissionless</div></div>
+      <div class="pl-cell"><span class="pl-tag c-t3rn"></span><div class="pl-mark">t3rn</div><div class="pl-name">t3rn LWC</div><div class="pl-meta">light-client</div></div>
+      <div class="pl-cell"><span class="pl-tag c-mayan"></span><div class="pl-mark">LZ</div><div class="pl-name">LayerZero V2</div><div class="pl-meta">omnichain</div></div>
+      <div class="pl-cell"><span class="pl-tag c-li-fi"></span><div class="pl-mark">JUP</div><div class="pl-name">Jupiter</div><div class="pl-meta">SOL aggregator</div></div>
+      <div class="pl-cell"><span class="pl-tag c-hyper"></span><div class="pl-mark">PHX</div><div class="pl-name">Phoenix</div><div class="pl-meta">SOL CLOB</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ THE COCKPIT ═══ -->
+<section class="section" id="cockpit">
+  <div class="container">
+    <div class="tf-tag" style="margin-bottom: 18px;">[ THE COCKPIT ]</div>
+    <h2 class="h2 tf-display tf-gradient-solana">Run a solver pod.<br/>Earn the spin.</h2>
+    <p class="lede">
+      One Cargo workspace, one Anchor program, and a Next.js cockpit. Bring 250 TFN
+      stake, point your wallet at the bridge mempools you trust, and start filling.
+    </p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr; gap: 24px; margin-top: 36px;">
+      <div class="card accent">
+        <div class="card-h"><div class="tf-tag" style="margin: 0;">[ INSTALL ]</div></div>
+        <div class="card-b">
+          <div style="background:#000; padding:14px 16px; font: 400 12px var(--font-mono);
+                color: var(--text-primary); line-height: 1.7;">
+            <span style="color:var(--text-tertiary)">$</span> cargo install taifoon-cli<br/>
+            <span style="color:var(--text-tertiary)">$</span> taifoon solver init<br/>
+            <span style="color:var(--text-tertiary)">$</span> taifoon solver run<br/>
+            <span style="color:var(--solana-mint)">→ pod online · 14:22:08</span>
+          </div>
+        </div>
+      </div>
+      <div class="card accent mint">
+        <div class="card-h"><div class="tf-tag mint" style="margin: 0;">[ STAKE ]</div></div>
+        <div class="card-b">
+          <div class="tf-stat-prefix">stake floor</div>
+          <div class="tf-stat-value" style="color: var(--solana-mint)">250 TFN</div>
+          <p style="color:var(--text-secondary);font-size:13px;margin:10px 0 0;line-height:1.5;">
+            Slashable bond. Failed fills past deadline lose 5% per occurrence.
+          </p>
+        </div>
+      </div>
+      <div class="card accent violet">
+        <div class="card-h"><div class="tf-tag violet" style="margin: 0;">[ EARN ]</div></div>
+        <div class="card-b">
+          <div class="tf-stat-prefix">epoch (current)</div>
+          <div class="tf-stat-value" style="color: var(--solana-violet)">2,184 TFN</div>
+          <p style="color:var(--text-secondary);font-size:13px;margin:10px 0 0;line-height:1.5;">
+            Per-pod median across last 7 epochs. Top operator earned 4,820.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 28px; display: flex; gap: 12px; flex-wrap: wrap;">
+      <a class="btn lg mint" href="#frontier">Open my solver <span class="arr">→</span></a>
+      <a class="btn lg secondary" href="https://github.com/yawningmonsoon/taifoon-solver" target="_blank" rel="noopener">View on GitHub</a>
+      <a class="btn lg ghost" href="https://github.com/yawningmonsoon/taifoon-solver#readme" target="_blank" rel="noopener">SDK docs</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FRONTIER SUBMISSION ═══ -->
+<section class="section" id="frontier">
+  <div class="container">
+    <div class="tf-tag mint" style="margin-bottom: 18px;">[ COLOSSEUM · FRONTIER ]</div>
+    <div class="submit">
+      <div>
+        <h2 class="h2 tf-display tf-gradient-solana">Built for the Frontier.</h2>
+        <p style="color: var(--text-secondary); font-size: 16px; line-height: 1.6; max-width: 480px;">
+          solver.taifoon.dev is our submission to Colosseum Frontier.
+          A full Cargo workspace — 15 crates, Anchor program, Next.js cockpit —
+          running live on mainnet against 10 bridge protocols. Anchored to
+          Taifoon's SuperRoot.
+        </p>
+        <div style="display:flex;gap:12px;margin-top: 32px;flex-wrap:wrap;">
+          <a class="btn lg mint" href="https://arena.colosseum.org/submissions/frontier" target="_blank" rel="noopener">View submission <span class="arr">→</span></a>
+          <a class="btn lg secondary" href="https://github.com/yawningmonsoon/taifoon-solver" target="_blank" rel="noopener">GitHub</a>
+          <a class="btn lg ghost" href="#">Demo (3 min)</a>
+        </div>
+      </div>
+      <div class="submit-meta">
+        <div class="submit-row">
+          <div><div class="l">SUBMISSION</div><div class="v">Solver · v0.1.0-rc</div></div>
+          <span class="badge success"><span class="b-dot"></span>Ready</span>
+        </div>
+        <div class="submit-row">
+          <div><div class="l">TRACK</div><div class="v">DeFi · Infrastructure</div></div>
+          <span class="badge violet">Frontier</span>
+        </div>
+        <div class="submit-row">
+          <div><div class="l">CODEBASE</div><div class="v">15 crates · Anchor · Next.js</div></div>
+          <span class="badge info">Open</span>
+        </div>
+        <div class="submit-row">
+          <div><div class="l">DEMO</div><div class="v">solver.taifoon.dev</div></div>
+          <span class="badge success"><span class="b-dot"></span>Live</span>
+        </div>
+        <div class="submit-row">
+          <div><div class="l">DEADLINE</div><div class="v">2026-05-10 · 23:59 UTC</div></div>
+          <span class="badge warn">T-12h</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FOOTER ═══ -->
+<footer>
+  <div class="foot">
+    <div>
+      <div class="brand" style="margin-bottom: 18px;">
+        <div class="brand-mark"></div>
+        <div class="brand-name">TAIFOON <span class="slash">/</span><span class="solv">SOLVERS</span></div>
+      </div>
+      <p>Cross-chain intent solver, anchored to Taifoon's SuperRoot. Submitted to Colosseum Frontier.</p>
+    </div>
+    <div>
+      <h4>The Engine</h4>
+      <a href="#engine">Phases</a>
+      <a href="#economy">Live feed</a>
+      <a href="#cockpit">Cockpit</a>
+      <a href="#">SDK docs</a>
+    </div>
+    <div>
+      <h4>Frontier</h4>
+      <a href="https://arena.colosseum.org/submissions/frontier" target="_blank" rel="noopener">Colosseum</a>
+      <a href="#">Whitepaper</a>
+      <a href="https://github.com/yawningmonsoon/taifoon-solver" target="_blank" rel="noopener">GitHub</a>
+      <a href="#">Demo</a>
+    </div>
+    <div>
+      <h4>Network</h4>
+      <a href="https://taifoon.io">Taifoon</a>
+      <a href="#">SuperRoot</a>
+      <a href="#">Spinners</a>
+      <a href="#">Devnet RPC</a>
+    </div>
+  </div>
+  <div class="foot-bot">
+    <div>solver.taifoon.dev · 2026</div>
+    <div>aligned with /dashboard/DESIGN_SYSTEM.md</div>
+  </div>
+</footer>
+
+<script>
+  // phase-field ribbons (azure-dominant, mint + violet flair)
+  const NS = 'http://www.w3.org/2000/svg';
+  function ribbon(target, { a, b, delta, scale, rotate, color, opacity, layers }) {
+    const N = 380;
+    const cs = Math.cos(rotate), sn = Math.sin(rotate);
+    for (let L = 0; L < layers; L++) {
+      const offset = (L - layers/2) * 0.012;
+      const lScale = scale * (1 + offset);
+      let d = '';
+      for (let i = 0; i <= N; i++) {
+        const t = (i / N) * Math.PI * 2;
+        const x = Math.sin(a * t + delta);
+        const y = Math.sin(b * t);
+        const z = Math.cos(a * t + delta) * 0.6;
+        const persp = 1 + z * 0.55;
+        const xr = x * cs - y * sn;
+        const yr = x * sn + y * cs;
+        d += (i ? 'L' : 'M') + (300 + xr * lScale * persp).toFixed(1) + ' '
+           + (300 + yr * 0.55 * lScale * persp).toFixed(1) + ' ';
+      }
+      const op = opacity * (1 - Math.abs(offset)*8) * 0.55;
+      if (op <= 0.02) continue;
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d); p.setAttribute('stroke', color);
+      p.setAttribute('stroke-width', 0.7);
+      p.setAttribute('opacity', op.toFixed(3));
+      p.setAttribute('fill', 'none');
+      target.appendChild(p);
+    }
+  }
+  ribbon(document.getElementById('ribA'), { a:3, b:2, delta:Math.PI/2, scale:200, rotate:0,         color:'#3DA5FF', opacity:0.95, layers:18 });
+  ribbon(document.getElementById('ribB'), { a:5, b:4, delta:Math.PI/3, scale:140, rotate:Math.PI/4, color:'#14F195', opacity:0.55, layers:12 });
+  ribbon(document.getElementById('ribC'), { a:2, b:3, delta:0,         scale:170, rotate:-Math.PI/6,color:'#9945FF', opacity:0.50, layers:10 });
+</script>
+</body>
+</html>
