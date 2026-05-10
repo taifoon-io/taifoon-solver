@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Card, CardHeader, Tag, Badge } from '@/components/ui'
+import { Card, Tag } from '@/components/ui'
 import { protocolColors } from '@/lib/tokens'
 
 interface PnlSummary {
@@ -64,10 +64,36 @@ function chainName(id: number): string {
   return map[id] ?? `c${id}`
 }
 
+/** True for any decision that represents a successful on-chain fill. */
+function isExecuted(decision: string): boolean {
+  return decision === 'executed' || decision === 'confirmed' || decision === 'execute'
+}
+
+/**
+ * Build a block-explorer URL for a tx_hash on a given chain.
+ * Mirrors the server-side `explorer_url_for` so we can derive links
+ * client-side when the server field is absent.
+ */
+function explorerUrl(chainId: number, txHash: string): string | null {
+  const bases: Record<number, string> = {
+    1: 'https://etherscan.io/tx/',
+    10: 'https://optimistic.etherscan.io/tx/',
+    137: 'https://polygonscan.com/tx/',
+    8453: 'https://basescan.org/tx/',
+    42161: 'https://arbiscan.io/tx/',
+    59144: 'https://lineascan.build/tx/',
+    324: 'https://explorer.zksync.io/tx/',
+    56: 'https://bscscan.com/tx/',
+    43114: 'https://snowtrace.io/tx/',
+  }
+  const base = bases[chainId]
+  return base ? `${base}${txHash}` : null
+}
+
 function decisionPill(decision: string) {
-  if (decision === 'confirmed' || decision === 'execute' || decision === 'executed') {
+  if (isExecuted(decision)) {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-[rgba(20,241,149,0.1)] text-[var(--success)]">
+      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-[rgba(20,241,149,0.1)] text-[var(--success)] font-semibold tracking-wide">
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
         FILLED
       </span>
@@ -101,10 +127,72 @@ function decisionPill(decision: string) {
   )
 }
 
+interface OutcomeRowProps {
+  o: OutcomeRecord
+  highlight?: boolean
+}
+
+function OutcomeRow({ o, highlight }: OutcomeRowProps) {
+  // Prefer the server-computed explorer_url; fall back to client-side derivation
+  // using the destination chain (where the fill tx lands).
+  const txUrl =
+    o.explorer_url ??
+    (o.tx_hash ? explorerUrl(o.dst_chain, o.tx_hash) : null)
+
+  return (
+    <div
+      className={`flex items-center gap-2 py-2 text-[11px] flex-wrap ${
+        highlight
+          ? 'bg-[rgba(20,241,149,0.04)] rounded px-2 -mx-2 border border-[rgba(20,241,149,0.12)]'
+          : ''
+      }`}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full shrink-0"
+        style={{ background: colorFor(o.protocol) }}
+      />
+      <span
+        className="font-mono uppercase tracking-[0.08em] shrink-0"
+        style={{ color: colorFor(o.protocol) }}
+      >
+        {o.protocol.replace(/_v\d+$/, '').replace(/_/g, ' ')}
+      </span>
+      <span className="text-[var(--text-tertiary)] font-mono shrink-0">
+        {chainName(o.src_chain)} &rarr; {chainName(o.dst_chain)}
+      </span>
+      {decisionPill(o.decision)}
+      <span className="ml-auto font-mono tabular-nums">
+        {o.actual_profit_usd != null ? (
+          <span style={{ color: o.actual_profit_usd >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+            {o.actual_profit_usd >= 0 ? '+' : ''}{fmtUsd(o.actual_profit_usd)}
+          </span>
+        ) : (
+          <span className="text-[var(--text-disabled)]">—</span>
+        )}
+      </span>
+      {txUrl && o.tx_hash ? (
+        <a
+          href={txUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="font-mono text-[var(--brand-blue)] hover:underline shrink-0"
+          title={o.tx_hash}
+        >
+          {o.tx_hash.slice(0, 8)}&hellip;&#8599;
+        </a>
+      ) : (
+        <span className="font-mono text-[var(--text-disabled)] shrink-0">no tx</span>
+      )}
+      <span className="text-[var(--text-tertiary)] shrink-0">{fmtAge(o.ts)}</span>
+    </div>
+  )
+}
+
 export default function LivePnL() {
   const [summary, setSummary] = useState<PnlSummary | null>(null)
   const [outcomes, setOutcomes] = useState<OutcomeRecord[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [othersOpen, setOthersOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -112,7 +200,7 @@ export default function LivePnL() {
       try {
         const [pnlRes, outRes] = await Promise.all([
           fetch(`${SOLVER_API_BASE}/api/solver/pnl`, { cache: 'no-store' }),
-          fetch(`${SOLVER_API_BASE}/api/solver/outcomes?limit=12`, { cache: 'no-store' }),
+          fetch(`${SOLVER_API_BASE}/api/solver/outcomes?limit=200`, { cache: 'no-store' }),
         ])
         if (!pnlRes.ok || !outRes.ok) throw new Error(`HTTP ${pnlRes.status}/${outRes.status}`)
         const pnl: PnlSummary = await pnlRes.json()
@@ -133,6 +221,13 @@ export default function LivePnL() {
       clearInterval(id)
     }
   }, [])
+
+  // Split: executed fills shown first (highlighted), then up to 8 others collapsed.
+  const { executedFills, otherOutcomes } = useMemo(() => {
+    const executed = outcomes.filter((o) => isExecuted(o.decision))
+    const others = outcomes.filter((o) => !isExecuted(o.decision)).slice(0, 8)
+    return { executedFills: executed, otherOutcomes: others }
+  }, [outcomes])
 
   const protocols = useMemo(() => {
     if (!summary) return [] as { name: string; fills: number; realized: number; pct: number; color: string }[]
@@ -209,63 +304,44 @@ export default function LivePnL() {
           </div>
         )}
 
-        {/* Recent fills table */}
+        {/* Confirmed / executed fills — always shown prominently at top */}
         <div>
           <div className="text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)] mb-2">
-            Recent fills
+            Confirmed fills
           </div>
-          {outcomes.length === 0 ? (
+          {executedFills.length === 0 ? (
             <div className="text-[var(--text-tertiary)] text-[12px] font-mono text-center py-6 bg-[var(--bg-raised)] rounded">
-              No fills yet — start broadcasting and they&apos;ll appear here.
+              No confirmed fills yet — start broadcasting and they&apos;ll appear here.
             </div>
           ) : (
-            <div className="divide-y divide-[var(--border-subtle)]">
-              {outcomes.map((o) => (
-                <div
-                  key={o.intent_id}
-                  className="flex items-center gap-2 py-2 text-[11px] flex-wrap"
-                >
-                  <span
-                    className="w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{ background: colorFor(o.protocol) }}
-                  />
-                  <span
-                    className="font-mono uppercase tracking-[0.08em] shrink-0"
-                    style={{ color: colorFor(o.protocol) }}
-                  >
-                    {o.protocol.replace(/_v\d+$/, '').replace(/_/g, ' ')}
-                  </span>
-                  <span className="text-[var(--text-tertiary)] font-mono shrink-0">
-                    {chainName(o.src_chain)} → {chainName(o.dst_chain)}
-                  </span>
-                  {decisionPill(o.decision)}
-                  <span className="ml-auto font-mono tabular-nums">
-                    {o.actual_profit_usd != null ? (
-                      <span style={{ color: o.actual_profit_usd >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-                        {o.actual_profit_usd >= 0 ? '+' : ''}{fmtUsd(o.actual_profit_usd)}
-                      </span>
-                    ) : (
-                      <span className="text-[var(--text-disabled)]">—</span>
-                    )}
-                  </span>
-                  {o.explorer_url ? (
-                    <a
-                      href={o.explorer_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-mono text-[var(--brand-blue)] hover:underline shrink-0"
-                    >
-                      {o.tx_hash?.slice(0, 8)}…↗
-                    </a>
-                  ) : (
-                    <span className="font-mono text-[var(--text-disabled)] shrink-0">no tx</span>
-                  )}
-                  <span className="text-[var(--text-tertiary)] shrink-0">{fmtAge(o.ts)}</span>
-                </div>
+            <div className="space-y-1">
+              {executedFills.map((o) => (
+                <OutcomeRow key={o.intent_id} o={o} highlight />
               ))}
             </div>
           )}
         </div>
+
+        {/* Other recent outcomes — collapsible */}
+        {otherOutcomes.length > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setOthersOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors mb-2 w-full text-left"
+            >
+              <span>{othersOpen ? '▾' : '▸'}</span>
+              <span>Other recent decisions ({otherOutcomes.length})</span>
+            </button>
+            {othersOpen && (
+              <div className="divide-y divide-[var(--border-subtle)]">
+                {otherOutcomes.map((o) => (
+                  <OutcomeRow key={o.intent_id} o={o} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </Card>
   )

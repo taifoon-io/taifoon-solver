@@ -1061,6 +1061,10 @@ pub struct OutcomesQuery {
     /// Filter by solver address or name (matches `solver_id` column).
     #[serde(default)]
     pub solver_id: Option<String>,
+    /// Filter by decision value (e.g. "executed", "skip", "dry_run").
+    /// When omitted all decisions are returned.
+    #[serde(default)]
+    pub decision: Option<String>,
 }
 
 /// Single outcome record exposed via the dashboard API. Mirrors
@@ -1119,28 +1123,50 @@ fn explorer_url_for(chain_id: u64, tx_hash: &str) -> Option<String> {
     Some(format!("{base}{tx_hash}"))
 }
 
-/// GET /api/solver/outcomes?limit=N
+/// GET /api/solver/outcomes?limit=N[&decision=executed][&solver_id=...]
 ///
 /// Returns the most recent outcome records from the rusqlite outcome log,
 /// newest first. Returns an empty array when no `OutcomeLog` is configured.
+/// When `decision` is supplied only records whose `decision` column matches
+/// (case-insensitive prefix) are returned; the `limit` is applied *after*
+/// filtering so the caller always gets up to N matching records.
 async fn outcomes_handler(
     State(state): State<Arc<ApiState>>,
     axum::extract::Query(q): axum::extract::Query<OutcomesQuery>,
 ) -> Json<Vec<OutcomeApiRecord>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let solver_id = q.solver_id.clone();
+    let decision_filter = q.decision.clone().map(|d| d.to_lowercase());
     let log = match state.outcome_log.get() {
         Some(l) => l.clone(),
         None => return Json(Vec::new()),
     };
 
+    // Fetch a larger window when a decision filter is active so we don't
+    // accidentally return fewer records than `limit` after filtering.
+    let fetch_limit = if decision_filter.is_some() {
+        (limit * 20).clamp(1, 500)
+    } else {
+        limit
+    };
+
     let log_clone = log.clone();
     let recs = tokio::task::spawn_blocking(move || {
-        log_clone.recent_for(limit, solver_id.as_deref())
+        log_clone.recent_for(fetch_limit, solver_id.as_deref())
     })
         .await
         .unwrap_or_else(|_| Ok(Vec::new()))
         .unwrap_or_default();
+
+    // Apply optional decision filter, then re-apply limit.
+    let recs = if let Some(ref df) = decision_filter {
+        recs.into_iter()
+            .filter(|r| r.decision.to_lowercase().contains(df.as_str()))
+            .take(limit as usize)
+            .collect::<Vec<_>>()
+    } else {
+        recs
+    };
 
     let api_recs: Vec<OutcomeApiRecord> = recs
         .into_iter()
