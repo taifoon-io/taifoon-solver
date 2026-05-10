@@ -539,7 +539,7 @@ impl OutcomeLog {
                     COALESCE(SUM(actual_profit_usd), 0.0) AS realized,
                     COALESCE(AVG(actual_profit_usd), 0.0) AS avg_profit
              FROM solver_outcomes
-             WHERE actual_profit_usd IS NOT NULL
+             WHERE decision IN ('confirmed', 'execute', 'executed')
              GROUP BY protocol",
         )?;
         let rows = stmt.query_map([], |r| {

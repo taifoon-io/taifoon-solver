@@ -274,9 +274,14 @@ export default function PortalPage() {
               </div>
             </Card>
           )}
-          {visible.map((s) => (
-            <SolverCard key={s.address} solver={s} />
-          ))}
+          {visible.map((s) => {
+            const hostedMatch = hostedSolvers.find(
+              (h) => h.evm_address.toLowerCase() === s.address.toLowerCase()
+            )
+            return (
+              <SolverCard key={s.address} solver={s} hostedId={hostedMatch?.solver_id} />
+            )
+          })}
           {hostedSolvers.filter(h => !solver || h.evm_address.toLowerCase() !== solver.address.toLowerCase()).map((h) => (
             <HostedSolverCard key={h.solver_id} hosted={h} />
           ))}
@@ -391,14 +396,15 @@ interface SolverDisplay {
   last_fill_profit: number | null
 }
 
-function SolverCard({ solver }: { solver: SolverDisplay }) {
+function SolverCard({ solver, hostedId }: { solver: SolverDisplay; hostedId?: string }) {
   const statusMap = {
     live: { tone: 'mint' as const, label: 'LIVE', dot: true, pulse: true },
     offline: { tone: 'danger' as const, label: 'OFFLINE', dot: true, pulse: false },
     connecting: { tone: 'info' as const, label: 'CONNECTING', dot: true, pulse: true },
   }
   const s = statusMap[solver.status]
-  const id = solver.address.slice(2, 8).toLowerCase()
+  // Prefer the solver_id from the hosted registry; fall back to first 8 hex chars of address
+  const id = hostedId ?? solver.address.slice(2, 10).toLowerCase()
 
   return (
     <Link href={`/portal/${id}`} className="block group">

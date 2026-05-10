@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Tag } from '@/components/ui'
 import { protocolColors } from '@/lib/tokens'
+import { chainName } from '@/hooks/useSolverEvents'
 
 interface PnlSummary {
   realized_usd_total: number
@@ -54,14 +55,6 @@ function fmtAge(ts: string): string {
   const h = Math.floor(m / 60)
   if (h < 24) return `${h}h ago`
   return `${Math.floor(h / 24)}d ago`
-}
-
-function chainName(id: number): string {
-  const map: Record<number, string> = {
-    1: 'ETH', 10: 'OP', 137: 'POL', 8453: 'BASE',
-    42161: 'ARB', 59144: 'LIN', 534352: 'SCR', 56: 'BSC',
-  }
-  return map[id] ?? `c${id}`
 }
 
 /** True for any decision that represents a successful on-chain fill. */
