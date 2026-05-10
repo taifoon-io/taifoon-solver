@@ -25,7 +25,7 @@ sol! {
     function allowance(address owner, address spender) external view returns (uint256);
 }
 
-const DLN_DESTINATION: Address = address!("eF4fB24aD0916217251F553c0596F8Edc630EB66");
+const DLN_DESTINATION: Address = address!("E7351Fd770A37282b91D153Ee690B63579D6dd7f");
 
 pub struct ApprovalArgs {
     pub private_key: String,
