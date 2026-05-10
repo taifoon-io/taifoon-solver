@@ -76,17 +76,22 @@ export default function OnboardPage() {
   }, [])
 
   const launchCmd = useMemo(() => {
-    return `taifoon-cli onboard \\
-  --name "${name || 'my-solver'}" \\
-  --chains ${Array.from(chains).join(',')} \\
-  --protocols ${Array.from(protocols).join(',')} \\
-  --wallet ${walletMode} \\
-  --solver-id ${solverId}
+    return `# 1. Clone the solver runtime
+git clone https://github.com/yawningmonsoon/taifoon-solver
+cd taifoon-solver
 
-# then run:
-taifoon-cli run \\
-  --solver-id ${solverId} \\
-  --stream prod`
+# 2. Configure your solver
+export SOLVER_PRIVATE_KEY=0x<your_funded_evm_key>
+export SOLVER_ADDRESS=<your_evm_address>
+export PROTOCOL_FILTER=${Array.from(protocols).join(',')}
+export MIN_PROFIT_USD=0.10
+export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
+
+# 3. Build & run (Docker)
+docker compose up -d
+
+# — OR — run directly with cargo:
+cargo run -p solver-main --release`
   }, [name, chains, protocols, walletMode, solverId])
 
   const canAdvance = (() => {
@@ -298,16 +303,17 @@ taifoon-cli run \\
                     <CardHeader title="What happens when you run this" />
                     <ol className="space-y-2 text-sm text-[var(--text-secondary)] list-none pl-0">
                       <Step n={1}>
-                        Wallet is generated and registered with the Taifoon Registry on Base
-                        Sepolia + Solana Devnet.
+                        The solver binary starts and connects to the Genome SSE intent stream.
+                        Your EVM keypair signs fill transactions on-chain.
                       </Step>
                       <Step n={2}>
-                        A K8s pod spins up under{' '}
-                        <code className="font-mono text-[var(--brand-cyan)]">solvers/{solverId}</code> within ~60s.
+                        The built-in API server starts on port 8082. Point your dashboard to{' '}
+                        <code className="font-mono text-[var(--brand-cyan)]">SOLVER_API_INTERNAL_URL=http://localhost:8082</code>.
                       </Step>
                       <Step n={3}>
-                        SSE genome stream starts feeding intents and your portal page goes
-                        live.
+                        Open your portal at{' '}
+                        <code className="font-mono text-[var(--brand-cyan)]">/portal/&lt;your-address&gt;</code>{' '}
+                        to watch the live intent stream, fills, and P&amp;L.
                       </Step>
                     </ol>
                   </Card>
@@ -336,9 +342,9 @@ taifoon-cli run \\
                 <Button
                   variant="mint"
                   size="md"
-                  onClick={() => router.push(`/portal/${solverId.replace('spinr_', '')}`)}
+                  onClick={() => router.push('/portal/19b3d79a')}
                 >
-                  OPEN MY SOLVER →
+                  VIEW LIVE SOLVER →
                 </Button>
               )}
             </div>

@@ -291,21 +291,10 @@ impl SolverApi {
     /// intentionally outside the gated subrouter so monitoring and load
     /// balancers can probe without credentials.
     pub fn router(&self) -> Router {
+        // Auth-gated routes — require Bearer SOLVER_API_TOKEN (operator-only actions)
         let solver_api = Router::new()
-            .route("/api/solver/stream", get(stream_handler))
-            .route("/api/solver/logs", get(logs_handler))
-            .route("/api/solver/stats", get(stats_handler))
-            .route("/api/solver/intents", get(intents_handler))
-            .route("/api/solver/protocols", get(protocols_handler))
-            .route("/api/solver/money-flow", get(money_flow_handler))
-            .route("/api/solver/razor", get(razor_handler))
-            .route("/api/solver/portfolio", get(portfolio_handler))
-            .route("/api/solver/outcomes", get(outcomes_handler))
-            .route("/api/solver/pnl", get(pnl_handler))
-            .route("/api/solver/open-intents", get(open_intents_handler))
             .route("/api/solver/rebalance", post(rebalance_handler))
             .route("/api/solver/rebalancer/status", get(rebalancer_status_handler))
-            .route("/api/solver/claims", get(claims_handler))
             .route(
                 "/api/solver/claims/:intent_id/retry",
                 post(claim_retry_handler),
@@ -313,9 +302,26 @@ impl SolverApi {
             .route_layer(middleware::from_fn(require_solver_api_token))
             .with_state(self.state.clone());
 
+        // Public read-only routes — no auth required (monitoring, on-chain data, fills)
+        let public_api = Router::new()
+            .route("/api/solver/stream", get(stream_handler))
+            .route("/api/solver/logs", get(logs_handler))
+            .route("/api/solver/stats", get(stats_handler))
+            .route("/api/solver/intents", get(intents_handler))
+            .route("/api/solver/protocols", get(protocols_handler))
+            .route("/api/solver/money-flow", get(money_flow_handler))
+            .route("/api/solver/razor", get(razor_handler))
+            .route("/api/solver/open-intents", get(open_intents_handler))
+            .route("/api/solver/claims", get(claims_handler))
+            .route("/api/solver/portfolio", get(portfolio_handler))
+            .route("/api/solver/outcomes", get(outcomes_handler))
+            .route("/api/solver/pnl", get(pnl_handler))
+            .with_state(self.state.clone());
+
         Router::new()
             .route("/health", get(health_handler))
             .merge(solver_api)
+            .merge(public_api)
             .layer(tower_http::cors::CorsLayer::permissive())
     }
 
