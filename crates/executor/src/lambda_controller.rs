@@ -555,7 +555,13 @@ impl LambdaController {
             if is_mayan_guard {
                 let missing_recipient = intent.recipient.is_empty()
                     || intent.recipient == "0x0000000000000000000000000000000000000000";
-                let has_order_hash = intent.id.contains("0x") && intent.id.len() > 20;
+                // mayan_order_id must be present: the fill path uses it as the orderHash
+                // for both fulfillOrder and fulfillSimple. The old check (intent.id.len() > 20)
+                // was trivially true and never caught a missing order_id.
+                let has_order_hash = intent.mayan_order_id
+                    .as_deref()
+                    .map(|s| s.len() >= 66) // "0x" + 64 hex chars = valid bytes32
+                    .unwrap_or(false);
 
                 if missing_recipient || !has_order_hash {
                     let reason = format!(
