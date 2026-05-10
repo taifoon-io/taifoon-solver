@@ -1243,6 +1243,7 @@ async fn resolve_lifi_mayan_order(tx_hash: &str) -> Option<Intent> {
             mayan_cancel_fee: order_params.cancel_fee,
             mayan_refund_fee: order_params.refund_fee,
             mayan_gas_drop: order_params.gas_drop,
+            mayan_min_amount_out: order_params.min_amount_out,
             mayan_referrer_addr: order_params.referrer_addr,
             mayan_referrer_bps: order_params.referrer_bps,
             deadline: order_params.deadline,

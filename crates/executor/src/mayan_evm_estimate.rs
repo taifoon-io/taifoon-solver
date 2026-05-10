@@ -192,9 +192,17 @@ impl MayanEvmEstimateAdapter {
         let dest_addr = address_to_bytes32(&intent.recipient)?;
 
         let amount_in = parse_u64_amount(&intent.amount, "amount")?;
-        let min_amount_out = match intent.output_amount.as_deref() {
-            Some(s) => parse_u64_amount(s, "output_amount")?,
-            None => amount_in,
+        // Prefer the on-chain uint64 decoded by fetch_mayan_order_params — it is in the
+        // token's native decimals (e.g. 6 for USDC) and must match the on-chain value
+        // exactly for the orderId hash check to pass. The explorer API's `toAmount` is a
+        // human-readable decimal that parse_u64_amount would incorrectly scale by 1e18.
+        let min_amount_out = if let Some(raw) = intent.mayan_min_amount_out {
+            raw
+        } else {
+            match intent.output_amount.as_deref() {
+                Some(s) => parse_u64_amount(s, "output_amount")?,
+                None => amount_in,
+            }
         };
 
         let dst_chain_wh = intent.swift_dest_chain_wormhole_id.unwrap_or_else(|| {

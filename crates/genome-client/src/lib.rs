@@ -320,6 +320,11 @@ pub struct Intent {
     /// Mayan Swift gasDrop amount (raw u64, from OrderParams).
     #[serde(default)]
     pub mayan_gas_drop: Option<u64>,
+    /// Mayan Swift minAmountOut (raw u64 in token's native decimals, from on-chain OrderParams
+    /// decoded via fetch_mayan_order_params). Preferred over computing from output_amount
+    /// because the explorer API returns human-readable decimals that need token-specific scaling.
+    #[serde(default)]
+    pub mayan_min_amount_out: Option<u64>,
 
     // ── DLN Solana destination fields ─────────────────────────────────────────
     /// True when the destination chain is Solana (chain_id = 100_000_001).
@@ -484,6 +489,7 @@ impl Intent {
             mayan_referrer_addr: None,
             mayan_referrer_bps: None,
             mayan_gas_drop: None,
+            mayan_min_amount_out: None,
             is_solana_destination: None,
             is_dln_source_solana: None,
         })
@@ -1527,6 +1533,10 @@ pub struct MayanOrderParams {
     pub referrer_addr: Option<String>,
     pub referrer_bps: Option<u8>,
     pub auction_mode: Option<u8>,
+    /// On-chain minAmountOut (uint64, token's native decimals). Decoded from slot 8 of
+    /// the createOrderWithToken calldata. Use this — not the human-readable toAmount
+    /// from the explorer API — as minAmountOut in OrderParams to avoid 1e18 scaling bugs.
+    pub min_amount_out: Option<u64>,
 }
 
 /// Fetch `eth_getTransactionByHash` on `src_chain` for `tx_hash` and extract
@@ -1630,6 +1640,7 @@ pub async fn fetch_mayan_order_params(
             let r = slot(15);
             if r.len() == 64 && r != "0".repeat(64) { Some(r.to_string()) } else { None }
         },
+        min_amount_out: parse_u64(slot(8)),
         gas_drop: parse_u64(slot(9)),
         cancel_fee: parse_u64(slot(10)),
         refund_fee: parse_u64(slot(11)),
@@ -1869,6 +1880,7 @@ impl MayanPoller {
                     mayan_referrer_addr: order_params.referrer_addr,
                     mayan_referrer_bps: order_params.referrer_bps,
                     mayan_gas_drop: order_params.gas_drop,
+                    mayan_min_amount_out: order_params.min_amount_out,
                     deadline: order_params.deadline,
                     ..Default::default()
                 };
