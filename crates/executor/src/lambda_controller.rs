@@ -1483,14 +1483,22 @@ impl LambdaController {
     ///
     /// Transitions: CONFIRMED → CLAIM_PENDING → CLAIMED (or stays CONFIRMED on failure).
     pub async fn lambda_claim_debridge(&self, intent: &Intent) -> Result<LambdaClaimOutcome> {
-        // Only eligible if state is CONFIRMED.
-        let intents = self
+        // Eligible in CONFIRMED or CLAIM_PENDING (recovery path for intents that were
+        // in-flight when the process restarted). We check both states to avoid a
+        // thundering-herd re-send: if neither matches, the intent isn't ours to claim.
+        let confirmed = self
             .wallet
             .list_intents(Some("CONFIRMED"), 1000)
-            .map_err(|e| anyhow!("wallet list_intents: {e}"))?;
-        if !intents.iter().any(|r| r.intent_id == intent.id) {
+            .map_err(|e| anyhow!("wallet list_intents(CONFIRMED): {e}"))?;
+        let claim_pending = self
+            .wallet
+            .list_intents(Some("CLAIM_PENDING"), 1000)
+            .map_err(|e| anyhow!("wallet list_intents(CLAIM_PENDING): {e}"))?;
+        let eligible = confirmed.iter().chain(claim_pending.iter())
+            .any(|r| r.intent_id == intent.id);
+        if !eligible {
             return Ok(LambdaClaimOutcome::NotEligible {
-                reason: "intent not in CONFIRMED state".into(),
+                reason: "intent not in CONFIRMED or CLAIM_PENDING state".into(),
             });
         }
 
