@@ -861,11 +861,29 @@ fn token_addrs_for_chain(chain_id: u64) -> (Option<&'static str>, Option<&'stati
     }
 }
 
+/// Query parameters for /api/solver/portfolio.
+#[derive(Debug, Deserialize, Default)]
+struct PortfolioQuery {
+    /// Optional EVM address override. When provided, chain balances are fetched
+    /// for this address instead of the solver's own SOLVER_ADDRESS. Solana
+    /// balance is still read from SOLANA_ADDRESS (since a Solana pubkey can't
+    /// be derived from an EVM address). No auth required — balances are public
+    /// on-chain data.
+    address: Option<String>,
+}
+
 async fn portfolio_handler(
     State(state): State<Arc<ApiState>>,
+    axum::extract::Query(q): axum::extract::Query<PortfolioQuery>,
 ) -> impl IntoResponse {
-    let solver_addr = std::env::var("SOLVER_ADDRESS")
-        .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string());
+    let solver_addr = q.address
+        .as_deref()
+        .filter(|a| a.starts_with("0x") && a.len() == 42)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            std::env::var("SOLVER_ADDRESS")
+                .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string())
+        });
     let solana_addr = std::env::var("SOLANA_ADDRESS").ok();
 
     let client = &state.http_client;

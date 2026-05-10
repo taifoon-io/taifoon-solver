@@ -2,11 +2,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
+import WalletPin from '@/components/WalletPin'
 import { cn } from './cn'
 
 const links: { href: string; label: string; volt?: boolean }[] = [
   { href: '/', label: 'HOME' },
   { href: '/portal', label: 'PORTAL' },
+  { href: '/watch', label: 'MY WALLET' },
   { href: '/analytics', label: 'ANALYTICS' },
   { href: '/builders/bounties', label: 'ROUTES', volt: true },
   { href: '/t3rn', label: 'LWC' },
@@ -58,6 +60,7 @@ export function NavBar() {
         </nav>
 
         <div className="flex items-center gap-3">
+          <WalletPin />
           <a
             href="https://github.com/yawningmonsoon/taifoon-solver"
             target="_blank"
