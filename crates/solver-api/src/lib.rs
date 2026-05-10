@@ -163,7 +163,7 @@ pub struct ApiState {
     intents: Arc<RwLock<Vec<IntentRecord>>>,
     protocols: Arc<RwLock<HashMap<String, ProtocolStats>>>,
     money_flow: Arc<RwLock<MoneyFlow>>,
-    razor_cache: Arc<RwLock<HashMap<u64, RazorGasPreset>>>,
+    razor_cache: Arc<RwLock<HashMap<u64, (std::time::Instant, RazorGasPreset)>>>,
     warmbed_api_url: String,
     http_client: reqwest::Client,
     _wallet_db_path: String,
@@ -525,12 +525,9 @@ async fn fetch_razor_for_chain(state: &ApiState, chain_id: u64) -> RazorGasPrese
     // Check cache first
     {
         let cache = state.razor_cache.read().await;
-        if let Some(cached) = cache.get(&chain_id) {
-            // Return cached if less than 30 seconds old
-            if let Some(age_ms) = cached.age_ms {
-                if age_ms < 30_000 {
-                    return cached.clone();
-                }
+        if let Some((inserted_at, cached)) = cache.get(&chain_id) {
+            if inserted_at.elapsed() < std::time::Duration::from_secs(30) {
+                return cached.clone();
             }
         }
     }
@@ -585,9 +582,9 @@ async fn fetch_razor_for_chain(state: &ApiState, chain_id: u64) -> RazorGasPrese
                         reason: None,
                     };
 
-                    // Update cache
+                    // Update cache with insertion timestamp for TTL tracking.
                     let mut cache = state.razor_cache.write().await;
-                    cache.insert(chain_id, preset.clone());
+                    cache.insert(chain_id, (std::time::Instant::now(), preset.clone()));
 
                     preset
                 }
