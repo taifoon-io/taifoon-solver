@@ -594,8 +594,15 @@ impl Rebalancer {
                 if snap.gas_eth >= MIN_NATIVE_SWEEP_ETH + KEEP_NATIVE_FOR_GAS {
                     let sweep_native = snap.gas_eth - KEEP_NATIVE_FOR_GAS;
                     let sweep_wei = (sweep_native * 1e18) as u128;
-                    // Rough USD estimate (Polygon: POL ~$0.22, others: ETH ~$2530)
-                    let native_usd_per = if target.chain_id == 137 { 0.22f64 } else { 2530.0 };
+                    // Rough USD estimate: Polygon uses POL_PRICE_USD (default $0.22); all
+                    // other src-only chains (Linea, Scroll, zkSync, Ethereum) use eth_price_usd().
+                    let native_usd_per = if target.chain_id == 137 {
+                        std::env::var("POL_PRICE_USD").ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.22f64)
+                    } else {
+                        eth_price_usd()
+                    };
                     let sweep_usd_est = sweep_native * native_usd_per;
                     if sweep_usd_est < MIN_NATIVE_SWEEP_USD { continue; }
 

@@ -519,7 +519,12 @@ pub fn build_across_spoke_pool_calldata_with_relayer(intent: &Intent, relayer_ad
         inputAmount: input_amount,
         outputAmount: output_amount,
         originChainId: U256::from(intent.src_chain),
-        depositId: U256::from(deposit_id.max(0) as u64),
+        depositId: {
+            if deposit_id < 0 {
+                anyhow::bail!("negative depositId {} for intent {} — legacy int64 not valid for new-style SpokePool", deposit_id, intent.id);
+            }
+            U256::from(deposit_id as u64)
+        },
         fillDeadline: fill_deadline,
         exclusivityDeadline: exclusivity_deadline,
         message: message_bytes,
