@@ -45,7 +45,7 @@
   },
   "56": {
     "_chain": "BNB Chain",
-    "rpc_url": "https://bsc-mainnet.infura.io/v3/95ce4c8ac9674374bd97220882eff118",
+    "rpc_url": "https://bsc-dataseed.binance.org/",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x0000000000000000000000000000000000000000"
   },
@@ -64,13 +64,13 @@
   },
   "84532": {
     "_chain": "Base Sepolia",
-    "rpc_url": "https://evocative-compatible-knowledge.base-sepolia.quiknode.pro/2c4d3039fa97b8b5ee1a56746fe2ef8952baf685/",
+    "rpc_url": "https://sepolia.base.org",
     "operator": "0x4000F8820522AC96C4221b299876e3e53bCc8525",
     "across_adapter": "0x82B564983aE7274c86695917BBf8C99ECb6F0F8F"
   },
   "421614": {
     "_chain": "Arbitrum Sepolia",
-    "rpc_url": "https://arbitrum-sepolia.blockpi.network/v1/rpc/981eadc4f81833f5486f93ffedcb05ff4a442bb7",
+    "rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
     "operator": "0x1C17563fCdEb1aB38b1e15A0F9114Ac650585906",
     "across_adapter": "0x7E6e6d0bB24968B24db12E8CAb37e028Af2CA8A9"
   },

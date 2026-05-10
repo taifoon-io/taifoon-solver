@@ -388,9 +388,24 @@ interface PageProps {
   params: Promise<{ solverId: string }>
 }
 
+interface HostedSolverMeta {
+  name: string
+  evm_address: string
+  signing_mode: string
+  donut_accrued_usd: number
+}
+
 export default function SolverMonitorPage({ params }: PageProps) {
   const { solverId } = use(params)
   const { intents, stats, protocols, events, logs, connected } = useSolverEvents()
+  const [meta, setMeta] = useState<HostedSolverMeta | null>(null)
+
+  useEffect(() => {
+    fetch(`/api/hosting/solvers/${solverId}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => d && setMeta(d))
+      .catch(() => null)
+  }, [solverId])
 
   const dryRuns = intents.filter((i) => i.stage === 'dry_run').length
   const confirmed = intents.filter((i) => i.stage === 'confirmed').length
@@ -412,12 +427,24 @@ export default function SolverMonitorPage({ params }: PageProps) {
               </Link>
               <span className="text-[var(--border-default)]">/</span>
               <span className="font-mono text-[13px] tracking-[0.08em] text-[var(--text-primary)]">
-                solver_<span className="text-[var(--brand-blue)]">{solverId}</span>
+                {meta?.name ? (
+                  <><span className="text-[var(--text-tertiary)]">solver / </span><span className="text-[var(--brand-blue)]">{meta.name}</span></>
+                ) : (
+                  <>solver_<span className="text-[var(--brand-blue)]">{solverId}</span></>
+                )}
               </span>
+              {meta?.evm_address && (
+                <span className="font-mono text-[10px] text-[var(--text-tertiary)] hidden sm:block">
+                  {meta.evm_address.slice(0, 6)}…{meta.evm_address.slice(-4)}
+                </span>
+              )}
               <Badge tone={connected ? 'mint' : 'neutral'} dot pulse={connected}>
                 {connected ? 'LIVE' : 'CONNECTING'}
               </Badge>
               <Badge tone="info">5 PROTOCOLS</Badge>
+              {meta && meta.donut_accrued_usd > 0 && (
+                <Badge tone="mint">TSUL ${meta.donut_accrued_usd.toFixed(4)}</Badge>
+              )}
             </div>
             <div className="flex items-center gap-4">
               <div className="flex items-baseline gap-2">
