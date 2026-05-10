@@ -8,8 +8,11 @@ services:
     container_name: taifoon-solver
     restart: unless-stopped
     network_mode: host
-    # The solver filesystem is read-only; outcomes DB is written via the volume below.
+    # The solver filesystem is read-only; outcomes DB is written via the named volume.
+    # /tmp is writable via tmpfs so sqlite can create temp files.
     read_only: true
+    tmpfs:
+      - /tmp
     volumes:
       - solver-outcomes:/home/solver/outcomes
     security_opt:
@@ -31,6 +34,9 @@ services:
       # outside Docker and use the dashboard's proxy, set SOLVER_API_INTERNAL_URL to
       # http://127.0.0.1:8082 in the dashboard environment.
       - API_PORT=8099
+      # Route wallet + outcomes SQLite to the named volume (writable under read_only:true).
+      - WALLET_DB_PATH=/home/solver/outcomes/wallet.sqlite
+      - OUTCOME_DB_PATH=/home/solver/outcomes/outcomes.sqlite
       # SOLVER_PRIVATE_KEY is required — do NOT commit a value here.
       # Supply it at runtime via one of:
       #   docker-compose run -e SOLVER_PRIVATE_KEY="$SOLVER_PRIVATE_KEY" solver
