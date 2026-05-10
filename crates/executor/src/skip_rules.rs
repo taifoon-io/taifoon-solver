@@ -109,6 +109,15 @@ impl SkipRules {
                 warn!("skip-rules: drop empty predicate for protocol {}", w.protocol);
                 continue;
             }
+            if w.protocol.is_empty() {
+                // An empty protocol means the rule fires for ALL protocols.
+                // This is intentional for truly global rules, but is a common authoring
+                // mistake when the operator forgets to set the protocol field.
+                warn!(
+                    "skip-rules: rule has empty protocol — will fire for ALL protocols: {:?}",
+                    w.description.as_deref().unwrap_or("<no description>")
+                );
+            }
             rules.push(SkipRule {
                 protocol: w.protocol,
                 predicate: pred,

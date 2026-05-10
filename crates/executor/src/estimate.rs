@@ -87,12 +87,16 @@ pub fn classify_evm_error(msg: &str) -> EstimateOutcome {
     {
         return EstimateOutcome::InsufficientFundsLike(msg.to_string());
     }
-    if lower.contains("revert") || lower.contains("execution failed") {
-        // All revert forms — including bare `data: "0x"` and stripped "execution reverted" —
-        // are protocol-level rejects (RelayFilled, ExclusivityNotMet, allowedTakerDst, etc).
-        // We never classify bare reverts as InsufficientFundsLike: those errors always carry
-        // an explicit message ("insufficient funds", "not enough funds", etc) and are caught
-        // by the branch above. Broadcasting through a bare revert wastes gas.
+    if lower.contains("revert")
+        || lower.contains("execution failed")
+        || lower.contains("out of gas")
+        || lower.contains("vm exception")
+        || lower.contains("invalid opcode")
+    {
+        // All revert forms — including bare `data: "0x"`, stripped "execution reverted",
+        // out-of-gas, and Hardhat/Anvil VM exceptions — are protocol-level rejects.
+        // We never classify bare reverts as InsufficientFundsLike: those errors always
+        // carry an explicit message ("insufficient funds", etc) caught by the branch above.
         return EstimateOutcome::Reverted(msg.to_string());
     }
     // Default unknown errors to AbiInvalid — safer than masking them as green.
@@ -271,6 +275,25 @@ mod tests {
         let outcome = classify_evm_error("abi: type mismatch at field depositId expected int64 got uint32");
         assert!(matches!(outcome, EstimateOutcome::AbiInvalid(_)));
         assert!(!outcome.is_green());
+    }
+
+    #[test]
+    fn out_of_gas_classified_as_reverted() {
+        // "out of gas" during estimation is a real revert, not an ABI encoding issue.
+        let outcome = classify_evm_error("Transaction ran out of gas");
+        assert!(matches!(outcome, EstimateOutcome::Reverted(_)));
+        assert!(!outcome.is_green());
+        assert_eq!(outcome.tag(), "reverted");
+    }
+
+    #[test]
+    fn vm_exception_classified_as_reverted() {
+        let outcome = classify_evm_error("VM Exception while processing transaction: revert");
+        assert!(matches!(outcome, EstimateOutcome::Reverted(_)));
+        assert!(!outcome.is_green());
+
+        let outcome2 = classify_evm_error("VM exception: invalid opcode");
+        assert!(matches!(outcome2, EstimateOutcome::Reverted(_)));
     }
 
     #[test]

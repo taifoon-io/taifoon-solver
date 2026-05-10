@@ -1198,16 +1198,17 @@ impl LambdaController {
                 ).await
             };
 
-            // deBridge DLN `fulfillOrder` reverts with `data: "0x"` when
-            // `allowedTakerDst != msg.sender` (exclusive taker check). The generic
-            // classifier treats bare-data reverts as InsufficientFundsLike (ERC-20
-            // balance check), which is wrong for deBridge — we'd broadcast and burn
-            // gas. Re-classify to Reverted so the estimate gate blocks us early.
+            // Some RPC nodes (notably older Arbitrum / deBridge endpoints) return messages
+            // that contain both "insufficient" and "execution reverted" in the same string
+            // (e.g. "insufficient taker allowance: execution reverted (0x)"). The classifier
+            // matches "insufficient" first and yields InsufficientFundsLike, which is wrong
+            // for deBridge — we'd proceed to broadcast and burn gas on an allowedTakerDst
+            // rejection. Catch this ambiguous case and force it to Reverted.
             if is_debridge {
                 if let crate::estimate::EstimateOutcome::InsufficientFundsLike(ref msg) = estimate_outcome {
                     let lower = msg.to_lowercase();
                     if lower.contains("execution reverted") {
-                        warn!("⚠️  deBridge: re-classifying bare revert as Reverted (likely allowedTakerDst check)");
+                        warn!("⚠️  deBridge: re-classifying ambiguous funds/revert message as Reverted (likely allowedTakerDst check)");
                         estimate_outcome = crate::estimate::EstimateOutcome::Reverted(msg.clone());
                     }
                 }
