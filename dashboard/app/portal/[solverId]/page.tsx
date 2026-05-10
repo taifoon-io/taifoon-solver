@@ -14,7 +14,7 @@ import {
   ProtoStats,
   LiveEvent,
 } from '@/hooks/useSolverEvents'
-import { NavBar, Footer, Card, CardHeader, Badge, StatTile, Button, Tag } from '@/components/ui'
+import { NavBar, Footer, Card, CardHeader, Badge, StatTile, Tag } from '@/components/ui'
 import LivePnL from '@/components/LivePnL'
 import ClaimsPanel from '@/components/ClaimsPanel'
 import PortfolioPanel from '@/components/PortfolioPanel'
@@ -400,10 +400,20 @@ interface HostedSolverMeta {
   donut_accrued_usd: number
 }
 
+interface PnlSummary {
+  realized_usd_total: number
+  fills_total: number
+  last_24h_count: number
+}
+
+const SOLVER_API_BASE =
+  (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SOLVER_API_URL) || ''
+
 export default function SolverMonitorPage({ params }: PageProps) {
   const { solverId } = use(params)
   const { intents, stats, protocols, events, logs, connected } = useSolverEvents()
   const [meta, setMeta] = useState<HostedSolverMeta | null>(null)
+  const [pnl, setPnl] = useState<PnlSummary | null>(null)
 
   useEffect(() => {
     fetch(`/api/hosting/solvers/${solverId}`)
@@ -411,6 +421,18 @@ export default function SolverMonitorPage({ params }: PageProps) {
       .then((d) => d && setMeta(d))
       .catch(() => null)
   }, [solverId])
+
+  useEffect(() => {
+    const tick = () => {
+      fetch(`${SOLVER_API_BASE}/api/solver/pnl`, { cache: 'no-store' })
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => d && setPnl(d))
+        .catch(() => null)
+    }
+    tick()
+    const id = setInterval(tick, 10000)
+    return () => clearInterval(id)
+  }, [])
 
   const dryRuns = intents.filter((i) => i.stage === 'dry_run').length
   const confirmed = intents.filter((i) => i.stage === 'confirmed').length
@@ -460,12 +482,6 @@ export default function SolverMonitorPage({ params }: PageProps) {
                   ${(stats?.net_profit_today_usd ?? 0).toFixed(4)}
                 </span>
               </div>
-              <Button variant="secondary" size="sm">
-                PAUSE
-              </Button>
-              <Button variant="ghost" size="sm">
-                LOGS
-              </Button>
             </div>
           </div>
         </div>
@@ -476,7 +492,7 @@ export default function SolverMonitorPage({ params }: PageProps) {
           <StatTile label="DRY RUNS" value={dryRuns} tone="warning" />
           <StatTile label="CONFIRMED" value={confirmed} tone="mint" />
           <StatTile label="SKIPPED" value={skipped} />
-          <StatTile label="FILLS" value={stats?.executed_fills ?? 0} tone="mint" />
+          <StatTile label="FILLS" value={pnl?.fills_total ?? stats?.executed_fills ?? 0} tone="mint" />
           <StatTile label="FAILED" value={stats?.failed_fills ?? 0} tone="danger" />
           <StatTile
             label="SUCCESS"
