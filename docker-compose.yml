@@ -28,11 +28,8 @@ services:
       - CHAIN_WIRING_PATH=/home/solver/config/chain_wiring.json
       - SOLVER_ADDRESS=${SOLVER_ADDRESS:-0x0000000000000000000000000000000000000000}
       # Port exposed by the solver's internal API.
-      # NOTE: This compose file uses 8099 for the in-container port and healthcheck.
-      # The run-mainnet.sh / SECURITY_ONBOARDING.md reference SOLVER_API_INTERNAL_URL
-      # at port 8082 (the default when running outside Docker). If you run the solver
-      # outside Docker and use the dashboard's proxy, set SOLVER_API_INTERNAL_URL to
-      # http://127.0.0.1:8082 in the dashboard environment.
+      # Solver API port — must match SOLVER_API_INTERNAL_URL in the dashboard env above.
+      # Default when running outside Docker is 8082; here we use 8099 to avoid conflict.
       - API_PORT=8099
       # Route wallet + outcomes SQLite to the named volume (writable under read_only:true).
       - WALLET_DB_PATH=/home/solver/outcomes/wallet.sqlite
@@ -70,8 +67,9 @@ services:
       dockerfile: Dockerfile.dashboard
     container_name: taifoon-dashboard
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # host network mode so server-side Next.js routes can reach the solver on 127.0.0.1:8099.
+    # nginx on the host proxies port 3000 to serve solver.taifoon.dev.
+    network_mode: host
     depends_on:
       - solver
     security_opt:
@@ -80,6 +78,9 @@ services:
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_SOLVER_API_URL=
+      # Internal URL for server-side Next.js API routes to proxy solver endpoints.
+      - SOLVER_API_INTERNAL_URL=http://127.0.0.1:8099
+      - PORT=3000
     logging:
       driver: "json-file"
       options:
