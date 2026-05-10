@@ -62,6 +62,7 @@ pub const WETH_CONTRACTS: &[&str] = &[
     "0x82af49447d8a07e3bd95bd0d56f35241523fbab1", // Arbitrum
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", // Ethereum
     "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270", // Polygon WMATIC
+    "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f", // WETH Linea (Phase -2 unwrap path)
 ];
 
 // ERC-20 approve selector: 0x095ea7b3
