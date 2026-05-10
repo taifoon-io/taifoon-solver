@@ -813,6 +813,7 @@ async fn main() -> Result<()> {
                             child.mayan_gas_drop = mayan_intent.mayan_gas_drop;
                             child.mayan_referrer_addr = mayan_intent.mayan_referrer_addr;
                             child.mayan_referrer_bps = mayan_intent.mayan_referrer_bps;
+                            child.mayan_min_amount_out = mayan_intent.mayan_min_amount_out;
                             child.deadline = mayan_intent.deadline;
                             if child.output_amount.is_none() {
                                 child.output_amount = mayan_intent.output_amount;
