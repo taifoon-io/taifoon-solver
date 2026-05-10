@@ -1474,6 +1474,8 @@ impl LambdaController {
             warn!("⚠️  wallet record_revenue: {e}");
         }
 
+        self.transition(intent_id, IntentState::Claimed, Some(&tx_hash), None);
+
         Ok(LambdaClaimOutcome::Claimed { tx_hash, fee_usd })
     }
 
