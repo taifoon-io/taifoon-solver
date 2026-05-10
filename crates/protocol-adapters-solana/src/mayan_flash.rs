@@ -34,6 +34,12 @@ use crate::send::SOLANA_PRIVATE_KEY_ENV;
 /// is published and the mainnet program is confirmed.
 pub const MAYAN_FLASH_PROGRAM_ID: &str = "PLACEHOLDER0MayanFlash0XXXXXXXXXXXXXXXXXXXXXXX";
 
+/// Returns true when the Mayan Flash program ID has been set to a real address.
+/// Used by the executor to skip fills early rather than failing at broadcast.
+pub fn mayan_flash_program_ready() -> bool {
+    !MAYAN_FLASH_PROGRAM_ID.contains("PLACEHOLDER")
+}
+
 /// Default compute unit budget for Flash fills. Lower than Swift because the
 /// LP-based fill skips the auction VAA verification overhead.
 pub const DEFAULT_FLASH_COMPUTE_UNITS: u64 = 200_000;

@@ -29,6 +29,12 @@ use crate::send::{SolanaSendResult, SOLANA_PRIVATE_KEY_ENV};
 /// TODO(dln-solana): replace with mainnet program ID once confirmed.
 pub const DLN_SOLANA_PROGRAM_ID: &str = "dln1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 
+/// Returns true when the DLN Solana program ID has been set to a real address.
+/// Used by the executor to skip fills early rather than failing at broadcast.
+pub fn dln_solana_program_ready() -> bool {
+    !DLN_SOLANA_PROGRAM_ID.contains('x')
+}
+
 /// Solana USDC mint (used by callers to whitelist Solana-destination token checks).
 pub const SOLANA_USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 

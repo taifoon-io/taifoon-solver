@@ -613,7 +613,16 @@ impl LambdaController {
         // Must be checked before the generic is_mayan && is_solana_src block.
         let is_mayan_flash = proto_lower.contains("flash");
         if is_mayan_flash && is_solana_src {
-            use protocol_adapters_solana::mayan_flash::{MayanFlashBroadcaster, MayanFlashIntent};
+            use protocol_adapters_solana::mayan_flash::{mayan_flash_program_ready, MayanFlashBroadcaster, MayanFlashIntent};
+
+            // Skip until the Mayan Flash program ID is set to a real mainnet address.
+            if !mayan_flash_program_ready() {
+                let reason = "mayan_flash_program_not_configured".to_string();
+                info!("⏭️  {} — {} (placeholder program ID)", intent.id, reason);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
 
             if self.dry_run {
                 info!("🧪 DRY_RUN: would broadcast Mayan Flash fill for {}", intent.id);
@@ -735,7 +744,16 @@ impl LambdaController {
                 || intent.is_solana_destination.unwrap_or(false));
 
         if is_dln_solana_dst {
-            use protocol_adapters_solana::dln_solana::{DlnSolanaIntent, DlnSolanaBroadcaster};
+            use protocol_adapters_solana::dln_solana::{dln_solana_program_ready, DlnSolanaIntent, DlnSolanaBroadcaster};
+
+            // Skip until the DLN Solana program ID is set to a real mainnet address.
+            if !dln_solana_program_ready() {
+                let reason = "dln_solana_program_not_configured".to_string();
+                info!("⏭️  {} — {} (placeholder program ID)", intent.id, reason);
+                self.transition(&intent.id, IntentState::SkipUnprofitable, None, Some(&reason));
+                let _ = self.wallet.release(&intent.id);
+                return Ok(LambdaExecuteOutcome::Skipped { reason });
+            }
 
             if self.dry_run {
                 info!("🧪 DRY_RUN: would broadcast DLN Solana fill for {}", intent.id);
