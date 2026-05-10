@@ -257,10 +257,12 @@ export default function PortfolioPanel() {
     return () => { clearInterval(a); clearInterval(b) }
   }, [refresh, refreshRebalancer])
 
-  // Derived: sort chains by USD desc, compute max for spark bars
+  // Derived: keep only chains with any balance (or Solana), sort by USD desc
   const sortedChains = useMemo(() => {
     if (!portfolio) return []
-    return [...portfolio.chains].sort((a, b) => rowUsd(b) - rowUsd(a))
+    return [...portfolio.chains]
+      .filter((r) => rowUsd(r) > 0 || r.chain_id === SOLANA_CHAIN_ID)
+      .sort((a, b) => rowUsd(b) - rowUsd(a))
   }, [portfolio])
 
   const maxUsd = useMemo(
@@ -305,9 +307,9 @@ export default function PortfolioPanel() {
         {/* KPI strip */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <KpiTile
-            label="TOTAL USD"
-            value={<RollingNumber target={totalUsd} prefix="$" decimals={2} />}
-            tone="mint"
+            label="CAPITAL USD"
+            value={totalUsd > 0 ? <RollingNumber target={totalUsd} prefix="$" decimals={2} /> : '—'}
+            tone={totalUsd > 0 ? 'mint' : 'default'}
           />
           <KpiTile
             label="REALIZED P&L"
@@ -315,13 +317,13 @@ export default function PortfolioPanel() {
             tone={pnl && pnl.realized_usd_total >= 0 ? 'mint' : 'danger'}
           />
           <KpiTile
-            label="FILLS"
-            value={pnl ? String(pnl.fills_total) : (portfolio?.fills.confirmed ?? 0).toString()}
+            label="TOTAL FILLS"
+            value={pnl ? String(pnl.fills_total) : '—'}
             tone="blue"
           />
           <KpiTile
-            label="CHAINS"
-            value={`${healthyCount}/${sortedChains.length}`}
+            label="CHAINS LIVE"
+            value={sortedChains.length > 0 ? `${healthyCount}/${sortedChains.length}` : '—'}
             tone={criticalCount > 0 ? 'danger' : 'default'}
           />
         </div>
@@ -339,7 +341,7 @@ export default function PortfolioPanel() {
         )}
         {portfolio && sortedChains.length === 0 && (
           <div className="text-[var(--text-tertiary)] text-xs text-center py-6 font-mono">
-            No chain data yet — set SOLVER_ADDRESS on solver-api and refresh.
+            No funded chains detected — deposit to start filling.
           </div>
         )}
 

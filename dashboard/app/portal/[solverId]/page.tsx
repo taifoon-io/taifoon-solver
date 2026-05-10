@@ -161,13 +161,11 @@ function IntentRow({ intent }: { intent: Intent }) {
   )
 }
 
-const KNOWN_PROTOCOLS = ['across_v3', 'debridge_dln', 'mayan_swift', 'lifi', 'orbiter_finance']
+const ACTIVE_PROTOCOLS = ['across_v3', 'debridge_dln', 'mayan_swift']
 const PROTO_NAMES: Record<string, string> = {
   across_v3: 'Across V3',
   debridge_dln: 'deBridge DLN',
   mayan_swift: 'Mayan Swift',
-  lifi: 'LiFi',
-  orbiter_finance: 'Orbiter',
 }
 
 function ProtocolPanel({ protocols }: { protocols: Record<string, ProtoStats> }) {
@@ -183,9 +181,9 @@ function ProtocolPanel({ protocols }: { protocols: Record<string, ProtoStats> })
 
   return (
     <Card padding="md">
-      <CardHeader title="5 Protocols" />
+      <CardHeader title="Protocols" />
       <div className="space-y-3">
-        {KNOWN_PROTOCOLS.map((key) => {
+        {ACTIVE_PROTOCOLS.map((key) => {
           const stat = Object.entries(protocols).find(([k]) => k.includes(key.split('_')[0]))
           const data = stat?.[1]
           const color = protocolColor(key)
@@ -209,7 +207,7 @@ function ProtocolPanel({ protocols }: { protocols: Record<string, ProtoStats> })
                   {data.skipped > 0 && <span className="text-[var(--text-tertiary)]">{data.skipped} skip</span>}
                 </div>
               ) : (
-                <span className="text-[10px] text-[var(--text-tertiary)] font-mono">waiting…</span>
+                <span className="text-[10px] text-[var(--text-tertiary)] font-mono">monitoring…</span>
               )}
             </div>
           )
@@ -475,9 +473,9 @@ export default function SolverMonitorPage({ params }: PageProps) {
               <Badge tone={connected ? 'mint' : 'neutral'} dot pulse={connected}>
                 {connected ? 'LIVE' : 'CONNECTING'}
               </Badge>
-              <Badge tone="info">5 PROTOCOLS</Badge>
+              <Badge tone="info">3 PROTOCOLS</Badge>
               {meta && meta.donut_accrued_usd > 0 && (
-                <Badge tone="mint">TSUL ${meta.donut_accrued_usd.toFixed(4)}</Badge>
+                <Badge tone="mint">+${meta.donut_accrued_usd.toFixed(2)} REWARDS</Badge>
               )}
             </div>
             <div className="flex items-center gap-4">

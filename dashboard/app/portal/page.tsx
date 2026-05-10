@@ -46,6 +46,18 @@ interface HostedSolver {
 const SOLVER_API_BASE =
   (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SOLVER_API_URL) || ''
 
+const PROTO_LABELS: Record<string, string> = {
+  across_v3: 'Across V3',
+  debridge_dln: 'deBridge DLN',
+  mayan_swift: 'Mayan Swift',
+  lifi: 'LiFi',
+  orbiter_finance: 'Orbiter',
+}
+
+function protoLabel(slug: string): string {
+  return PROTO_LABELS[slug] ?? slug.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 const POLL_INTERVAL_MS = 5000
 const SSE_OFFLINE_THRESHOLD_MS = 30_000
 const SSE_HEALTH_CHECK_MS = 5000
@@ -244,7 +256,7 @@ export default function PortalPage() {
                 <div className="text-center">
                   <div className="text-sm text-[var(--text-secondary)] font-mono">Connecting to solver…</div>
                   <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
-                    Make sure the solver API is running on port 8082
+                    Make sure the solver API is running and reachable
                   </div>
                 </div>
               </div>
@@ -345,11 +357,12 @@ function HostedSolverCard({ hosted }: { hosted: HostedSolver }) {
             </div>
             <div className="mt-2.5 flex items-center gap-2 flex-wrap">
               {protocols.map((p) => {
-                const color = protocolColors[p.toLowerCase()] ?? '#94B0C4'
+                const key = p.toLowerCase().split('_')[0]
+                const color = protocolColors[key] ?? '#94B0C4'
                 return (
                   <span key={p} className="text-[10px] font-mono tracking-[0.12em] uppercase px-2 py-0.5 rounded-[2px] border"
                     style={{ color, borderColor: `${color}30` }}>
-                    {p}
+                    {protoLabel(p)}
                   </span>
                 )
               })}
@@ -368,7 +381,7 @@ function HostedSolverCard({ hosted }: { hosted: HostedSolver }) {
                 {new Date(hosted.registered_at).toLocaleDateString()}
               </span>
               {hosted.donut_accrued_usd > 0 && (
-                <> · donut <span className="text-[var(--solana-mint)]">${hosted.donut_accrued_usd.toFixed(4)}</span></>
+                <> · <span className="text-[var(--solana-mint)]">+${hosted.donut_accrued_usd.toFixed(2)} rewards</span></>
               )}
             </div>
           </div>
@@ -429,7 +442,8 @@ function SolverCard({ solver, hostedId }: { solver: SolverDisplay; hostedId?: st
                 </span>
               ) : (
                 solver.protocols.map((p) => {
-                  const color = protocolColors[p.toLowerCase()] ?? '#94B0C4'
+                  const key = p.toLowerCase().split('_')[0]
+                  const color = protocolColors[key] ?? '#94B0C4'
                   return (
                     <span
                       key={p}
@@ -439,7 +453,7 @@ function SolverCard({ solver, hostedId }: { solver: SolverDisplay; hostedId?: st
                         borderColor: `${color}30`,
                       }}
                     >
-                      {p}
+                      {protoLabel(p)}
                     </span>
                   )
                 })
