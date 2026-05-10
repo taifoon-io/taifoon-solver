@@ -51,7 +51,13 @@ export function Footer() {
       <div className="border-t border-[var(--border-subtle)]">
         <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between flex-wrap gap-2">
           <span className="text-[10px] font-mono tracking-[0.24em] text-[var(--text-tertiary)]">
-            © TAIFOON · MIT
+            © TAIFOON ·{' '}
+            <Link
+              href="/LICENSE"
+              className="hover:text-[var(--brand-blue)] transition-colors"
+            >
+              MIT · Apache 2.0
+            </Link>
           </span>
           <span className="text-[10px] font-mono tracking-[0.16em] text-[var(--text-tertiary)]">
             v0.1 · 31 protocols · 38+ chains

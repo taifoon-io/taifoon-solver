@@ -8,6 +8,13 @@ services:
     container_name: taifoon-solver
     restart: unless-stopped
     network_mode: host
+    # The solver filesystem is read-only; outcomes DB is written via the volume below.
+    read_only: true
+    volumes:
+      - solver-outcomes:/home/solver/outcomes
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
     environment:
       - GENOME_SSE_URL=http://127.0.0.1:30081/api/genome/subscribe/sse
       - WARMBED_API_URL=https://api.taifoon.dev
@@ -17,10 +24,20 @@ services:
       - CHAIN_WIRING_FILE=/home/solver/config/chain_wiring.json
       - CHAIN_WIRING_PATH=/home/solver/config/chain_wiring.json
       - SOLVER_ADDRESS=${SOLVER_ADDRESS:-0x0000000000000000000000000000000000000000}
+      # Port exposed by the solver's internal API.
+      # NOTE: This compose file uses 8099 for the in-container port and healthcheck.
+      # The run-mainnet.sh / SECURITY_ONBOARDING.md reference SOLVER_API_INTERNAL_URL
+      # at port 8082 (the default when running outside Docker). If you run the solver
+      # outside Docker and use the dashboard's proxy, set SOLVER_API_INTERNAL_URL to
+      # http://127.0.0.1:8082 in the dashboard environment.
       - API_PORT=8099
-      # Dummy key initializes the Lambda controller in dry-run mode (no real broadcasts).
-      # Replace with a funded key to enable live fills.
-      - SOLVER_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001
+      # SOLVER_PRIVATE_KEY is required — do NOT commit a value here.
+      # Supply it at runtime via one of:
+      #   docker-compose run -e SOLVER_PRIVATE_KEY="$SOLVER_PRIVATE_KEY" solver
+      #   or a .env file excluded from git (add .env to .gitignore)
+      #   or a secrets manager (Vault, AWS SM, GitHub Actions secrets).
+      # See SECURITY_ONBOARDING.md §2 for full guidance.
+      # - SOLVER_PRIVATE_KEY=   # required — set in environment, not here
       # Override deBridge poller RPCs (optional — falls back to bundled Infura keys).
       # Recommended for production to avoid shared rate limits.
       # - DEBRIDGE_RPC_42161=https://arbitrum-mainnet.infura.io/v3/YOUR_KEY
@@ -51,6 +68,9 @@ services:
       - "3000:3000"
     depends_on:
       - solver
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_SOLVER_API_URL=
@@ -59,3 +79,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  solver-outcomes:
