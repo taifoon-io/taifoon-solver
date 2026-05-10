@@ -109,7 +109,9 @@ impl MayanFlashIntent {
             }
         };
 
-        let min_amount_out = {
+        let min_amount_out = if let Some(v) = intent.mayan_min_amount_out {
+            v
+        } else {
             let raw = intent
                 .output_amount
                 .as_deref()
@@ -618,6 +620,18 @@ mod tests {
             err.to_string().contains("state_account"),
             "missing-field error should mention state_account, got: {}",
             err
+        );
+    }
+
+    #[test]
+    fn from_intent_prefers_mayan_min_amount_out_over_output_amount() {
+        let mut intent = flash_intent_fixture();
+        // output_amount is 99_850_000 but mayan_min_amount_out should win.
+        intent.mayan_min_amount_out = Some(98_000_000);
+        let fi = MayanFlashIntent::from_intent(&intent).expect("from_intent");
+        assert_eq!(
+            fi.min_amount_out, 98_000_000,
+            "mayan_min_amount_out (on-chain uint64) must be preferred over output_amount"
         );
     }
 
