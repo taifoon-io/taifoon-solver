@@ -28,8 +28,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use genome_client::Intent;
 use std::collections::HashMap;
-use tracing::warn;
-
 use crate::estimate::{
     write_attempt_bundle, AttemptBundle, EstimateAdapter, EstimateOutcome,
 };
