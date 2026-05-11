@@ -191,16 +191,21 @@ export default function LivePnL() {
     let cancelled = false
     const tick = async () => {
       try {
-        const [pnlRes, outRes] = await Promise.all([
+        const [pnlRes, execRes, otherRes] = await Promise.all([
           fetch(`${SOLVER_API_BASE}/api/solver/pnl`, { cache: 'no-store' }),
-          fetch(`${SOLVER_API_BASE}/api/solver/outcomes?limit=200`, { cache: 'no-store' }),
+          fetch(`${SOLVER_API_BASE}/api/solver/outcomes?limit=100&decision=executed`, { cache: 'no-store' }),
+          fetch(`${SOLVER_API_BASE}/api/solver/outcomes?limit=20`, { cache: 'no-store' }),
         ])
-        if (!pnlRes.ok || !outRes.ok) throw new Error(`HTTP ${pnlRes.status}/${outRes.status}`)
+        if (!pnlRes.ok) throw new Error(`pnl HTTP ${pnlRes.status}`)
         const pnl: PnlSummary = await pnlRes.json()
-        const out: OutcomeRecord[] = await outRes.json()
+        const executed: OutcomeRecord[] = execRes.ok ? await execRes.json() : []
+        const recent: OutcomeRecord[] = otherRes.ok ? await otherRes.json() : []
+        // Merge: executed fills + recent non-executed outcomes (dedup by intent_id)
+        const execIds = new Set(executed.map((r) => r.intent_id))
+        const others = recent.filter((r) => !isExecuted(r.decision) && !execIds.has(r.intent_id))
         if (!cancelled) {
           setSummary(pnl)
-          setOutcomes(out)
+          setOutcomes([...executed, ...others])
           setError(null)
         }
       } catch (e: unknown) {
