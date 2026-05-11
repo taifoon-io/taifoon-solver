@@ -348,7 +348,17 @@ function OpenOrdersPanel() {
           <div className="text-[var(--text-tertiary)] text-xs text-center py-6">Loading…</div>
         )}
         {!loading && orders.length === 0 && (
-          <div className="text-[var(--success)] text-xs text-center py-6">✅ No open orders</div>
+          <div className="py-5 px-1 space-y-3">
+            <div className="text-[10px] tracking-[0.2em] uppercase text-[var(--text-tertiary)]">No open orders</div>
+            <p className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed">
+              Open orders are fills where solver capital is actively committed on-chain.
+              A position appears here from calldata build through destination-chain confirmation.
+              States tracked: <span className="text-[var(--warning)]">CALLDATA_BUILD</span> (capital
+              reserved), <span className="text-[var(--brand-blue)]">BROADCAST</span> (tx sent
+              to mempool), <span className="text-[var(--brand-blue)]">PENDING_CONFIRMATION</span> (awaiting
+              receipt), <span className="text-[var(--danger)]">REVERTED</span> (fill failed — capital released).
+            </p>
+          </div>
         )}
         {[...orders].sort((a, b) => {
           const ap = WE_ARE_FILLING.has(a.state) ? 0 : a.state === 'REVERTED' ? 1 : 2
