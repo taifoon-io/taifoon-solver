@@ -16,7 +16,7 @@ services:
       - PROTOCOL_FILTER=all
       - CHAIN_WIRING_FILE=/home/solver/config/chain_wiring.json
       - CHAIN_WIRING_PATH=/home/solver/config/chain_wiring.json
-      - SOLVER_ADDRESS=0x19b3D79A15B643c6A331772c3331838A5703Bc49
+      - SOLVER_ADDRESS=${SOLVER_ADDRESS:-0x0000000000000000000000000000000000000000}
       - API_PORT=8099
       # Dummy key initializes the Lambda controller in dry-run mode (no real broadcasts).
       # Replace with a funded key to enable live fills.

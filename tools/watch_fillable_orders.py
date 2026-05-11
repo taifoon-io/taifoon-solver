@@ -16,7 +16,7 @@ import argparse
 import urllib.request
 
 # Solver wallet
-SOLVER = "0x19b3d79a15b643c6a331772c3331838a5703bc49"
+SOLVER = os.environ.get("SOLVER_ADDRESS", "0x0000000000000000000000000000000000000000")
 
 # Chain RPC endpoints
 RPCS = {

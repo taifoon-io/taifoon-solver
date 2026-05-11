@@ -27,7 +27,7 @@ fn load_intent(name: &str) -> Intent {
         .unwrap_or_else(|e| panic!("project {} → Intent: {}", name, e))
 }
 
-const TEST_SOLVER: Address = address!("19b3D79A15B643c6A331772c3331838A5703Bc49");
+const TEST_SOLVER: Address = address!("0000000000000000000000000000000000000001");
 
 fn debridge_fixtures() -> Vec<&'static str> {
     vec!["debridge.json"]

@@ -446,7 +446,7 @@ mod tests {
         let r = registry();
         let req = ProvisionRequest {
             name: "test-solver".into(),
-            evm_address: "0x19b3D79A15B643c6A331772c3331838A5703Bc49".into(),
+            evm_address: "0x0000000000000000000000000000000000000001".into(),
             solana_address: None,
             signing_mode: Some("self_hosted".into()),
             signer_webhook_url: None,
@@ -456,7 +456,7 @@ mod tests {
             protocols: Some("across".into()),
         };
         let (solver, token) = r.provision(&req).unwrap();
-        assert_eq!(solver.solver_id, "19b3d79a");
+        assert_eq!(solver.solver_id, "00000000");
         assert_eq!(token.len(), 48); // 24 bytes hex-encoded
         assert!(solver.evm_address.starts_with("0x"));
     }
