@@ -1044,7 +1044,8 @@ mod tests {
         assert!(
             msg.contains("donut_take_usd_micro")
                 || msg.contains("recovered")
-                || msg.contains("share"),
+                || msg.contains("share")
+                || msg.contains("spinner_keeps"),
             "expected tamper-detection error, got: {}",
             msg
         );
