@@ -1,6 +1,6 @@
 {
   "_comment": "AdapterRegistry — maps adapter_id (resolved by donut_adjudicator::adapter_id_for_outcome) to the EVM addresses that receive the 70% / 20% donut shares. Loaded at solver-main boot by AdapterRegistry::load_default(). Public mirror served at GET /api/donut/registry. The 'ecosystem' address receives the 10% ecosystem share and ALSO catches the 70% + 20% fallthrough when a fill routes through an adapter not listed here (fail-closed). Replace the placeholder addresses below with real EVM addresses owned by the Builder + reviewer set of each adapter under TSUL.",
-  "ecosystem": "0x0000000000000000000000000000000000000eee",
+  "ecosystem": "0x000000000000000000000000000000000000eeee",
   "adapters": {
     "mayan-solana-swift-v1": {
       "_note": "Mayan Swift program on Solana (the Anchor program at src/protocol-adapters-solana/src/mayan_solana.rs). Routes Mayan auctions where EITHER src or dst is Solana.",

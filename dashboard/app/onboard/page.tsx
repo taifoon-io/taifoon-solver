@@ -589,6 +589,11 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
               yawningmonsoon
             </a>
           </p>
+          <div className="mt-4 flex justify-center">
+            <Button href="/policy" variant="ghost" size="sm">
+              Verify the TSUL policy →
+            </Button>
+          </div>
         </div>
       </main>
       <Footer />

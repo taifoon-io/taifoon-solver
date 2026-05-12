@@ -30,6 +30,7 @@ from helpers import (
     build_siwe_message,
     expected_adapter_id,
     expected_split_micro,
+    get_ledger_head,
     make_signer,
     make_signer_b,
     produce_attestation,
@@ -251,7 +252,7 @@ def test_funds_actively_filling_intents_across_solana_protocols(server, auth_hea
     # Read the ledger — 4 rows, in order.
     r = requests.get(f"{server.base_url}/api/donut/ledger/{solver_id}")
     assert r.status_code == 200, r.text
-    ledger = r.json()
+    ledger = r.json()["attestations"]
     assert len(ledger) == 4, f"expected 4 ledger rows, got {len(ledger)}"
     for stored, expected in zip(ledger, posted):
         assert stored["fill_id"] == expected["fill_id"]
@@ -289,6 +290,8 @@ def test_spinner_who_is_also_the_builder_accrues_donut(server, auth_headers):
         creator_addr=signer.address.lower(),  # ← Spinner is Builder
         reviewer_addrs=REVIEWER_ADDRS,
         ecosystem_addr=ECOSYSTEM_ADDR,
+        server_url=server.base_url,
+        spinner_addr=signer.address,
     )
     r = requests.post(
         f"{server.base_url}/api/donut/attest",
@@ -334,6 +337,8 @@ def test_tsul_70_20_10_split_is_correct(server, auth_headers):
         creator_addr=MAYAN_SWIFT_SOLANA_BUILDER,
         reviewer_addrs=REVIEWER_ADDRS,
         ecosystem_addr=ECOSYSTEM_ADDR,
+        server_url=server.base_url,
+        spinner_addr=signer.address,
     )
     att = env["attestation"]
 
@@ -360,7 +365,7 @@ def test_tsul_70_20_10_split_is_correct(server, auth_headers):
 
     r = requests.get(f"{server.base_url}/api/donut/ledger/{solver_id}")
     assert r.status_code == 200
-    served = r.json()[0]
+    served = r.json()["attestations"][0]
     for key in (
         "donut_take_usd_micro",
         "creator_share_usd_micro",
@@ -427,7 +432,7 @@ def test_tsul_split_is_correct_for_every_solana_protocol(server, auth_headers):
     # The full ledger contains 5 rows in order, with adapter_ids in the
     # expected order.
     r = requests.get(f"{server.base_url}/api/donut/ledger/{solver_id}")
-    served = r.json()
+    served = r.json()["attestations"]
     assert len(served) == 5
     assert [row["adapter_id"] for row in served] == [f[5] for f in fills]
 
@@ -458,6 +463,8 @@ def test_unregistered_adapter_routes_donut_to_ecosystem(server, auth_headers):
         creator_addr=ECOSYSTEM_ADDR,  # ← simulating unregistered fallback
         reviewer_addrs=[ECOSYSTEM_ADDR],
         ecosystem_addr=ECOSYSTEM_ADDR,
+        server_url=server.base_url,
+        spinner_addr=signer.address,
     )
     r = requests.post(
         f"{server.base_url}/api/donut/attest",
@@ -501,6 +508,8 @@ def test_spinner_cannot_post_attestation_for_another_spinner(server, auth_header
         creator_addr=MAYAN_SWIFT_SOLANA_BUILDER,
         reviewer_addrs=REVIEWER_ADDRS,
         ecosystem_addr=ECOSYSTEM_ADDR,
+        server_url=server.base_url,
+        spinner_addr=signer_a.address,
     )
     att = env["attestation"]
 
@@ -541,6 +550,8 @@ def test_attest_route_requires_bearer_token(server):
         creator_addr=MAYAN_SWIFT_SOLANA_BUILDER,
         reviewer_addrs=REVIEWER_ADDRS,
         ecosystem_addr=ECOSYSTEM_ADDR,
+        server_url=server.base_url,
+        spinner_addr=signer.address,
     )
     r = requests.post(
         f"{server.base_url}/api/donut/attest",
@@ -570,6 +581,8 @@ def test_attest_duplicate_fill_id_rejected(server, auth_headers):
         creator_addr=MAYAN_SWIFT_SOLANA_BUILDER,
         reviewer_addrs=REVIEWER_ADDRS,
         ecosystem_addr=ECOSYSTEM_ADDR,
+        server_url=server.base_url,
+        spinner_addr=signer.address,
     )
     r1 = requests.post(
         f"{server.base_url}/api/donut/attest",

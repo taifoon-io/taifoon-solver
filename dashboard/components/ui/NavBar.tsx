@@ -13,6 +13,7 @@ const links: { href: string; label: string; volt?: boolean }[] = [
   { href: '/builders/bounties', label: 'ROUTES', volt: true },
   { href: '/t3rn', label: 'LWC' },
   { href: '/onboard', label: 'ONBOARD' },
+  { href: '/policy', label: 'POLICY' },
   { href: '/docs', label: 'DOCS' },
 ]
 

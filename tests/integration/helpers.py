@@ -21,8 +21,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from eth_utils import to_checksum_address
 
 WORKSPACE = Path(__file__).resolve().parents[2]
 
@@ -102,7 +104,7 @@ def build_siwe_message(
     iat = datetime.now(timezone.utc).replace(microsecond=0)
     exp = iat + timedelta(seconds=ttl_seconds)
     # Address must be EIP-55 checksummed for siwe-rs to parse.
-    checksum_addr = Account.to_checksum_address(address)
+    checksum_addr = to_checksum_address(address)
     iat_str = iat.isoformat().replace("+00:00", "Z")
     exp_str = exp.isoformat().replace("+00:00", "Z")
     msg = (
@@ -183,6 +185,26 @@ def expected_split_micro(
     return compute_split_micro(fee_micro, bps_num, bps_den)
 
 
+def get_ledger_head(base_url: str, spinner_id: str) -> str:
+    """Fetch the current prev_hash for a spinner from the ledger head endpoint.
+    Returns ZERO_HASH if the spinner has never attested before."""
+    try:
+        url = f"{base_url}/api/donut/ledger/{spinner_id}/head"
+        r = requests.get(url, timeout=2.0)
+        if r.status_code == 200:
+            data = r.json()
+            prev = data.get("prev_hash", ZERO_HASH)
+            print(f"[DEBUG] Fetched prev_hash for {spinner_id}: {prev[:18]}...")
+            return prev
+        # 404 or other error - spinner has no attestations yet
+        print(f"[DEBUG] No ledger for {spinner_id} (status {r.status_code})")
+        return ZERO_HASH
+    except Exception as e:
+        # Silently return ZERO_HASH for first attestation case
+        print(f"[DEBUG] get_ledger_head failed for {spinner_id}: {e}")
+        return ZERO_HASH
+
+
 def produce_attestation(
     *,
     priv_key_hex: str,
@@ -196,9 +218,15 @@ def produce_attestation(
     reviewer_addrs: list[str],
     ecosystem_addr: str,
     prev_hash: str = ZERO_HASH,
+    server_url: str | None = None,
+    spinner_addr: str | None = None,
 ) -> dict:
     """Shell out to `solver-api-testbin sign-attestation` to obtain a
     canonical-JSON-signed DonutAttestation.
+
+    If `server_url` and `spinner_addr` are provided and `prev_hash` is
+    ZERO_HASH, automatically fetches the current ledger head from the
+    server to maintain proper hash chaining across tests.
 
     Returns a dict with three top-level keys:
         - `attestation`: the signed DonutAttestation, ready to POST to
@@ -213,6 +241,18 @@ def produce_attestation(
     test rig never has to reproduce `serde_json`'s float formatter — which
     is a recipe for off-by-one-bit signature failures.
     """
+    # Auto-fetch prev_hash if server context is provided and prev_hash wasn't
+    # explicitly set by the caller (still at default ZERO_HASH)
+    if server_url and spinner_addr:
+        spinner_id = spinner_id_from_addr(spinner_addr)
+        print(f"[DEBUG] Auto-fetching for spinner_id={spinner_id} from {spinner_addr}")
+        fetched_prev = get_ledger_head(server_url, spinner_id)
+        # Use fetched value if available, otherwise keep the passed/default prev_hash
+        if fetched_prev and fetched_prev != ZERO_HASH:
+            print(f"[DEBUG] Using fetched prev_hash: {fetched_prev[:18]}...")
+            prev_hash = fetched_prev
+        else:
+            print(f"[DEBUG] No prev_hash fetched, using default: {prev_hash[:18]}...")
     spec = {
         "priv_key_hex": priv_key_hex,
         "intent_id": intent_id,

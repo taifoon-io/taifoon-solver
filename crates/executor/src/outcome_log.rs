@@ -122,6 +122,7 @@ impl OutcomeLog {
             "ALTER TABLE solver_outcomes ADD COLUMN solver_id      TEXT",
             "ALTER TABLE solver_outcomes ADD COLUMN claim_tx_hash  TEXT",
             "ALTER TABLE solver_outcomes ADD COLUMN claim_fee_usd  REAL",
+            "ALTER TABLE solver_outcomes ADD COLUMN fee_usd        REAL",
         ] {
             let _ = conn.execute(stmt, []);
         }
@@ -374,6 +375,78 @@ impl OutcomeLog {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Read up to `limit` `executed` rows whose `ts` is strictly greater
+    /// than `since_ts` (or all `executed` rows when `since_ts` is None).
+    /// Returns in `ts ASC` order so the AttestationPump can replay them
+    /// in chain-link order.
+    ///
+    /// "Executed" here means the row's `decision` is one of
+    /// `executed` / `execute` / `confirmed` AND `tx_hash` is non-NULL —
+    /// matches the criterion the donut-adjudicator uses to derive a stable
+    /// `fill_id`.
+    pub fn list_executed(
+        &self,
+        limit: usize,
+        since_ts: Option<DateTime<Utc>>,
+    ) -> Result<Vec<OutcomeRecord>> {
+        let conn = self.inner.sqlite.lock().unwrap();
+        let parse_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<OutcomeRecord> {
+            let ts_str: String = r.get(0)?;
+            let ts = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            Ok(OutcomeRecord {
+                ts,
+                intent_id: r.get(1)?,
+                protocol: r.get(2)?,
+                src_chain: r.get::<_, i64>(3)? as u64,
+                dst_chain: r.get::<_, i64>(4)? as u64,
+                decision: r.get(5)?,
+                tx_hash: r.get(6)?,
+                predicted_gas: r.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                gas_used: r.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+                effective_gas_price_wei: r.get(9)?,
+                predicted_profit_usd: r.get(10)?,
+                actual_profit_usd: r.get(11)?,
+                skip_reason: r.get(12)?,
+                error: r.get(13)?,
+                solver_id: r.get(14)?,
+                claim_tx_hash: r.get(15)?,
+                claim_fee_usd: r.get(16)?,
+                fee_usd: r.get(17)?,
+            })
+        };
+
+        let base_select = "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
+                    predicted_gas, gas_used, effective_gas_price_wei,
+                    predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
+                    claim_tx_hash, claim_fee_usd, fee_usd
+             FROM solver_outcomes
+             WHERE decision IN ('executed','execute','confirmed')
+               AND tx_hash IS NOT NULL";
+
+        let mut out = Vec::new();
+        match since_ts {
+            Some(ts) => {
+                let sql = format!("{} AND ts > ?1 ORDER BY ts ASC LIMIT ?2", base_select);
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![ts.to_rfc3339(), limit as i64], parse_row)?;
+                for r in rows {
+                    out.push(r?);
+                }
+            }
+            None => {
+                let sql = format!("{} ORDER BY ts ASC LIMIT ?1", base_select);
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![limit as i64], parse_row)?;
+                for r in rows {
+                    out.push(r?);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Aggregate P&L summary for the dashboard: realized USD totals, fill

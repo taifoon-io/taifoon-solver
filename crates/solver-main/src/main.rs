@@ -11,7 +11,9 @@ use protocol_adapters::AdapterFactory;
 use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
+use solver_main::attestation_pump;
 use solver_main::lifi_resolver::{resolve_lifi_bridge, LifiBridgeResult};
+use solver_main::messiah;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use taifoon_arb_bridge::{BalanceHighHandler, StubBridge, ThresholdHandler};
@@ -349,6 +351,44 @@ async fn main() -> Result<()> {
                 tokio::time::sleep(std::time::Duration::from_secs(claim_interval)).await;
             }
         });
+    }
+
+    // Task C: attestation pump — closes the donut-attestation loop. Reads
+    // confirmed fills from the outcome log, signs DonutAttestations against
+    // the loaded AdapterRegistry, and POSTs to /api/donut/attest. The pump
+    // is gated by SOLVER_API_TOKEN: without it the server would reject every
+    // request (the /attest route requires Bearer auth), so spawning would
+    // just emit noise. See crates/solver-main/src/attestation_pump.rs.
+    if let Some(ref log) = rule_skip_log {
+        let pump_token = std::env::var("SOLVER_API_TOKEN").unwrap_or_default();
+        let pump_api_url = std::env::var("ATTESTATION_PUMP_API_URL")
+            .unwrap_or_else(|_| format!("http://localhost:{}", api_port));
+        if !pump_token.is_empty() {
+            match messiah::load_messiah_signer() {
+                Ok(pump_signer) => {
+                    attestation_pump::spawn_attestation_pump(
+                        Arc::new(log.clone()),
+                        pump_signer,
+                        attestation_pump::AttestationPumpConfig {
+                            api_base_url: pump_api_url,
+                            api_token: pump_token,
+                            poll_interval: std::time::Duration::from_secs(30),
+                        },
+                    );
+                    info!("📮 attestation_pump spawned (Bearer auth enabled)");
+                }
+                Err(e) => {
+                    warn!(
+                        "📮 attestation_pump disabled — messiah signer unavailable: {}",
+                        e
+                    );
+                }
+            }
+        } else {
+            warn!("📮 attestation_pump disabled — SOLVER_API_TOKEN not set");
+        }
+    } else {
+        warn!("📮 attestation_pump disabled — outcome log not initialised");
     }
 
     // ── Legacy executor (kept for non-Across protocols) ───────────────────────

@@ -904,7 +904,7 @@ where
 {
     use siwe::{Message, VerificationOpts};
     use std::str::FromStr;
-    use time::OffsetDateTime;
+    
 
     // Explicit EIP-55 casing check on the body's address line. siwe-rs's
     // parser already enforces checksum casing today, but we surface a
