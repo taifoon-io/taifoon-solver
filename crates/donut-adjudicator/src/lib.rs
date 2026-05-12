@@ -53,13 +53,31 @@ use tracing::{debug, warn};
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 /// 49 bps — TSUL rule #4.
+#[deprecated(note = "use DONUT_BPS_NUM / DONUT_BPS_DEN — i64 micro-USD math is byte-stable across targets")]
 pub const DONUT_BPS: f64 = 0.0049;
 /// Builder receives 70 % of the donut.
+#[deprecated(note = "use CREATOR_NUM / SPLIT_DEN")]
 pub const CREATOR_FRACTION: f64 = 0.70;
 /// Reviewer set receives 20 % of the donut.
+#[deprecated(note = "use REVIEWER_NUM / SPLIT_DEN")]
 pub const REVIEWER_FRACTION: f64 = 0.20;
 /// Ecosystem treasury receives 10 % of the donut.
+#[deprecated(note = "use ECOSYSTEM_NUM / SPLIT_DEN")]
 pub const ECOSYSTEM_FRACTION: f64 = 0.10;
+
+/// Scale factor: $1.00 USD = 1_000_000 micro-USD. Chosen so a single
+/// fill's profit fits comfortably in i64 (max ~$9.2T) and the lossy
+/// truncation in `compute_split_micro` is bounded to < $0.000001.
+pub const MICRO_USD_PER_USD: i64 = 1_000_000;
+
+/// 49 bps numerator / 10_000 denominator.
+pub const DONUT_BPS_NUM: i64 = 49;
+pub const DONUT_BPS_DEN: i64 = 10_000;
+
+pub const CREATOR_NUM: i64 = 70;
+pub const REVIEWER_NUM: i64 = 20;
+pub const ECOSYSTEM_NUM: i64 = 10;
+pub const SPLIT_DEN: i64 = 100;
 
 /// Zero hash used as the `prev_hash` of the very first attestation in a
 /// Spinner's ledger.
@@ -86,6 +104,11 @@ pub struct AdapterRegistry {
     /// `adapter_id` → ordered list of reviewer addresses. The 20 % reviewer
     /// pool is divided equally between them at payout time.
     pub reviewers: HashMap<String, Vec<Address>>,
+    /// `adapter_id` → optional `(bps_num, bps_den)` override. When
+    /// absent, the canonical `(DONUT_BPS_NUM, DONUT_BPS_DEN)` applies.
+    /// Lets protocols with non-standard economics (e.g. auction vs.
+    /// relay) declare their own rate without changing the global default.
+    pub bps_overrides: HashMap<String, (i64, i64)>,
     /// Single ecosystem treasury address. Receives 10 % of every donut.
     pub ecosystem: Address,
 }
@@ -95,6 +118,7 @@ impl AdapterRegistry {
         Self {
             builders: HashMap::new(),
             reviewers: HashMap::new(),
+            bps_overrides: HashMap::new(),
             ecosystem,
         }
     }
@@ -109,6 +133,32 @@ impl AdapterRegistry {
         self.builders.insert(id.clone(), builder);
         self.reviewers.insert(id, reviewers);
         self
+    }
+
+    /// Same as `with_adapter` but also pins a per-adapter donut rate.
+    /// Use for protocols that negotiated a non-default cut.
+    pub fn with_adapter_bps(
+        mut self,
+        adapter_id: impl Into<String>,
+        builder: Address,
+        reviewers: Vec<Address>,
+        bps_num: i64,
+        bps_den: i64,
+    ) -> Self {
+        let id: String = adapter_id.into();
+        self.builders.insert(id.clone(), builder);
+        self.reviewers.insert(id.clone(), reviewers);
+        self.bps_overrides.insert(id, (bps_num, bps_den));
+        self
+    }
+
+    /// Effective donut rate for an adapter — override if registered,
+    /// canonical `(DONUT_BPS_NUM, DONUT_BPS_DEN)` otherwise.
+    pub fn bps_for(&self, adapter_id: &str) -> (i64, i64) {
+        self.bps_overrides
+            .get(adapter_id)
+            .copied()
+            .unwrap_or((DONUT_BPS_NUM, DONUT_BPS_DEN))
     }
 }
 
@@ -126,16 +176,40 @@ pub struct DonutAttestation {
     pub adapter_id: String,
     pub protocol: String,
     pub dst_chain: u64,
-    pub actual_profit_usd: f64,
-    pub donut_take_usd: f64,
+    /// **Gross fee** for this fill, in micro-USD. Decoded by the executor
+    /// from the SSE Genome intent (not net profit). This is the BASE the
+    /// donut take is multiplied against. See `OutcomeRecord::fee_usd`
+    /// for per-protocol decoding rules.
+    pub fee_usd_micro: i64,
+    /// Realised net profit on this fill, in micro-USD (`fee_usd − gas_cost`).
+    /// Carried for context / dashboard P&L only; does NOT drive donut math.
+    /// Negative for losing fills.
+    pub actual_profit_usd_micro: i64,
+    /// Donut-rate numerator that applied to this fill. Sourced from the
+    /// per-adapter override in `AdapterRegistry`, falling back to the
+    /// canonical `DONUT_BPS_NUM = 49`. Persisted on every attestation so
+    /// auditors can confirm the rate without trusting Spinner-supplied
+    /// state.
+    pub donut_bps_num: i64,
+    /// Denominator paired with `donut_bps_num` (typically `10_000`).
+    pub donut_bps_den: i64,
+    /// `donut_bps_num × max(0, fee_usd_micro) / donut_bps_den` — never
+    /// larger than the fee.
+    pub donut_take_usd_micro: i64,
     pub creator_addr: Address,
-    pub creator_share_usd: f64,
+    pub creator_share_usd_micro: i64,
     pub reviewer_addrs: Vec<Address>,
-    /// TOTAL reviewer share — divided equally between `reviewer_addrs` at payout.
-    pub reviewer_share_usd: f64,
+    /// TOTAL reviewer share, in micro-USD. Divided equally among
+    /// `reviewer_addrs` at payout time.
+    pub reviewer_share_usd_micro: i64,
     pub ecosystem_addr: Address,
-    pub ecosystem_share_usd: f64,
-    pub spinner_keeps_usd: f64,
+    /// Ecosystem treasury share. Absorbs the integer-division residual
+    /// from the 70/20/10 split so the three shares sum to `donut_take`
+    /// exactly (no off-by-one from triple truncation).
+    pub ecosystem_share_usd_micro: i64,
+    /// Profit retained by the Spinner after the donut cut. Can be
+    /// negative on losses.
+    pub spinner_keeps_usd_micro: i64,
     pub ts: DateTime<Utc>,
     /// sha256 of the previous attestation's canonical JSON *with* its
     /// signature. Hex with `0x` prefix. Zero-hash for the first attestation.
@@ -330,21 +404,227 @@ pub fn hash_for_chain(att: &DonutAttestation) -> Result<String> {
 
 // ── Math ───────────────────────────────────────────────────────────────────────
 
-/// Pure math — no signing, no I/O. Pulled out so unit tests can verify the
-/// invariants independently of the trait.
-fn compute_split(actual_profit_usd: f64) -> (f64, f64, f64, f64, f64) {
-    let profit = if actual_profit_usd.is_finite() {
-        actual_profit_usd
-    } else {
-        0.0
-    };
-    let positive = profit.max(0.0);
-    let donut = positive * DONUT_BPS;
-    let creator = donut * CREATOR_FRACTION;
-    let reviewer = donut * REVIEWER_FRACTION;
-    let ecosystem = donut * ECOSYSTEM_FRACTION;
-    let keeps = profit - donut;
+/// Pure micro-USD math — no signing, no I/O. Returns
+/// `(donut, creator, reviewer, ecosystem, keeps)` in micro-USD.
+///
+/// **Semantics**: `fee_usd_micro` is the **SSE-decoded fee** the Spinner
+/// receives for filling the intent — NOT net profit after gas. The donut
+/// is a tax on revenue (fees), the Spinner pays gas out of `keeps`.
+///
+/// `bps_num` / `bps_den` are passed as parameters (not constants) because
+/// different protocols may declare different donut rates via the
+/// `AdapterRegistry`. The canonical default is 49 / 10_000 (49 bps); a
+/// protocol-specific entry in `adapter_registry.json` can override.
+///
+/// Ecosystem absorbs the integer-division residual so the three shares
+/// sum to `donut_take` exactly, even when `donut * 70 / 100` and
+/// `donut * 20 / 100` both truncate.
+pub fn compute_split_micro(
+    fee_usd_micro: i64,
+    bps_num: i64,
+    bps_den: i64,
+) -> (i64, i64, i64, i64, i64) {
+    let positive = fee_usd_micro.max(0);
+    let donut = positive * bps_num / bps_den;
+    let creator = donut * CREATOR_NUM / SPLIT_DEN;
+    let reviewer = donut * REVIEWER_NUM / SPLIT_DEN;
+    let ecosystem = donut - creator - reviewer;
+    let keeps = fee_usd_micro - donut;
     (donut, creator, reviewer, ecosystem, keeps)
+}
+
+/// Convenience wrapper: split using the canonical default rate
+/// (`DONUT_BPS_NUM / DONUT_BPS_DEN`). Use this when no per-adapter
+/// override applies.
+pub fn compute_split_micro_default(fee_usd_micro: i64) -> (i64, i64, i64, i64, i64) {
+    compute_split_micro(fee_usd_micro, DONUT_BPS_NUM, DONUT_BPS_DEN)
+}
+
+/// Convert a USD float to micro-USD i64. Rounded to nearest; non-finite
+/// inputs become 0. Used at the f64-input boundary (executor's
+/// `OutcomeRecord.actual_profit_usd: Option<f64>`).
+pub fn usd_to_micro(usd: f64) -> i64 {
+    if !usd.is_finite() {
+        return 0;
+    }
+    (usd * MICRO_USD_PER_USD as f64).round() as i64
+}
+
+// ── Adapter registry loader ────────────────────────────────────────────────────
+
+/// Public donut-policy constants. Exposed by `GET /api/donut/policy` so any
+/// auditor can confirm the canonical split is uniform across every Builder
+/// and every Spinner. The values here are the SAME constants
+/// `compute_split_micro` uses internally — no second source of truth.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DonutPolicy {
+    pub donut_bps_num: i64,
+    pub donut_bps_den: i64,
+    pub creator_num: i64,
+    pub reviewer_num: i64,
+    pub ecosystem_num: i64,
+    pub split_den: i64,
+    /// `1_000_000` — every `_usd_micro` field on a `DonutAttestation` is
+    /// this many micro-USD per USD.
+    pub micro_usd_per_usd: i64,
+    /// Applies-to scope. Currently `"all_provisioned_adapters"` — uniform
+    /// across every registered Builder.
+    pub applies_to: String,
+    /// Adjudicator implementation version. Increments whenever the math
+    /// or canonical-JSON layout changes.
+    pub adjudicator_version: String,
+}
+
+impl DonutPolicy {
+    /// Canonical values currently in force. If you change any of these,
+    /// bump `adjudicator_version`.
+    pub fn canonical() -> Self {
+        Self {
+            donut_bps_num: DONUT_BPS_NUM,
+            donut_bps_den: DONUT_BPS_DEN,
+            creator_num: CREATOR_NUM,
+            reviewer_num: REVIEWER_NUM,
+            ecosystem_num: ECOSYSTEM_NUM,
+            split_den: SPLIT_DEN,
+            micro_usd_per_usd: MICRO_USD_PER_USD,
+            applies_to: "all_provisioned_adapters".to_string(),
+            adjudicator_version: "canonical-v1".to_string(),
+        }
+    }
+}
+
+/// Public view of an [`AdapterRegistry`] — same data, serializable. Used
+/// by `GET /api/donut/registry` so anyone can confirm the adapter →
+/// builder mapping a Spinner claims to apply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdapterRegistryView {
+    pub ecosystem: Address,
+    pub adapters: BTreeMap<String, AdapterRegistryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdapterRegistryEntry {
+    pub builder: Address,
+    pub reviewers: Vec<Address>,
+    /// Per-adapter donut rate numerator. When set, overrides the canonical
+    /// default `DONUT_BPS_NUM = 49`. Different protocols may negotiate
+    /// different rates with the spinner platform — auctions vs. relays
+    /// vs. meta-aggregators have different economics. Use the `bps()`
+    /// helper to read the effective rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub donut_bps_num: Option<i64>,
+    /// Per-adapter donut rate denominator. Defaults to
+    /// `DONUT_BPS_DEN = 10_000` when absent. Both `num` and `den` must
+    /// be set together for an override to apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub donut_bps_den: Option<i64>,
+}
+
+impl AdapterRegistryEntry {
+    /// Effective `(numerator, denominator)` for this adapter's donut rate.
+    /// Falls back to the canonical default when the entry doesn't
+    /// override.
+    pub fn bps(&self) -> (i64, i64) {
+        match (self.donut_bps_num, self.donut_bps_den) {
+            (Some(n), Some(d)) if d > 0 => (n, d),
+            _ => (DONUT_BPS_NUM, DONUT_BPS_DEN),
+        }
+    }
+}
+
+impl AdapterRegistry {
+    /// Serializable view for the public `/api/donut/registry` endpoint.
+    /// Sorts adapter ids so the output is byte-stable across calls.
+    pub fn view(&self) -> AdapterRegistryView {
+        let mut adapters: BTreeMap<String, AdapterRegistryEntry> = BTreeMap::new();
+        for (id, builder) in &self.builders {
+            let reviewers = self.reviewers.get(id).cloned().unwrap_or_default();
+            let (num, den) = self
+                .bps_overrides
+                .get(id)
+                .copied()
+                .map(|(n, d)| (Some(n), Some(d)))
+                .unwrap_or((None, None));
+            adapters.insert(
+                id.clone(),
+                AdapterRegistryEntry {
+                    builder: *builder,
+                    reviewers,
+                    donut_bps_num: num,
+                    donut_bps_den: den,
+                },
+            );
+        }
+        AdapterRegistryView {
+            ecosystem: self.ecosystem,
+            adapters,
+        }
+    }
+
+    /// Load from a JSON file. Schema mirrors `AdapterRegistryView`:
+    ///
+    /// ```json
+    /// {
+    ///   "ecosystem": "0x...",
+    ///   "adapters": {
+    ///     "mayan-solana-swift-v1": {
+    ///       "builder": "0x...",
+    ///       "reviewers": ["0x...", "0x..."]
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// On missing/unreadable file, returns a registry with the ZERO
+    /// address as `ecosystem` and zero builders — every fill then routes
+    /// the Builder + Reviewer shares to that ZERO address (fail-closed).
+    /// The caller is expected to log a loud warning when this happens.
+    pub fn load_from_path(path: &std::path::Path) -> Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read adapter_registry from {}", path.display()))?;
+        let view: AdapterRegistryView = serde_json::from_str(&raw)
+            .with_context(|| format!("parse adapter_registry JSON at {}", path.display()))?;
+        let mut reg = AdapterRegistry::new(view.ecosystem);
+        for (id, entry) in view.adapters {
+            match entry.bps() {
+                (n, d) if (n, d) != (DONUT_BPS_NUM, DONUT_BPS_DEN) => {
+                    reg = reg.with_adapter_bps(id, entry.builder, entry.reviewers, n, d);
+                }
+                _ => {
+                    reg = reg.with_adapter(id, entry.builder, entry.reviewers);
+                }
+            }
+        }
+        Ok(reg)
+    }
+
+    /// Same as `load_from_path` but consumes the `ADAPTER_REGISTRY_PATH`
+    /// environment variable (default `./config/adapter_registry.json`)
+    /// and falls back to an **empty** registry with the ZERO ecosystem
+    /// address when the file is missing — never panics, never silently
+    /// pockets the donut.
+    pub fn load_default() -> Self {
+        let path = std::env::var("ADAPTER_REGISTRY_PATH")
+            .unwrap_or_else(|_| "./config/adapter_registry.json".to_string());
+        let p = std::path::Path::new(&path);
+        match Self::load_from_path(p) {
+            Ok(reg) => {
+                tracing::info!(
+                    "loaded adapter_registry from {} ({} adapters)",
+                    path,
+                    reg.builders.len()
+                );
+                reg
+            }
+            Err(e) => {
+                warn!(
+                    "adapter_registry not loadable from {} ({}); falling back to fail-closed empty registry (every donut share routes to ZERO ecosystem address — fix this before going live)",
+                    path, e
+                );
+                AdapterRegistry::new(Address::ZERO)
+            }
+        }
+    }
 }
 
 // ── CanonicalAdjudicator impl ──────────────────────────────────────────────────
@@ -358,11 +638,28 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
         signer: &PrivateKeySigner,
         prev_hash: &str,
     ) -> Result<DonutAttestation> {
-        let profit = fill.actual_profit_usd.unwrap_or(0.0);
-        let (donut, creator, reviewer, ecosystem, keeps) = compute_split(profit);
+        // Donut base is the FEE the Spinner collected, decoded from the
+        // SSE Genome intent by the executor. Fall back to actual_profit
+        // when the executor couldn't decode a fee (older intents,
+        // dry-runs) — conservative substitute, never over-takes.
+        let fee_usd_f = fill
+            .fee_usd
+            .or(fill.actual_profit_usd)
+            .unwrap_or(0.0);
+        let fee_micro = usd_to_micro(fee_usd_f);
+        let profit_micro = usd_to_micro(fill.actual_profit_usd.unwrap_or(0.0));
 
         let adapter_id = adapter_id_for_outcome(fill);
         let ecosystem_addr = registry.ecosystem;
+
+        // Per-adapter donut rate. Falls back to the canonical default
+        // (49 bps) when no override is registered.
+        let (bps_num, bps_den) = registry.bps_for(&adapter_id);
+        let (donut, creator, reviewer, ecosystem, _keeps_from_fee) =
+            compute_split_micro(fee_micro, bps_num, bps_den);
+        // Spinner's net keeps = realised profit after gas, minus the
+        // donut taken from fee. Can be negative if gas > fee - donut.
+        let keeps = profit_micro - donut;
 
         // Fail-closed: unknown adapter → route the creator + reviewer cuts to
         // the ecosystem treasury. Spinners running unregistered adapters do NOT
@@ -398,15 +695,18 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
             adapter_id,
             protocol: fill.protocol.clone(),
             dst_chain: fill.dst_chain,
-            actual_profit_usd: profit,
-            donut_take_usd: donut,
+            fee_usd_micro: fee_micro,
+            actual_profit_usd_micro: profit_micro,
+            donut_bps_num: bps_num,
+            donut_bps_den: bps_den,
+            donut_take_usd_micro: donut,
             creator_addr,
-            creator_share_usd: creator,
+            creator_share_usd_micro: creator,
             reviewer_addrs,
-            reviewer_share_usd: reviewer,
+            reviewer_share_usd_micro: reviewer,
             ecosystem_addr,
-            ecosystem_share_usd: ecosystem,
-            spinner_keeps_usd: keeps,
+            ecosystem_share_usd_micro: ecosystem,
+            spinner_keeps_usd_micro: keeps,
             ts: fill.ts,
             prev_hash: prev_hash.to_string(),
             signature_hex: String::new(),
@@ -423,7 +723,7 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
         debug!(
             spinner = %att.spinner_addr,
             adapter = %att.adapter_id,
-            donut_usd = att.donut_take_usd,
+            donut_usd_micro = att.donut_take_usd_micro,
             "attestation signed"
         );
 
@@ -431,29 +731,44 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
     }
 
     fn verify(&self, att: &DonutAttestation) -> Result<()> {
-        // 1. Donut math is internally consistent.
-        let positive = att.actual_profit_usd.max(0.0);
-        let expected_donut = positive * DONUT_BPS;
-        if (att.donut_take_usd - expected_donut).abs() > 1e-9 {
+        // 1. Donut math is internally consistent — integer-exact.
+        //    Donut = max(0, fee) × bps_num / bps_den. Reject any
+        //    attestation whose pinned bps is non-positive (a bps_den<=0
+        //    would let a malicious Spinner forge a zero divisor).
+        if att.donut_bps_den <= 0 || att.donut_bps_num < 0 {
             return Err(anyhow!(
-                "donut_take_usd mismatch: got {}, expected {}",
-                att.donut_take_usd,
-                expected_donut
+                "invalid donut rate: {}/{}",
+                att.donut_bps_num,
+                att.donut_bps_den
             ));
         }
-        let sum = att.creator_share_usd + att.reviewer_share_usd + att.ecosystem_share_usd;
-        if (sum - att.donut_take_usd).abs() > 1e-9 {
+        let positive_fee = att.fee_usd_micro.max(0);
+        let expected_donut = positive_fee * att.donut_bps_num / att.donut_bps_den;
+        if att.donut_take_usd_micro != expected_donut {
+            return Err(anyhow!(
+                "donut_take_usd_micro mismatch: got {}, expected {} (fee={} × {}/{})",
+                att.donut_take_usd_micro,
+                expected_donut,
+                positive_fee,
+                att.donut_bps_num,
+                att.donut_bps_den
+            ));
+        }
+        let sum = att.creator_share_usd_micro
+            + att.reviewer_share_usd_micro
+            + att.ecosystem_share_usd_micro;
+        if sum != att.donut_take_usd_micro {
             return Err(anyhow!(
                 "share sum mismatch: {} != donut_take {}",
                 sum,
-                att.donut_take_usd
+                att.donut_take_usd_micro
             ));
         }
-        let expected_keeps = att.actual_profit_usd - att.donut_take_usd;
-        if (att.spinner_keeps_usd - expected_keeps).abs() > 1e-9 {
+        let expected_keeps = att.actual_profit_usd_micro - att.donut_take_usd_micro;
+        if att.spinner_keeps_usd_micro != expected_keeps {
             return Err(anyhow!(
-                "spinner_keeps_usd mismatch: {} != {}",
-                att.spinner_keeps_usd,
+                "spinner_keeps_usd_micro mismatch: {} != {}",
+                att.spinner_keeps_usd_micro,
                 expected_keeps
             ));
         }
@@ -472,6 +787,32 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
             ));
         }
         let sig = Signature::try_from(sig_bytes.as_slice()).context("parse signature")?;
+
+        // Reject high-s signatures (signature malleability). secp256k1's
+        // group order n = 0xFFFFFFFF…BFD25E8CD0364141; the "low half" is
+        // s <= n/2. Allowing the high half means an attacker can flip
+        // s → n-s on a known signature and produce a *different* 65-byte
+        // sequence that still recovers the same address — which would
+        // break ledger fingerprinting if `signature_hex` were used as a
+        // dedup key. We inspect the raw bytes (alloy 0.8's `Signature::s()`
+        // surface varies across patch releases) to stay independent of
+        // crate-internal API changes.
+        //
+        // n/2 = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0
+        const N_HALF_BE: [u8; 32] = [
+            0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0x5D, 0x57, 0x6E, 0x73, 0x57, 0xA4, 0x50, 0x1D,
+            0xDF, 0xE9, 0x2F, 0x46, 0x68, 0x1B, 0x20, 0xA0,
+        ];
+        let s_bytes = &sig_bytes[32..64];
+        // big-endian unsigned compare via slice ordering.
+        if s_bytes > &N_HALF_BE[..] {
+            return Err(anyhow!(
+                "signature s value is in high half (malleability prevented)"
+            ));
+        }
+
         let recovered = sig
             .recover_address_from_msg(canonical.as_bytes())
             .context("recover address from signature")?;
@@ -575,6 +916,7 @@ mod tests {
             solver_id: Some("00000000".into()),
             claim_tx_hash: None,
             claim_fee_usd: None,
+            fee_usd: None,
         }
     }
 
@@ -586,11 +928,12 @@ mod tests {
         let fill = outcome("across", 42161, -1.0);
 
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-        assert_eq!(att.donut_take_usd, 0.0);
-        assert_eq!(att.creator_share_usd, 0.0);
-        assert_eq!(att.reviewer_share_usd, 0.0);
-        assert_eq!(att.ecosystem_share_usd, 0.0);
-        assert!((att.spinner_keeps_usd - (-1.0)).abs() < 1e-12);
+        assert_eq!(att.donut_take_usd_micro, 0);
+        assert_eq!(att.creator_share_usd_micro, 0);
+        assert_eq!(att.reviewer_share_usd_micro, 0);
+        assert_eq!(att.ecosystem_share_usd_micro, 0);
+        // -1.0 USD = -1_000_000 micro-USD; keeps = profit - 0.
+        assert_eq!(att.spinner_keeps_usd_micro, -1_000_000);
         adj.verify(&att).unwrap();
     }
 
@@ -602,16 +945,19 @@ mod tests {
         let fill = outcome("across", 42161, 0.40);
 
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-        // 0.40 * 0.0049 = 0.00196
-        assert!((att.donut_take_usd - 0.00196).abs() < 1e-12);
-        let sum = att.creator_share_usd + att.reviewer_share_usd + att.ecosystem_share_usd;
-        assert!((sum - att.donut_take_usd).abs() < 1e-9);
-        // 70/20/10 split
-        assert!((att.creator_share_usd - 0.00196 * 0.70).abs() < 1e-12);
-        assert!((att.reviewer_share_usd - 0.00196 * 0.20).abs() < 1e-12);
-        assert!((att.ecosystem_share_usd - 0.00196 * 0.10).abs() < 1e-12);
-        // keeps = profit - donut
-        assert!((att.spinner_keeps_usd - (0.40 - 0.00196)).abs() < 1e-12);
+        // 0.40 USD = 400_000 micro. 400_000 * 49 / 10_000 = 1_960 micro.
+        assert_eq!(att.donut_take_usd_micro, 1_960);
+        let sum = att.creator_share_usd_micro
+            + att.reviewer_share_usd_micro
+            + att.ecosystem_share_usd_micro;
+        assert_eq!(sum, att.donut_take_usd_micro);
+        // 70/20/10 split: 1372 / 392 / 196 = 1960 (ecosystem absorbs the
+        // 0 residual here since the donut divides evenly by 100).
+        assert_eq!(att.creator_share_usd_micro, 1_372);
+        assert_eq!(att.reviewer_share_usd_micro, 392);
+        assert_eq!(att.ecosystem_share_usd_micro, 196);
+        // keeps = profit - donut = 400_000 - 1_960 = 398_040.
+        assert_eq!(att.spinner_keeps_usd_micro, 398_040);
         adj.verify(&att).unwrap();
     }
 
@@ -689,14 +1035,16 @@ mod tests {
         let fill = outcome("across", 42161, 1.0);
 
         let mut att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-        // Tamper after signing.
-        att.actual_profit_usd = 1_000_000.0;
+        // Tamper after signing — bump profit to $1M-ish without updating donut.
+        att.actual_profit_usd_micro = 1_000_000_000_000;
         let err = adj.verify(&att).unwrap_err();
         let msg = err.to_string();
         // Either math fails (because donut_take wasn't updated) or signature
         // recovery fails. Both are valid tamper-detection outcomes.
         assert!(
-            msg.contains("donut_take_usd") || msg.contains("recovered") || msg.contains("share"),
+            msg.contains("donut_take_usd_micro")
+                || msg.contains("recovered")
+                || msg.contains("share"),
             "expected tamper-detection error, got: {}",
             msg
         );
@@ -735,15 +1083,18 @@ mod tests {
             adapter_id: "x".into(),
             protocol: "w".into(),
             dst_chain: 1,
-            actual_profit_usd: 1.0,
-            donut_take_usd: 0.0049,
+            fee_usd_micro: 1_000_000,
+            actual_profit_usd_micro: 1_000_000,
+            donut_bps_num: DONUT_BPS_NUM,
+            donut_bps_den: DONUT_BPS_DEN,
+            donut_take_usd_micro: 4_900,
             creator_addr: builder_addr(),
-            creator_share_usd: 0.00343,
+            creator_share_usd_micro: 3_430,
             reviewer_addrs: reviewer_addrs(),
-            reviewer_share_usd: 0.00098,
+            reviewer_share_usd_micro: 980,
             ecosystem_addr: ecosystem_addr(),
-            ecosystem_share_usd: 0.00049,
-            spinner_keeps_usd: 0.9951,
+            ecosystem_share_usd_micro: 490,
+            spinner_keeps_usd_micro: 995_100,
             ts: Utc::now(),
             prev_hash: ZERO_HASH.into(),
             signature_hex: "0xdead".into(),
@@ -752,8 +1103,8 @@ mod tests {
         let s = canonical_json_for_signing(&att).unwrap();
         // signature_hex must be absent from the signing pre-image.
         assert!(!s.contains("signature_hex"));
-        // Top-level keys should be sorted: "actual_profit_usd" comes before "adapter_id".
-        let i_actual = s.find("\"actual_profit_usd\"").unwrap();
+        // Top-level keys should be sorted: "actual_profit_usd_micro" comes before "adapter_id".
+        let i_actual = s.find("\"actual_profit_usd_micro\"").unwrap();
         let i_adapter = s.find("\"adapter_id\"").unwrap();
         assert!(i_actual < i_adapter, "keys not sorted: {}", s);
     }
@@ -829,6 +1180,7 @@ mod tests {
             solver_id: Some("00000000".into()),
             claim_tx_hash: None,
             claim_fee_usd: None,
+            fee_usd: None,
         };
         assert_eq!(adapter_id_for_outcome(&rec), "mayan-solana-swift-v1");
     }
@@ -861,6 +1213,7 @@ mod tests {
             solver_id: Some("00000000".into()),
             claim_tx_hash: None,
             claim_fee_usd: None,
+            fee_usd: None,
         };
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "wormhole-ntt-solana-v1");
@@ -898,6 +1251,76 @@ mod tests {
         adj.verify(&att).unwrap();
     }
 
+    /// Fix 4: a high-s signature (s > n/2, the malleability-equivalent
+    /// counterpart of the low-s one a normal signer would produce) must
+    /// be rejected by `verify` even though it recovers to the same
+    /// address. We construct it by flipping `s -> n - s` in the raw
+    /// signature bytes.
+    #[tokio::test]
+    async fn verify_rejects_high_s_signature() {
+        let adj = CanonicalAdjudicator;
+        let signer = make_signer();
+        let reg = registry_with_known_adapter("across-v3");
+        let fill = outcome("across", 42161, 1.0);
+
+        let mut att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
+        // The signer produces a low-s signature; flip to high-s by
+        // replacing s with n - s.
+        let sig_hex = att
+            .signature_hex
+            .strip_prefix("0x")
+            .unwrap_or(&att.signature_hex);
+        let mut sig_bytes = hex::decode(sig_hex).unwrap();
+        assert_eq!(sig_bytes.len(), 65);
+
+        // secp256k1 group order n (big-endian).
+        const N_BE: [u8; 32] = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+            0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
+            0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+        ];
+
+        // Compute new_s = n - s using big-endian byte subtraction.
+        let mut new_s = [0u8; 32];
+        let mut borrow: i16 = 0;
+        for i in (0..32).rev() {
+            let a = N_BE[i] as i16;
+            let b = sig_bytes[32 + i] as i16 + borrow;
+            let diff = a - b;
+            if diff < 0 {
+                new_s[i] = (diff + 256) as u8;
+                borrow = 1;
+            } else {
+                new_s[i] = diff as u8;
+                borrow = 0;
+            }
+        }
+        sig_bytes[32..64].copy_from_slice(&new_s);
+
+        // Flip the v parity (27 <-> 28 or 0 <-> 1) so the new high-s sig
+        // still recovers the same address. This isn't required for the
+        // malleability rejection itself — the high-s check runs before
+        // recovery — but exercising the flipped form documents that the
+        // check fires *before* recovery succeeds.
+        sig_bytes[64] = match sig_bytes[64] {
+            27 => 28,
+            28 => 27,
+            0 => 1,
+            1 => 0,
+            other => other ^ 1,
+        };
+
+        att.signature_hex = format!("0x{}", hex::encode(&sig_bytes));
+        let err = adj.verify(&att).expect_err("high-s signature must reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("malleability"),
+            "expected malleability error, got: {}",
+            msg
+        );
+    }
+
     /// Integration: load the on-disk Mayan-Solana fixture and run it
     /// through the full attest path. This is the hackathon-critical
     /// regression test — any future change to `OutcomeRecord` shape or the
@@ -929,11 +1352,12 @@ mod tests {
             solver_id: Some("00000000".into()),
             claim_tx_hash: None,
             claim_fee_usd: None,
+            fee_usd: None,
         };
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "mayan-solana-swift-v1");
-        // 0.42 * 0.0049 = 0.002058
-        assert!((att.donut_take_usd - 0.002058).abs() < 1e-9);
+        // 0.42 USD = 420_000 micro. 420_000 * 49 / 10_000 = 2_058 micro.
+        assert_eq!(att.donut_take_usd_micro, 2_058);
         adj.verify(&att).unwrap();
     }
 }

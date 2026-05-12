@@ -129,103 +129,58 @@ def sign_siwe(message: str, signer) -> str:
 # ── DonutAttestation construction & signing ──────────────────────────────────
 
 ZERO_HASH = "0x" + "0" * 64
+
+# Back-compat float constants. Kept for tests that just want to express
+# the human-friendly fraction; not used in any signing path (we delegate
+# signing to the Rust binary which uses integer micro-USD math).
 DONUT_BPS = 0.0049
 CREATOR_FRAC = 0.70
 REVIEWER_FRAC = 0.20
 ECOSYSTEM_FRAC = 0.10
 
+# Integer micro-USD constants — mirror donut_adjudicator's MICRO_USD_PER_USD
+# and the bps numerator/denominator. Use these for byte-stable expected
+# math in Python tests.
+MICRO_USD_PER_USD = 1_000_000
+DONUT_BPS_NUM = 49
+DONUT_BPS_DEN = 10_000
+CREATOR_NUM = 70
+REVIEWER_NUM = 20
+ECOSYSTEM_NUM = 10
+SPLIT_DEN = 100
 
-def compute_split(actual_profit_usd: float) -> tuple[float, float, float, float, float]:
-    profit = actual_profit_usd if actual_profit_usd == actual_profit_usd else 0.0  # filter NaN
-    positive = max(profit, 0.0)
-    donut = positive * DONUT_BPS
-    creator = donut * CREATOR_FRAC
-    reviewer = donut * REVIEWER_FRAC
-    ecosystem = donut * ECOSYSTEM_FRAC
-    keeps = profit - donut
+
+def compute_split_micro(
+    fee_micro: int,
+    bps_num: int = DONUT_BPS_NUM,
+    bps_den: int = DONUT_BPS_DEN,
+) -> tuple[int, int, int, int, int]:
+    """Integer mirror of Rust's `compute_split_micro`. The donut base is
+    `fee_micro` (the SSE-decoded fee, not net profit). `bps_num` and
+    `bps_den` default to the canonical 49/10_000 — pass an override when
+    a per-adapter rate applies. Ecosystem absorbs the residual so the
+    three shares sum to donut_take exactly."""
+    positive = max(fee_micro, 0)
+    donut = positive * bps_num // bps_den
+    creator = donut * CREATOR_NUM // SPLIT_DEN
+    reviewer = donut * REVIEWER_NUM // SPLIT_DEN
+    ecosystem = donut - creator - reviewer
+    keeps = fee_micro - donut
     return donut, creator, reviewer, ecosystem, keeps
 
 
-def _canonical_json(obj: dict, exclude: tuple = ()) -> str:
-    """Sort keys recursively, no whitespace — mirrors Rust's `sort_value`
-    + `serde_json::to_string`. The exclude tuple drops top-level keys
-    (used to remove `signature_hex` from the signing pre-image)."""
-    def normalize(v):
-        if isinstance(v, dict):
-            return {k: normalize(v[k]) for k in sorted(v.keys())}
-        if isinstance(v, list):
-            return [normalize(x) for x in v]
-        return v
-    pruned = {k: v for k, v in obj.items() if k not in exclude}
-    return json.dumps(normalize(pruned), separators=(",", ":"), sort_keys=True)
-
-
-def _serialize_float(x: float) -> float | int:
-    """serde_json prints integers like 1.0 as `1`. Python's json prints `1.0`.
-    For byte-stable matching with the Rust signing pre-image, coerce
-    whole-number floats to int (the Rust side does the same via
-    serde_json's default Number serialization)."""
-    if x == int(x):
-        return int(x)
-    return x
-
-
-def _attestation_payload(
-    fill_id: str,
-    spinner_addr: str,
-    adapter_id: str,
-    protocol: str,
-    dst_chain: int,
-    actual_profit_usd: float,
-    creator_addr: str,
-    reviewer_addrs: list[str],
-    ecosystem_addr: str,
-    ts_iso: str,
-    prev_hash: str,
-) -> dict:
-    donut, creator, reviewer, ecosystem, keeps = compute_split(actual_profit_usd)
-    spinner_id = spinner_id_from_addr(spinner_addr)
-    return {
-        "fill_id": fill_id,
-        "spinner_id": spinner_id,
-        "spinner_addr": spinner_addr.lower(),
-        "adapter_id": adapter_id,
-        "protocol": protocol,
-        "dst_chain": dst_chain,
-        "actual_profit_usd": actual_profit_usd,
-        "donut_take_usd": donut,
-        "creator_addr": creator_addr.lower(),
-        "creator_share_usd": creator,
-        "reviewer_addrs": [a.lower() for a in reviewer_addrs],
-        "reviewer_share_usd": reviewer,
-        "ecosystem_addr": ecosystem_addr.lower(),
-        "ecosystem_share_usd": ecosystem,
-        "spinner_keeps_usd": keeps,
-        "ts": ts_iso,
-        "prev_hash": prev_hash,
-        "signature_hex": "",  # populated by `sign_attestation`
-    }
-
-
-def sign_attestation(payload: dict, signer) -> dict:
-    """Compute the canonical signing JSON, EIP-191 personal_sign it, and
-    return the same payload with `signature_hex` populated. Matches the
-    Rust `CanonicalAdjudicator::attest` byte-for-byte."""
-    signing_json = _canonical_json(payload, exclude=("signature_hex",))
-    encoded = encode_defunct(text=signing_json)
-    signed = signer.sign_message(encoded)
-    sig_hex = signed.signature.hex()
-    if not sig_hex.startswith("0x"):
-        sig_hex = "0x" + sig_hex
-    payload["signature_hex"] = sig_hex
-    return payload
-
-
-def hash_for_chain(payload: dict) -> str:
-    """sha256 of the canonical JSON *including* signature — drives the
-    next attestation's `prev_hash`."""
-    s = _canonical_json(payload, exclude=())
-    return "0x" + hashlib.sha256(s.encode("utf-8")).hexdigest()
+def expected_split_micro(
+    fee_usd: float,
+    bps_num: int = DONUT_BPS_NUM,
+    bps_den: int = DONUT_BPS_DEN,
+) -> tuple[int, int, int, int, int]:
+    """Caller-convenience wrapper: take a USD float (the same value the
+    test feeds into `produce_attestation`'s `actual_profit_usd`, which
+    the testbin then mirrors into `fee_usd` for sandbox simplicity) and
+    return the expected `(donut, creator, reviewer, ecosystem, keeps)`
+    in micro-USD."""
+    fee_micro = round(fee_usd * MICRO_USD_PER_USD)
+    return compute_split_micro(fee_micro, bps_num, bps_den)
 
 
 def produce_attestation(

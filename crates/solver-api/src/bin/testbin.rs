@@ -38,7 +38,6 @@ use std::str::FromStr;
 
 use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::signers::SignerSync;
 use anyhow::Context;
 use chrono::Utc;
 use donut_adjudicator::{
@@ -142,6 +141,7 @@ fn sign_from_stdin() -> anyhow::Result<()> {
         solver_id: None,
         claim_tx_hash: None,
         claim_fee_usd: None,
+        fee_usd: Some(spec.actual_profit_usd),
     };
 
     // Build a registry that maps the resolved adapter_id → the supplied

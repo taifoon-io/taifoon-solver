@@ -15,7 +15,7 @@ use axum::{
 
 pub mod hosting;
 use hosting::{HostingRegistry, HostingRegistryState, PersistError};
-use donut_adjudicator::DonutAttestation;
+use donut_adjudicator::{AdapterRegistry, DonutAttestation, DonutPolicy};
 use wallet_manager::WalletManager;
 use portfolio_sidecar::{ActionLogEntry, PortfolioSidecar, rebalancer::BridgeAction};
 use futures::stream::{Stream, StreamExt};
@@ -194,6 +194,12 @@ pub struct ApiState {
     /// hosting framework. Each registered address receives 70% of the TSUL
     /// donut on every fill. Lazy-init on first use (path from HOSTING_DB_PATH).
     hosting_registry: std::sync::OnceLock<HostingRegistryState>,
+    /// Adapter registry — adapter_id → builder address + reviewer set.
+    /// Loaded from `$ADAPTER_REGISTRY_PATH` (default `./config/adapter_registry.json`)
+    /// on first access. The public `GET /api/donut/registry` route serves
+    /// this so any auditor can confirm the adapter → builder mapping a
+    /// Spinner claims to apply.
+    adapter_registry: std::sync::OnceLock<Arc<AdapterRegistry>>,
 }
 
 /// Main solver API
@@ -253,6 +259,7 @@ impl SolverApi {
                 sidecar: std::sync::OnceLock::new(),
                 lambda_controller: std::sync::OnceLock::new(),
                 hosting_registry: std::sync::OnceLock::new(),
+                adapter_registry: std::sync::OnceLock::new(),
             }),
         }
     }
@@ -270,6 +277,18 @@ impl SolverApi {
                 })
             )
         }).clone()
+    }
+
+    /// Get or lazily-load the adapter registry from
+    /// `$ADAPTER_REGISTRY_PATH` (default `./config/adapter_registry.json`).
+    /// Drives `GET /api/donut/registry` AND the AttestationPump's
+    /// adapter_id → builder lookup. Fail-closed when the config file is
+    /// missing — empty map with ZERO ecosystem address (loud warning on boot).
+    fn adapter_registry(&self) -> Arc<AdapterRegistry> {
+        self.state
+            .adapter_registry
+            .get_or_init(|| Arc::new(AdapterRegistry::load_default()))
+            .clone()
     }
 
     /// Inject the `LambdaController` so the Claims-tab retry endpoint can fire
@@ -369,6 +388,17 @@ impl SolverApi {
             .route("/api/donut/ledger/:spinner_id/head", get(donut_head_handler))
             .with_state(registry);
 
+        // Public donut-policy routes — no auth required. These exist so any
+        // auditor, builder, or judge can fetch the canonical fee-split
+        // constants and the adapter→builder map without trusting any
+        // Spinner-supplied claim. Single source of truth for the
+        // "applies to all provisioned builders" assertion.
+        let adapter_reg = self.adapter_registry();
+        let donut_policy = Router::new()
+            .route("/api/donut/policy", get(donut_policy_handler))
+            .route("/api/donut/registry", get(donut_registry_handler))
+            .with_state(adapter_reg);
+
         Router::new()
             .route("/health", get(health_handler))
             .merge(solver_api)
@@ -376,6 +406,7 @@ impl SolverApi {
             .merge(hosting_api)
             .merge(donut_write)
             .merge(donut_read)
+            .merge(donut_policy)
             .layer(tower_http::cors::CorsLayer::permissive())
     }
 
@@ -1410,7 +1441,7 @@ async fn donut_attest_handler(
                 "ok": true,
                 "fill_id": att.fill_id,
                 "spinner_id": att.spinner_id,
-                "donut_take_usd": att.donut_take_usd,
+                "donut_take_usd_micro": att.donut_take_usd_micro,
             })),
         )
             .into_response(),
@@ -1482,6 +1513,34 @@ async fn donut_head_handler(
         )
             .into_response(),
     }
+}
+
+/// GET /api/donut/policy — public, unauthenticated.
+///
+/// Returns the canonical donut-policy constants. This is the single
+/// source of truth for "the 49 bps × 70/20/10 split applied uniformly
+/// across every provisioned Builder." Auditors and dashboards read this
+/// to verify a Spinner's attestations match the published policy.
+async fn donut_policy_handler(
+    State(_reg): State<Arc<AdapterRegistry>>,
+) -> Response {
+    let policy = DonutPolicy::canonical();
+    (StatusCode::OK, Json(policy)).into_response()
+}
+
+/// GET /api/donut/registry — public, unauthenticated.
+///
+/// Returns the loaded adapter → builder + reviewer map. Anyone can
+/// confirm which on-chain address gets the 70% creator share for each
+/// adapter, and which reviewer set gets the 20% split. The ZERO address
+/// in the response means the config wasn't loaded (fail-closed) and the
+/// Spinner should not be running until ADAPTER_REGISTRY_PATH points at a
+/// valid file.
+async fn donut_registry_handler(
+    State(reg): State<Arc<AdapterRegistry>>,
+) -> Response {
+    let view = reg.view();
+    (StatusCode::OK, Json(view)).into_response()
 }
 
 /// Single bridge action surfaced by the rebalance trigger response. Mirrors

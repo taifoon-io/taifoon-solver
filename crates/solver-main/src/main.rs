@@ -530,6 +530,7 @@ async fn main() -> Result<()> {
                     solver_id: None,
                     claim_tx_hash: None,
                     claim_fee_usd: None,
+                    fee_usd: None,
                 });
             }
             solver_api.emit_event(SolverEvent::IntentAttempted(AttemptData {
@@ -1095,6 +1096,7 @@ fn log_enrichment_failure(
         solver_id: None,
         claim_tx_hash: None,
         claim_fee_usd: None,
+        fee_usd: None,
     };
     tokio::spawn(async move {
         if let Err(e) = log.append(rec) {

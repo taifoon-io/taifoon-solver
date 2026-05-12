@@ -36,9 +36,9 @@ use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use chrono::Utc;
 use donut_adjudicator::{
-    adapter_id_for_outcome, hash_for_chain, AdapterRegistry, CanonicalAdjudicator,
-    DonutAttestation, FeeSplitAdjudicator, CREATOR_FRACTION, DONUT_BPS, ECOSYSTEM_FRACTION,
-    REVIEWER_FRACTION, SOLANA_DST_DEBRIDGE, SOLANA_DST_WORMHOLE, ZERO_HASH,
+    adapter_id_for_outcome, compute_split_micro_default, hash_for_chain, usd_to_micro,
+    AdapterRegistry, CanonicalAdjudicator, DonutAttestation, FeeSplitAdjudicator,
+    DONUT_BPS_DEN, DONUT_BPS_NUM, SOLANA_DST_DEBRIDGE, SOLANA_DST_WORMHOLE, ZERO_HASH,
 };
 use executor::OutcomeRecord;
 
@@ -76,6 +76,7 @@ fn solana_fill(
         solver_id: None,
         claim_tx_hash: None,
         claim_fee_usd: None,
+        fee_usd: Some(profit_usd),
     }
 }
 
@@ -150,54 +151,57 @@ fn registry_with_all_solana_adapters() -> AdapterRegistry {
 }
 
 /// Reusable post-attestation assertions. Every Solana protocol must
-/// satisfy the same invariants.
-fn assert_math_invariants(att: &DonutAttestation, expected_profit: f64) {
-    let positive = expected_profit.max(0.0);
-    let expected_donut = positive * DONUT_BPS;
-    assert!(
-        (att.donut_take_usd - expected_donut).abs() < 1e-9,
-        "donut_take_usd: got {}, expected {} (profit={})",
-        att.donut_take_usd,
-        expected_donut,
-        expected_profit
+/// satisfy the same invariants. The expected profit is taken as i64
+/// micro-USD now — call sites pass the same value they fed into the
+/// fixture's `profit_usd` field via `usd_to_micro`.
+fn assert_math_invariants(att: &DonutAttestation, expected_profit_usd_micro: i64) {
+    // Sandbox fixtures set `fee_usd = profit_usd` (see `solana_fill`),
+    // so the donut base equals the profit micro count. Use the canonical
+    // default rate — fixtures don't override.
+    let (expected_donut, expected_creator, expected_reviewer, expected_ecosystem, expected_keeps) =
+        compute_split_micro_default(expected_profit_usd_micro);
+    // Default bps is what the registry resolves to when no per-adapter
+    // override is registered.
+    assert_eq!(att.donut_bps_num, DONUT_BPS_NUM, "donut_bps_num mismatch");
+    assert_eq!(att.donut_bps_den, DONUT_BPS_DEN, "donut_bps_den mismatch");
+    assert_eq!(
+        att.fee_usd_micro, expected_profit_usd_micro,
+        "fee_usd_micro mismatch (sandbox sets fee=profit)"
+    );
+    assert_eq!(
+        att.donut_take_usd_micro, expected_donut,
+        "donut_take_usd_micro: got {}, expected {} (profit_micro={})",
+        att.donut_take_usd_micro, expected_donut, expected_profit_usd_micro
     );
 
-    let sum = att.creator_share_usd + att.reviewer_share_usd + att.ecosystem_share_usd;
-    assert!(
-        (sum - att.donut_take_usd).abs() < 1e-9,
+    let sum = att.creator_share_usd_micro
+        + att.reviewer_share_usd_micro
+        + att.ecosystem_share_usd_micro;
+    assert_eq!(
+        sum, att.donut_take_usd_micro,
         "shares {} don't sum to donut_take {}",
-        sum,
-        att.donut_take_usd
+        sum, att.donut_take_usd_micro
     );
 
-    let expected_creator = att.donut_take_usd * CREATOR_FRACTION;
-    let expected_reviewer = att.donut_take_usd * REVIEWER_FRACTION;
-    let expected_ecosystem = att.donut_take_usd * ECOSYSTEM_FRACTION;
-    assert!(
-        (att.creator_share_usd - expected_creator).abs() < 1e-9,
+    assert_eq!(
+        att.creator_share_usd_micro, expected_creator,
         "creator share off: {} vs {}",
-        att.creator_share_usd,
-        expected_creator
+        att.creator_share_usd_micro, expected_creator
     );
-    assert!(
-        (att.reviewer_share_usd - expected_reviewer).abs() < 1e-9,
+    assert_eq!(
+        att.reviewer_share_usd_micro, expected_reviewer,
         "reviewer share off: {} vs {}",
-        att.reviewer_share_usd,
-        expected_reviewer
+        att.reviewer_share_usd_micro, expected_reviewer
     );
-    assert!(
-        (att.ecosystem_share_usd - expected_ecosystem).abs() < 1e-9,
+    assert_eq!(
+        att.ecosystem_share_usd_micro, expected_ecosystem,
         "ecosystem share off: {} vs {}",
-        att.ecosystem_share_usd,
-        expected_ecosystem
+        att.ecosystem_share_usd_micro, expected_ecosystem
     );
-
-    let expected_keeps = expected_profit - att.donut_take_usd;
-    assert!(
-        (att.spinner_keeps_usd - expected_keeps).abs() < 1e-9,
+    assert_eq!(
+        att.spinner_keeps_usd_micro, expected_keeps,
         "spinner_keeps off: {} vs {}",
-        att.spinner_keeps_usd,
-        expected_keeps
+        att.spinner_keeps_usd_micro, expected_keeps
     );
 }
 
@@ -227,7 +231,7 @@ async fn mayan_swift_solana_source_routes_to_solana_builder() {
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
     assert_eq!(att.adapter_id, "mayan-solana-swift-v1");
     assert_eq!(att.creator_addr, mayan_swift_solana_builder());
-    assert_math_invariants(&att, 0.42);
+    assert_math_invariants(&att, usd_to_micro(0.42));
     adj.verify(&att).unwrap();
 }
 
@@ -251,7 +255,7 @@ async fn mayan_swift_solana_dest_routes_to_solana_builder() {
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
     assert_eq!(att.creator_addr, mayan_swift_solana_builder());
-    assert_math_invariants(&att, 0.55);
+    assert_math_invariants(&att, usd_to_micro(0.55));
     adj.verify(&att).unwrap();
 }
 
@@ -278,7 +282,7 @@ async fn mayan_flash_solana_routes_to_flash_builder() {
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
     assert_eq!(att.creator_addr, mayan_flash_solana_builder());
     assert_ne!(att.creator_addr, mayan_swift_solana_builder());
-    assert_math_invariants(&att, 0.75);
+    assert_math_invariants(&att, usd_to_micro(0.75));
     adj.verify(&att).unwrap();
 }
 
@@ -304,7 +308,7 @@ async fn wormhole_ntt_solana_routes_to_ntt_builder() {
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
     assert_eq!(att.creator_addr, wormhole_ntt_solana_builder());
-    assert_math_invariants(&att, 0.30);
+    assert_math_invariants(&att, usd_to_micro(0.30));
     adj.verify(&att).unwrap();
 }
 
@@ -329,7 +333,7 @@ async fn debridge_dln_solana_routes_to_dln_solana_builder() {
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
     assert_eq!(att.creator_addr, debridge_dln_solana_builder());
-    assert_math_invariants(&att, 0.20);
+    assert_math_invariants(&att, usd_to_micro(0.20));
     adj.verify(&att).unwrap();
 }
 
@@ -358,15 +362,15 @@ async fn losing_solana_fills_emit_zero_donut_per_protocol() {
             -0.50,
         );
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-        assert_eq!(att.donut_take_usd, 0.0, "protocol={} donut should be 0 on loss", protocol);
-        assert_eq!(att.creator_share_usd, 0.0);
-        assert_eq!(att.reviewer_share_usd, 0.0);
-        assert_eq!(att.ecosystem_share_usd, 0.0);
-        assert!(
-            (att.spinner_keeps_usd - (-0.50)).abs() < 1e-12,
-            "protocol={} spinner_keeps_usd off: {}",
-            protocol,
-            att.spinner_keeps_usd
+        assert_eq!(att.donut_take_usd_micro, 0, "protocol={} donut should be 0 on loss", protocol);
+        assert_eq!(att.creator_share_usd_micro, 0);
+        assert_eq!(att.reviewer_share_usd_micro, 0);
+        assert_eq!(att.ecosystem_share_usd_micro, 0);
+        // -0.50 USD = -500_000 micro-USD.
+        assert_eq!(
+            att.spinner_keeps_usd_micro, -500_000,
+            "protocol={} spinner_keeps_usd_micro off: {}",
+            protocol, att.spinner_keeps_usd_micro
         );
         adj.verify(&att).unwrap();
     }

@@ -52,6 +52,13 @@ use tracing::{info, warn};
 /// accepted as the `nonce` field of a SIWE message.
 const SIWE_NONCE_TTL_SECS: u64 = 300;
 
+/// Tolerance window for SIWE `expiration_time` comparison against
+/// server time. Clients with slightly-fast clocks (~30-60s ahead of UTC
+/// is common on un-synchronised laptops) would otherwise sign messages
+/// that appear expired immediately. 60s is well below any plausible
+/// stolen-signature replay window.
+const SIWE_CLOCK_SKEW_SECS: i64 = 60;
+
 /// Hard cap on the in-memory SIWE-nonce store. Without this an attacker who
 /// hammers `POST /api/hosting/siwe-nonce` can grow the map without bound
 /// between TTL-expirations. When the cap is hit, the oldest entries are
@@ -105,8 +112,8 @@ pub struct HostedSolver {
     pub registered_at: String,
     /// Whether this solver is actively running in the fleet.
     pub active: bool,
-    /// Cumulative TSUL donut accrued (USD equivalent, for display).
-    pub donut_accrued_usd: f64,
+    /// Cumulative TSUL donut accrued, in micro-USD ($1.00 = 1_000_000).
+    pub donut_accrued_usd_micro: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,45 +184,76 @@ pub struct HostingRegistry {
 impl HostingRegistry {
     pub fn new(db_path: &str) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
+        // NOTE: schema migrated from pre-i64 `_usd REAL` columns to
+        // `_usd_micro INTEGER` for byte-stable canonical JSON across
+        // targets. Pre-migration dev databases must be dropped (or the
+        // donut_attestations table truncated); the CREATE TABLE here only
+        // applies to fresh DBs, and the test rig always boots fresh.
         conn.execute_batch("
             CREATE TABLE IF NOT EXISTS hosted_solvers (
-                solver_id         TEXT PRIMARY KEY,
-                name              TEXT NOT NULL,
-                evm_address       TEXT NOT NULL UNIQUE,
-                solana_address    TEXT,
-                signing_mode      TEXT NOT NULL DEFAULT 'self_hosted',
-                signer_webhook_url TEXT,
-                safe_address      TEXT,
-                email             TEXT,
-                chains            TEXT NOT NULL DEFAULT 'base,arbitrum,optimism',
-                protocols         TEXT NOT NULL DEFAULT 'across,debridge,mayan',
-                api_token_hash    TEXT NOT NULL,
-                registered_at     TEXT NOT NULL,
-                active            INTEGER NOT NULL DEFAULT 1,
-                donut_accrued_usd REAL NOT NULL DEFAULT 0.0
+                solver_id               TEXT PRIMARY KEY,
+                name                    TEXT NOT NULL,
+                evm_address             TEXT NOT NULL UNIQUE,
+                solana_address          TEXT,
+                signing_mode            TEXT NOT NULL DEFAULT 'self_hosted',
+                signer_webhook_url      TEXT,
+                safe_address            TEXT,
+                email                   TEXT,
+                chains                  TEXT NOT NULL DEFAULT 'base,arbitrum,optimism',
+                protocols               TEXT NOT NULL DEFAULT 'across,debridge,mayan',
+                api_token_hash          TEXT NOT NULL,
+                registered_at           TEXT NOT NULL,
+                active                  INTEGER NOT NULL DEFAULT 1,
+                donut_accrued_usd_micro INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS donut_attestations (
-                fill_id              TEXT PRIMARY KEY,
-                spinner_id           TEXT NOT NULL,
-                spinner_addr         TEXT NOT NULL,
-                adapter_id           TEXT NOT NULL,
-                protocol             TEXT NOT NULL,
-                dst_chain            INTEGER NOT NULL,
-                actual_profit_usd    REAL NOT NULL,
-                donut_take_usd       REAL NOT NULL,
-                creator_addr         TEXT NOT NULL,
-                creator_share_usd    REAL NOT NULL,
-                reviewer_addrs_json  TEXT NOT NULL,
-                reviewer_share_usd   REAL NOT NULL,
-                ecosystem_addr       TEXT NOT NULL,
-                ecosystem_share_usd  REAL NOT NULL,
-                spinner_keeps_usd    REAL NOT NULL,
-                ts                   TEXT NOT NULL,
-                prev_hash            TEXT NOT NULL,
-                signature_hex        TEXT NOT NULL
+                fill_id                    TEXT PRIMARY KEY,
+                spinner_id                 TEXT NOT NULL,
+                spinner_addr               TEXT NOT NULL,
+                adapter_id                 TEXT NOT NULL,
+                protocol                   TEXT NOT NULL,
+                dst_chain                  INTEGER NOT NULL,
+                fee_usd_micro              INTEGER NOT NULL DEFAULT 0,
+                actual_profit_usd_micro    INTEGER NOT NULL,
+                donut_bps_num              INTEGER NOT NULL DEFAULT 49,
+                donut_bps_den              INTEGER NOT NULL DEFAULT 10000,
+                donut_take_usd_micro       INTEGER NOT NULL,
+                creator_addr               TEXT NOT NULL,
+                creator_share_usd_micro    INTEGER NOT NULL,
+                reviewer_addrs_json        TEXT NOT NULL,
+                reviewer_share_usd_micro   INTEGER NOT NULL,
+                ecosystem_addr             TEXT NOT NULL,
+                ecosystem_share_usd_micro  INTEGER NOT NULL,
+                spinner_keeps_usd_micro    INTEGER NOT NULL,
+                ts                         TEXT NOT NULL,
+                prev_hash                  TEXT NOT NULL,
+                signature_hex              TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_donut_spinner ON donut_attestations(spinner_id, ts);
         ")?;
+
+        // Idempotent migration for pre-fee-base dev databases. Each column
+        // is added independently with the appropriate default so the
+        // existing rows back-fill cleanly.
+        for col_sql in [
+            "ALTER TABLE donut_attestations ADD COLUMN fee_usd_micro INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE donut_attestations ADD COLUMN donut_bps_num INTEGER NOT NULL DEFAULT 49",
+            "ALTER TABLE donut_attestations ADD COLUMN donut_bps_den INTEGER NOT NULL DEFAULT 10000",
+        ] {
+            match conn.execute(col_sql, []) {
+                Ok(_) => {}
+                Err(e) => {
+                    let msg = e.to_string();
+                    if !msg.contains("duplicate column name") {
+                        tracing::warn!(
+                            "donut_attestations migration `{}` failed: {}",
+                            col_sql,
+                            msg
+                        );
+                    }
+                }
+            }
+        }
 
         // Idempotent migration: add `siwe_verified` column if it doesn't
         // already exist. SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT
@@ -230,6 +268,27 @@ impl HostingRegistry {
                 let msg = e.to_string();
                 if !msg.contains("duplicate column name") {
                     return Err(anyhow::anyhow!("failed to add siwe_verified column: {}", e));
+                }
+            }
+        }
+
+        // Idempotent migration: pre-i64 schemas used `donut_accrued_usd REAL`.
+        // Add the new column if it isn't present yet. We don't bother
+        // copying values across — pre-migration counters are wrong-shape
+        // anyway and dev DBs are routinely rebuilt.
+        let alter = conn.execute(
+            "ALTER TABLE hosted_solvers ADD COLUMN donut_accrued_usd_micro INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        match alter {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(anyhow::anyhow!(
+                        "failed to add donut_accrued_usd_micro column: {}",
+                        e
+                    ));
                 }
             }
         }
@@ -297,7 +356,7 @@ impl HostingRegistry {
         }
     }
 
-    pub fn provision(&self, req: &ProvisionRequest) -> anyhow::Result<(HostedSolver, String)> {
+    pub async fn provision(&self, req: &ProvisionRequest) -> anyhow::Result<(HostedSolver, String)> {
         let addr = req.evm_address.trim().to_lowercase();
         if !addr.starts_with("0x") || addr.len() != 42 {
             anyhow::bail!("invalid EVM address");
@@ -309,7 +368,8 @@ impl HostingRegistry {
         // path because the user is asserting wallet ownership.
         let siwe_verified = match (req.siwe_message.as_deref(), req.signature.as_deref()) {
             (Some(msg), Some(sig)) => {
-                verify_siwe(msg, sig, &addr, |nonce| self.consume_siwe_nonce(&addr, nonce))?;
+                verify_siwe(msg, sig, &addr, |nonce| self.consume_siwe_nonce(&addr, nonce))
+                    .await?;
                 true
             }
             (Some(_), None) | (None, Some(_)) => {
@@ -321,41 +381,22 @@ impl HostingRegistry {
         let solver_id = &addr[2..10]; // first 8 hex chars
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Generate a non-cryptographic but unique API token.
-        // For production, replace with rand::thread_rng().gen::<[u8;24]>().
-        // For hackathon purposes, mix address + timestamp + nanos for uniqueness.
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let seed = format!("{}{}{}",
-            addr,
-            now,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos()
-        );
-        let mut h1 = DefaultHasher::new();
-        seed.hash(&mut h1);
-        let v1: u64 = h1.finish();
-
-        let seed2 = format!("{}{}", addr, v1);
-        let mut h2 = DefaultHasher::new();
-        seed2.hash(&mut h2);
-        let v2: u64 = h2.finish();
-
-        let seed3 = format!("{}{}", now, v2);
-        let mut h3 = DefaultHasher::new();
-        seed3.hash(&mut h3);
-        let v3: u64 = h3.finish();
-
+        // Cryptographically-random 24-byte API token. Generated with OsRng
+        // (via rand::thread_rng which wraps the OS CSPRNG) so it cannot be
+        // predicted by an attacker who observes process timing or other
+        // tokens.
+        use rand::RngCore;
         let mut token_bytes = [0u8; 24];
-        token_bytes[..8].copy_from_slice(&v1.to_le_bytes());
-        token_bytes[8..16].copy_from_slice(&v2.to_le_bytes());
-        token_bytes[16..24].copy_from_slice(&v3.to_le_bytes());
+        rand::thread_rng().fill_bytes(&mut token_bytes);
         let api_token: String = hex::encode(token_bytes);
 
-        // Hash token for storage (don't store raw token)
+        // Hash token for storage (don't store raw token). DefaultHasher is
+        // *not* cryptographically strong, but we never expose the hash —
+        // it's only used internally to disambiguate rows. For a real audit
+        // we'd swap to SHA-256, but the token itself is already 192 bits of
+        // OS-entropy.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut h_store = DefaultHasher::new();
         api_token.hash(&mut h_store);
         let token_hash: String = format!("{:x}", h_store.finish());
@@ -381,7 +422,7 @@ impl HostingRegistry {
             protocols: protocols.to_string(),
             registered_at: now.clone(),
             active: true,
-            donut_accrued_usd: 0.0,
+            donut_accrued_usd_micro: 0,
         };
 
         let db = self.db.lock().unwrap();
@@ -403,8 +444,8 @@ impl HostingRegistry {
             "INSERT OR REPLACE INTO hosted_solvers
              (solver_id, name, evm_address, solana_address, signing_mode,
               signer_webhook_url, safe_address, email, chains, protocols,
-              api_token_hash, registered_at, active, donut_accrued_usd, siwe_verified)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,0.0,?13)",
+              api_token_hash, registered_at, active, donut_accrued_usd_micro, siwe_verified)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,0,?13)",
             params![
                 solver.solver_id,
                 solver.name,
@@ -443,7 +484,7 @@ impl HostingRegistry {
         let mut stmt = db.prepare(
             "SELECT solver_id, name, evm_address, solana_address, signing_mode,
                     signer_webhook_url, safe_address, email, chains, protocols,
-                    registered_at, active, donut_accrued_usd
+                    registered_at, active, donut_accrued_usd_micro
              FROM hosted_solvers ORDER BY registered_at DESC"
         )?;
 
@@ -461,7 +502,7 @@ impl HostingRegistry {
                 protocols: row.get(9)?,
                 registered_at: row.get(10)?,
                 active: row.get::<_, i64>(11)? != 0,
-                donut_accrued_usd: row.get(12)?,
+                donut_accrued_usd_micro: row.get(12)?,
             })
         })?;
 
@@ -478,7 +519,7 @@ impl HostingRegistry {
         let mut stmt = db.prepare(
             "SELECT solver_id, name, evm_address, solana_address, signing_mode,
                     signer_webhook_url, safe_address, email, chains, protocols,
-                    registered_at, active, donut_accrued_usd
+                    registered_at, active, donut_accrued_usd_micro
              FROM hosted_solvers WHERE solver_id = ?1"
         )?;
 
@@ -496,7 +537,7 @@ impl HostingRegistry {
                 protocols: row.get(9)?,
                 registered_at: row.get(10)?,
                 active: row.get::<_, i64>(11)? != 0,
-                donut_accrued_usd: row.get(12)?,
+                donut_accrued_usd_micro: row.get(12)?,
             })
         })?;
 
@@ -512,8 +553,8 @@ impl HostingRegistry {
     /// 2. `prev_hash` must equal the current ledger head for this Spinner —
     ///    or [`ZERO_HASH`] when the Spinner has never attested before.
     /// 3. The row is inserted; a duplicate `fill_id` returns [`PersistError::DuplicateFill`].
-    /// 4. `hosted_solvers.donut_accrued_usd` is incremented by
-    ///    `att.creator_share_usd` **only** if `att.creator_addr` matches the
+    /// 4. `hosted_solvers.donut_accrued_usd_micro` is incremented by
+    ///    `att.creator_share_usd_micro` **only** if `att.creator_addr` matches the
     ///    Spinner's registered `evm_address` — i.e. the Spinner is also the
     ///    Builder of the adapter that produced the fill. Other Spinners do
     ///    not get a counter bump for running someone else's adapter.
@@ -577,11 +618,13 @@ impl HostingRegistry {
             let res = tx.execute(
                 "INSERT INTO donut_attestations (
                     fill_id, spinner_id, spinner_addr, adapter_id, protocol,
-                    dst_chain, actual_profit_usd, donut_take_usd, creator_addr,
-                    creator_share_usd, reviewer_addrs_json, reviewer_share_usd,
-                    ecosystem_addr, ecosystem_share_usd, spinner_keeps_usd,
+                    dst_chain, fee_usd_micro, actual_profit_usd_micro,
+                    donut_bps_num, donut_bps_den, donut_take_usd_micro,
+                    creator_addr, creator_share_usd_micro, reviewer_addrs_json,
+                    reviewer_share_usd_micro, ecosystem_addr,
+                    ecosystem_share_usd_micro, spinner_keeps_usd_micro,
                     ts, prev_hash, signature_hex
-                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
                 params![
                     att.fill_id,
                     att.spinner_id,
@@ -589,15 +632,18 @@ impl HostingRegistry {
                     att.adapter_id,
                     att.protocol,
                     att.dst_chain as i64,
-                    att.actual_profit_usd,
-                    att.donut_take_usd,
+                    att.fee_usd_micro,
+                    att.actual_profit_usd_micro,
+                    att.donut_bps_num,
+                    att.donut_bps_den,
+                    att.donut_take_usd_micro,
                     creator_addr_hex,
-                    att.creator_share_usd,
+                    att.creator_share_usd_micro,
                     reviewer_addrs_json,
-                    att.reviewer_share_usd,
+                    att.reviewer_share_usd_micro,
                     ecosystem_addr_hex,
-                    att.ecosystem_share_usd,
-                    att.spinner_keeps_usd,
+                    att.ecosystem_share_usd_micro,
+                    att.spinner_keeps_usd_micro,
                     ts_str,
                     att.prev_hash,
                     att.signature_hex,
@@ -632,9 +678,9 @@ impl HostingRegistry {
                 if evm_norm == creator_norm {
                     tx.execute(
                         "UPDATE hosted_solvers
-                         SET donut_accrued_usd = donut_accrued_usd + ?1
+                         SET donut_accrued_usd_micro = donut_accrued_usd_micro + ?1
                          WHERE solver_id = ?2",
-                        params![att.creator_share_usd, att.spinner_id],
+                        params![att.creator_share_usd_micro, att.spinner_id],
                     )
                     .map_err(|e| PersistError::Internal(e.to_string()))?;
                 }
@@ -647,7 +693,7 @@ impl HostingRegistry {
         info!(
             spinner_id = %att.spinner_id,
             adapter = %att.adapter_id,
-            donut_usd = att.donut_take_usd,
+            donut_usd_micro = att.donut_take_usd_micro,
             "[hosting] attestation persisted (recovered spinner {})",
             att.spinner_addr
         );
@@ -661,9 +707,11 @@ impl HostingRegistry {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT fill_id, spinner_id, spinner_addr, adapter_id, protocol,
-                    dst_chain, actual_profit_usd, donut_take_usd, creator_addr,
-                    creator_share_usd, reviewer_addrs_json, reviewer_share_usd,
-                    ecosystem_addr, ecosystem_share_usd, spinner_keeps_usd,
+                    dst_chain, fee_usd_micro, actual_profit_usd_micro,
+                    donut_bps_num, donut_bps_den, donut_take_usd_micro,
+                    creator_addr, creator_share_usd_micro, reviewer_addrs_json,
+                    reviewer_share_usd_micro, ecosystem_addr,
+                    ecosystem_share_usd_micro, spinner_keeps_usd_micro,
                     ts, prev_hash, signature_hex
              FROM donut_attestations
              WHERE spinner_id = ?1
@@ -696,9 +744,11 @@ impl HostingRegistry {
 
         let mut stmt = db.prepare(
             "SELECT fill_id, spinner_id, spinner_addr, adapter_id, protocol,
-                    dst_chain, actual_profit_usd, donut_take_usd, creator_addr,
-                    creator_share_usd, reviewer_addrs_json, reviewer_share_usd,
-                    ecosystem_addr, ecosystem_share_usd, spinner_keeps_usd,
+                    dst_chain, fee_usd_micro, actual_profit_usd_micro,
+                    donut_bps_num, donut_bps_den, donut_take_usd_micro,
+                    creator_addr, creator_share_usd_micro, reviewer_addrs_json,
+                    reviewer_share_usd_micro, ecosystem_addr,
+                    ecosystem_share_usd_micro, spinner_keeps_usd_micro,
                     ts, prev_hash, signature_hex
              FROM donut_attestations
              WHERE spinner_id = ?1
@@ -758,7 +808,7 @@ fn row_to_attestation(r: &rusqlite::Row<'_>) -> rusqlite::Result<DonutAttestatio
             )
         })
     };
-    let ts_str: String = r.get(15)?;
+    let ts_str: String = r.get(18)?;
     let ts = chrono::DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(|_| chrono::Utc::now());
@@ -770,18 +820,21 @@ fn row_to_attestation(r: &rusqlite::Row<'_>) -> rusqlite::Result<DonutAttestatio
         adapter_id: r.get(3)?,
         protocol: r.get(4)?,
         dst_chain: r.get::<_, i64>(5)? as u64,
-        actual_profit_usd: r.get(6)?,
-        donut_take_usd: r.get(7)?,
-        creator_addr: parse_addr(r.get(8)?)?,
-        creator_share_usd: r.get(9)?,
-        reviewer_addrs: parse_addrs(r.get(10)?)?,
-        reviewer_share_usd: r.get(11)?,
-        ecosystem_addr: parse_addr(r.get(12)?)?,
-        ecosystem_share_usd: r.get(13)?,
-        spinner_keeps_usd: r.get(14)?,
+        fee_usd_micro: r.get(6)?,
+        actual_profit_usd_micro: r.get(7)?,
+        donut_bps_num: r.get(8)?,
+        donut_bps_den: r.get(9)?,
+        donut_take_usd_micro: r.get(10)?,
+        creator_addr: parse_addr(r.get(11)?)?,
+        creator_share_usd_micro: r.get(12)?,
+        reviewer_addrs: parse_addrs(r.get(13)?)?,
+        reviewer_share_usd_micro: r.get(14)?,
+        ecosystem_addr: parse_addr(r.get(15)?)?,
+        ecosystem_share_usd_micro: r.get(16)?,
+        spinner_keeps_usd_micro: r.get(17)?,
         ts,
-        prev_hash: r.get(16)?,
-        signature_hex: r.get(17)?,
+        prev_hash: r.get(19)?,
+        signature_hex: r.get(20)?,
     })
 }
 
@@ -800,7 +853,7 @@ struct HostedSolverRow {
     protocols: String,
     registered_at: String,
     active: bool,
-    donut_accrued_usd: f64,
+    donut_accrued_usd_micro: i64,
 }
 
 fn row_to_solver(r: HostedSolverRow) -> HostedSolver {
@@ -821,7 +874,7 @@ fn row_to_solver(r: HostedSolverRow) -> HostedSolver {
         protocols: r.protocols,
         registered_at: r.registered_at,
         active: r.active,
-        donut_accrued_usd: r.donut_accrued_usd,
+        donut_accrued_usd_micro: r.donut_accrued_usd_micro,
     }
 }
 
@@ -840,7 +893,7 @@ fn siwe_domain() -> String {
 /// is currently valid (not expired, not previously consumed). It MUST
 /// consume the nonce as a side-effect — we only call this after every other
 /// check passes, so a verification failure does not burn the nonce.
-fn verify_siwe<F>(
+async fn verify_siwe<F>(
     raw_message: &str,
     raw_signature: &str,
     expected_addr: &str,
@@ -851,6 +904,33 @@ where
 {
     use siwe::{Message, VerificationOpts};
     use std::str::FromStr;
+    use time::OffsetDateTime;
+
+    // Explicit EIP-55 casing check on the body's address line. siwe-rs's
+    // parser already enforces checksum casing today, but we surface a
+    // dedicated error here so even if a future siwe-rs release loosens
+    // its check (or a fork is swapped in) we still reject lowercased
+    // addresses before signature recovery. The address line is the second
+    // non-empty line of the SIWE message; we extract it with the same
+    // logic siwe-rs uses.
+    if let Some(addr_line) = raw_message.lines().nth(1) {
+        let candidate = addr_line.trim();
+        if candidate.starts_with("0x") && candidate.len() == 42 {
+            let bytes = hex::decode(candidate.trim_start_matches("0x"))
+                .map_err(|e| anyhow::anyhow!("invalid SIWE message: address hex: {}", e))?;
+            if bytes.len() == 20 {
+                let arr: [u8; 20] = bytes.as_slice().try_into().unwrap();
+                let canonical = alloy::primitives::Address::from(arr).to_string();
+                if canonical != candidate {
+                    anyhow::bail!(
+                        "invalid SIWE message: address checksum mismatch (expected {}, got {})",
+                        canonical,
+                        candidate
+                    );
+                }
+            }
+        }
+    }
 
     let msg = Message::from_str(raw_message)
         .map_err(|e| anyhow::anyhow!("invalid SIWE message: {}", e))?;
@@ -903,7 +983,12 @@ where
     let exp_dt = chrono::DateTime::parse_from_rfc3339(&exp_str)
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| anyhow::anyhow!("invalid SIWE expiration_time '{}': {}", exp_str, e))?;
-    if exp_dt <= now {
+    // Allow a small grace window so clients with skewed clocks don't get
+    // rejected the instant they sign. The grace works in both directions —
+    // a message that *just* expired against the server's wall clock is
+    // still accepted if it's within SIWE_CLOCK_SKEW_SECS of now.
+    let grace = chrono::Duration::seconds(SIWE_CLOCK_SKEW_SECS);
+    if exp_dt + grace <= now {
         anyhow::bail!("SIWE message expired at {}", exp_dt);
     }
 
@@ -920,17 +1005,23 @@ where
     // Cryptographic verification — recover the signer from the EIP-191
     // personal_sign digest of `raw_message` and check it matches `msg.address`.
     // We've already manually checked domain, nonce, and expiration above.
-    // Leave VerificationOpts as default so the library only does the
-    // cryptographic recovery + EIP-1271 hooks. Our explicit checks make
-    // failure modes easier to surface in error responses.
-    let opts = VerificationOpts::default();
+    // Set timestamp to account for our clock-skew grace period so the library's
+    // built-in expiration check doesn't reject messages that are within our
+    // SIWE_CLOCK_SKEW_SECS tolerance.
+    let verification_time = now - grace;
+    let verification_unix = verification_time.timestamp();
+    let verification_ts = time::OffsetDateTime::from_unix_timestamp(verification_unix)
+        .map_err(|e| anyhow::anyhow!("invalid verification timestamp: {}", e))?;
+    let opts = VerificationOpts {
+        domain: None,
+        nonce: None,
+        timestamp: Some(verification_ts),
+        ..Default::default()
+    };
     // siwe's verify is async but does no I/O (no EIP-1271 contract call
-    // when we leave `rpc_provider` unset). Drive it to completion with the
-    // futures crate's executor so this helper stays sync-callable from
-    // inside the axum handler — we can't start a new tokio runtime here
-    // (Tokio panics on nested runtime construction).
-    let verify_fut = msg.verify(&sig_arr, &opts);
-    let result = futures::executor::block_on(verify_fut);
+    // when we leave `rpc_provider` unset). Await it directly from inside
+    // the axum handler — provision is `async fn` from end to end.
+    let result = msg.verify(&sig_arr, &opts).await;
     result.map_err(|e| anyhow::anyhow!("SIWE signature verification failed: {}", e))?;
 
     // Finally, consume the nonce. Single-use — the closure removes it from
@@ -971,7 +1062,7 @@ pub async fn provision_handler(
     State(registry): State<HostingRegistryState>,
     Json(req): Json<ProvisionRequest>,
 ) -> Result<Json<ProvisionResponse>, (StatusCode, Json<serde_json::Value>)> {
-    match registry.provision(&req) {
+    match registry.provision(&req).await {
         Ok((solver, token)) => {
             let base_url = std::env::var("PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "https://solver.taifoon.dev".to_string());
@@ -1046,8 +1137,8 @@ mod tests {
         HostingRegistry::new(":memory:").unwrap()
     }
 
-    #[test]
-    fn provision_returns_unique_token() {
+    #[tokio::test]
+    async fn provision_returns_unique_token() {
         let r = registry();
         let req = ProvisionRequest {
             name: "test-solver".into(),
@@ -1062,14 +1153,14 @@ mod tests {
             siwe_message: None,
             signature: None,
         };
-        let (solver, token) = r.provision(&req).unwrap();
+        let (solver, token) = r.provision(&req).await.unwrap();
         assert_eq!(solver.solver_id, "00000000");
         assert_eq!(token.len(), 48); // 24 bytes hex-encoded
         assert!(solver.evm_address.starts_with("0x"));
     }
 
-    #[test]
-    fn invalid_address_rejected() {
+    #[tokio::test]
+    async fn invalid_address_rejected() {
         let r = registry();
         let req = ProvisionRequest {
             name: "x".into(),
@@ -1084,7 +1175,7 @@ mod tests {
             siwe_message: None,
             signature: None,
         };
-        assert!(r.provision(&req).is_err());
+        assert!(r.provision(&req).await.is_err());
     }
 
     #[test]
@@ -1093,8 +1184,8 @@ mod tests {
         assert_eq!(r.list().unwrap().len(), 0);
     }
 
-    #[test]
-    fn provision_then_list_returns_entry() {
+    #[tokio::test]
+    async fn provision_then_list_returns_entry() {
         let r = registry();
         let req = ProvisionRequest {
             name: "fleet-member".into(),
@@ -1109,7 +1200,7 @@ mod tests {
             siwe_message: None,
             signature: None,
         };
-        let (solver, _token) = r.provision(&req).unwrap();
+        let (solver, _token) = r.provision(&req).await.unwrap();
         let list = r.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].solver_id, solver.solver_id);
@@ -1147,10 +1238,11 @@ mod tests {
             solver_id: Some("00000000".into()),
             claim_tx_hash: None,
             claim_fee_usd: None,
+            fee_usd: None,
         }
     }
 
-    fn provision_signer(r: &HostingRegistry, signer: &PrivateKeySigner) -> String {
+    async fn provision_signer(r: &HostingRegistry, signer: &PrivateKeySigner) -> String {
         let addr = format!("{:#x}", signer.address());
         let req = ProvisionRequest {
             name: "test".into(),
@@ -1165,7 +1257,7 @@ mod tests {
             siwe_message: None,
             signature: None,
         };
-        let (solver, _token) = r.provision(&req).unwrap();
+        let (solver, _token) = r.provision(&req).await.unwrap();
         solver.solver_id
     }
 
@@ -1173,7 +1265,7 @@ mod tests {
     async fn persist_attestation_round_trips() {
         let r = registry();
         let signer = test_signer();
-        let spinner_id = provision_signer(&r, &signer);
+        let spinner_id = provision_signer(&r, &signer).await;
 
         // Spinner == Builder: builder_addr in registry equals signer.address().
         let reg = AdapterRegistry::new(
@@ -1199,7 +1291,7 @@ mod tests {
 
         let updated = r.get_by_id(&spinner_id).unwrap().unwrap();
         // Spinner == Builder → counter bumped by creator_share.
-        assert!((updated.donut_accrued_usd - att.creator_share_usd).abs() < 1e-12);
+        assert_eq!(updated.donut_accrued_usd_micro, att.creator_share_usd_micro);
 
         let ledger = r.ledger_for(&spinner_id).unwrap();
         assert_eq!(ledger.len(), 1);
@@ -1214,7 +1306,7 @@ mod tests {
     async fn persist_duplicate_fill_id_fails() {
         let r = registry();
         let signer = test_signer();
-        let spinner_id = provision_signer(&r, &signer);
+        let spinner_id = provision_signer(&r, &signer).await;
         let reg = AdapterRegistry::new(
             "0x000000000000000000000000000000000000eeee".parse().unwrap(),
         )
@@ -1251,7 +1343,7 @@ mod tests {
     async fn persist_bad_chain_link_fails() {
         let r = registry();
         let signer = test_signer();
-        let spinner_id = provision_signer(&r, &signer);
+        let spinner_id = provision_signer(&r, &signer).await;
         let reg = AdapterRegistry::new(
             "0x000000000000000000000000000000000000eeee".parse().unwrap(),
         )
@@ -1285,7 +1377,7 @@ mod tests {
     async fn persist_counter_only_when_spinner_is_builder() {
         let r = registry();
         let signer = test_signer();
-        let spinner_id = provision_signer(&r, &signer);
+        let spinner_id = provision_signer(&r, &signer).await;
 
         // Builder is a DIFFERENT address. Spinner runs someone else's adapter.
         let other_builder: alloy::primitives::Address =
@@ -1308,7 +1400,7 @@ mod tests {
 
         r.persist_attestation(&att).unwrap();
         let updated = r.get_by_id(&spinner_id).unwrap().unwrap();
-        assert_eq!(updated.donut_accrued_usd, 0.0);
+        assert_eq!(updated.donut_accrued_usd_micro, 0);
     }
 
     // ── SIWE / provision verification tests ────────────────────────────────────
@@ -1323,11 +1415,24 @@ mod tests {
         domain: &str,
         chain_id: u64,
     ) -> (String, String) {
-        use alloy::signers::SignerSync;
-
         // siwe-rs enforces EIP-55 checksum in `Message::from_str`. Alloy's
         // `Address::to_string()` produces the checksummed form.
         let addr_eip55 = signer.address().to_string();
+        build_siwe_with_addr(signer, &addr_eip55, nonce, expiration, domain, chain_id)
+    }
+
+    /// Same as [`build_siwe`] but with the body-address as a separate arg.
+    /// Used by the EIP-55 casing rejection test to embed a lowercased
+    /// address in the message body while the signer is still the same key.
+    fn build_siwe_with_addr(
+        signer: &PrivateKeySigner,
+        body_addr: &str,
+        nonce: &str,
+        expiration: chrono::DateTime<chrono::Utc>,
+        domain: &str,
+        chain_id: u64,
+    ) -> (String, String) {
+        use alloy::signers::SignerSync;
 
         let issued_at = chrono::Utc::now().to_rfc3339();
         let exp_str = expiration.to_rfc3339();
@@ -1345,7 +1450,7 @@ mod tests {
              Issued At: {issued_at}\n\
              Expiration Time: {exp_str}",
             domain = domain,
-            addr = addr_eip55,
+            addr = body_addr,
             chain_id = chain_id,
             nonce = nonce,
             issued_at = issued_at,
@@ -1391,7 +1496,7 @@ mod tests {
             signature: Some(sig),
         };
 
-        let (solver, _token) = r.provision(&req).expect("siwe provision should succeed");
+        let (solver, _token) = r.provision(&req).await.expect("siwe provision should succeed");
         // Read back the verified flag from sqlite directly — it's not in
         // the public HostedSolver struct.
         let db = r.db.lock().unwrap();
@@ -1429,7 +1534,7 @@ mod tests {
             siwe_message: Some(msg),
             signature: Some(sig),
         };
-        let err = r.provision(&req).err().expect("must reject expired siwe");
+        let err = r.provision(&req).await.err().expect("must reject expired siwe");
         let msg = err.to_string().to_lowercase();
         assert!(msg.contains("expired") || msg.contains("expiration"));
     }
@@ -1459,15 +1564,15 @@ mod tests {
         };
 
         // First call consumes the nonce.
-        r.provision(&make_req()).expect("first provision ok");
+        r.provision(&make_req()).await.expect("first provision ok");
         // Second call with the same SIWE message must fail because the nonce
         // is single-use.
-        let err = r.provision(&make_req()).err().expect("second call must fail");
+        let err = r.provision(&make_req()).await.err().expect("second call must fail");
         assert!(err.to_string().to_lowercase().contains("nonce"));
     }
 
-    #[test]
-    fn provision_without_siwe_marks_row_unverified() {
+    #[tokio::test]
+    async fn provision_without_siwe_marks_row_unverified() {
         let r = registry();
         let req = ProvisionRequest {
             name: "no-siwe".into(),
@@ -1482,7 +1587,7 @@ mod tests {
             siwe_message: None,
             signature: None,
         };
-        let (solver, _token) = r.provision(&req).expect("provision without siwe must succeed");
+        let (solver, _token) = r.provision(&req).await.expect("provision without siwe must succeed");
 
         let db = r.db.lock().unwrap();
         let v: i64 = db
@@ -1495,8 +1600,8 @@ mod tests {
         assert_eq!(v, 0);
     }
 
-    #[test]
-    fn reprovision_rotates_token_but_keeps_solver_id() {
+    #[tokio::test]
+    async fn reprovision_rotates_token_but_keeps_solver_id() {
         let r = registry();
         let addr = "0x3333333333333333333333333333333333333333";
         let make_req = || ProvisionRequest {
@@ -1513,15 +1618,101 @@ mod tests {
             signature: None,
         };
 
-        let (solver1, token1) = r.provision(&make_req()).unwrap();
-        // Sleep briefly so the nanosecond-based token seed differs.
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        let (solver2, token2) = r.provision(&make_req()).unwrap();
+        let (solver1, token1) = r.provision(&make_req()).await.unwrap();
+        // Tokens come from OsRng, so collision probability is ~2^-192.
+        // The previous implementation relied on a sleep so the nanosecond
+        // seed differed; that's no longer necessary.
+        let (solver2, token2) = r.provision(&make_req()).await.unwrap();
 
         // solver_id derived from address — must be stable.
         assert_eq!(solver1.solver_id, solver2.solver_id);
         // New api_token must be different — the previous token is revoked
         // because `api_token_hash` in the row has been overwritten.
         assert_ne!(token1, token2);
+    }
+
+    // ── Fix 1: EIP-55 SIWE casing rejection ────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn siwe_rejects_lowercased_address_in_body() {
+        let r = registry();
+        let signer = siwe_signer();
+        let addr_hex = format!("{:#x}", signer.address()); // lowercased "0x…"
+        let nonce_resp = r.issue_siwe_nonce(&addr_hex);
+
+        // Build a SIWE message with a *lowercased* address in the body
+        // instead of the EIP-55 checksummed form. siwe-rs requires
+        // checksummed casing and we ALSO have an explicit pre-parser check
+        // — verify_siwe must reject this.
+        let exp = chrono::Utc::now() + chrono::Duration::minutes(2);
+        let (msg, sig) = build_siwe_with_addr(
+            &signer,
+            &addr_hex.to_lowercase(), // ← intentionally lowercased
+            &nonce_resp.nonce,
+            exp,
+            "solver.taifoon.dev",
+            1,
+        );
+
+        let req = ProvisionRequest {
+            name: "casing".into(),
+            evm_address: addr_hex.clone(),
+            siwe_message: Some(msg),
+            signature: Some(sig),
+            solana_address: None,
+            signing_mode: None,
+            signer_webhook_url: None,
+            safe_address: None,
+            email: None,
+            chains: None,
+            protocols: None,
+        };
+        let err = r
+            .provision(&req)
+            .await
+            .expect_err("must reject lowercased SIWE address");
+        let s = err.to_string();
+        assert!(
+            s.contains("invalid SIWE message")
+                || s.contains("checksum")
+                || s.contains("address"),
+            "expected casing rejection, got: {}",
+            s
+        );
+    }
+
+    // ── Fix 2: SIWE clock-skew grace ───────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn siwe_clock_skew_grace_accepts_just_expired() {
+        let r = registry();
+        let signer = siwe_signer();
+        let addr_hex = format!("0x{}", hex::encode(signer.address()));
+        let nonce_resp = r.issue_siwe_nonce(&addr_hex);
+
+        // expiration_time = now - 30s — within SIWE_CLOCK_SKEW_SECS (60s)
+        // grace window, so provision must succeed.
+        let exp = chrono::Utc::now() - chrono::Duration::seconds(30);
+        let (msg, sig) = build_siwe(&signer, &nonce_resp.nonce, exp, "solver.taifoon.dev", 1);
+
+        let req = ProvisionRequest {
+            name: "skew-grace".into(),
+            evm_address: addr_hex,
+            solana_address: None,
+            signing_mode: Some("self_hosted".into()),
+            signer_webhook_url: None,
+            safe_address: None,
+            email: None,
+            chains: None,
+            protocols: None,
+            siwe_message: Some(msg),
+            signature: Some(sig),
+        };
+        let res = r.provision(&req).await;
+        assert!(
+            res.is_ok(),
+            "just-expired SIWE message should be accepted under clock-skew grace, got: {:?}",
+            res.err()
+        );
     }
 }

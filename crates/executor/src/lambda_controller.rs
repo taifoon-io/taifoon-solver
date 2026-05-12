@@ -127,6 +127,7 @@ impl LambdaController {
                 solver_id: None,
                 claim_tx_hash: None,
                 claim_fee_usd: None,
+                fee_usd: None,
             });
             return Ok(LambdaExecuteOutcome::Skipped { reason });
         }
@@ -248,6 +249,7 @@ impl LambdaController {
                     solver_id: None,
                     claim_tx_hash: None,
                     claim_fee_usd: None,
+                    fee_usd: None,
                 });
                 return Ok(LambdaExecuteOutcome::Skipped { reason });
             }
@@ -1203,6 +1205,7 @@ impl LambdaController {
                 solver_id: None,
                 claim_tx_hash: None,
                 claim_fee_usd: None,
+                fee_usd: None,
             });
             let _ = self.wallet.release(&intent.id);
             return Ok(LambdaExecuteOutcome::Skipped {
@@ -1390,6 +1393,7 @@ impl LambdaController {
                 solver_id: None,
                 claim_tx_hash: None,
                 claim_fee_usd: None,
+                fee_usd: None,
             });
             return Ok(LambdaExecuteOutcome::Reverted {
                 tx_hash,
@@ -1428,6 +1432,7 @@ impl LambdaController {
             solver_id: None,
             claim_tx_hash: None,
             claim_fee_usd: None,
+            fee_usd: None,
         });
 
         self.emit_genome_feedback(intent, &tx_hash, gas_used).await;
@@ -1733,6 +1738,7 @@ impl LambdaController {
             solver_id: None,
             claim_tx_hash: None,
             claim_fee_usd: None,
+            fee_usd: None,
         });
     }
 

@@ -50,6 +50,25 @@ pub struct OutcomeRecord {
     /// `claim_tx_hash`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claim_fee_usd: Option<f64>,
+    /// **Gross fee** paid by the intent's submitter for filling — the
+    /// number the donut adjudicator multiplies by 49 bps. Decoded by the
+    /// executor from the SSE Genome intent BEFORE the fill broadcasts:
+    ///
+    /// | Protocol      | Source of `fee_usd`                                    |
+    /// |---------------|---------------------------------------------------------|
+    /// | Across V3     | `inputAmount − outputAmount` × token-USD-price          |
+    /// | deBridge DLN  | `giveAmount − takeAmount` × token-USD-price             |
+    /// | Mayan Swift   | auction-winning fee declared in the intent              |
+    /// | LiFi          | embedded relay fee in the calldata                      |
+    /// | Wormhole NTT  | bridge-fee field on the NTT message                     |
+    ///
+    /// Distinct from `actual_profit_usd` — that's `fee_usd - gas_cost_usd`.
+    /// The donut is taken from the fee (revenue), gas is the Spinner's
+    /// own cost. None when the executor can't decode a fee (very old
+    /// intents, dry-runs); in that case the adjudicator falls back to
+    /// `max(0, actual_profit_usd)` as a conservative substitute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_usd: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -216,7 +235,7 @@ impl OutcomeLog {
             "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                     predicted_gas, gas_used, effective_gas_price_wei,
                     predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
-                    claim_tx_hash, claim_fee_usd
+                    claim_tx_hash, claim_fee_usd, fee_usd
              FROM solver_outcomes
              WHERE solver_id = ?1
              ORDER BY ts DESC
@@ -225,7 +244,7 @@ impl OutcomeLog {
             "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                     predicted_gas, gas_used, effective_gas_price_wei,
                     predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
-                    claim_tx_hash, claim_fee_usd
+                    claim_tx_hash, claim_fee_usd, fee_usd
              FROM solver_outcomes
              ORDER BY ts DESC
              LIMIT ?1"
@@ -254,6 +273,7 @@ impl OutcomeLog {
                 solver_id: r.get(14)?,
                 claim_tx_hash: r.get(15)?,
                 claim_fee_usd: r.get(16)?,
+                fee_usd: r.get(17)?,
             })
         };
 

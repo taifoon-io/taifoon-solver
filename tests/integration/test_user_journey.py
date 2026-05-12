@@ -23,14 +23,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import time
 
-import pytest
 import requests
 
 from helpers import (
     build_siwe_message,
     expected_adapter_id,
+    expected_split_micro,
     make_signer,
     make_signer_b,
     produce_attestation,
@@ -41,10 +40,7 @@ from helpers import (
     SOLANA_DST_DEBRIDGE,
     SOLANA_DST_WORMHOLE,
     ZERO_HASH,
-    DONUT_BPS,
-    CREATOR_FRAC,
-    REVIEWER_FRAC,
-    ECOSYSTEM_FRAC,
+    MICRO_USD_PER_USD,
 )
 
 # ── Addresses used across tests ──────────────────────────────────────────────
@@ -110,7 +106,7 @@ def test_can_i_onboard_with_siwe(server):
     assert r.status_code == 200, r.text
     solver = r.json()
     assert solver["evm_address"] == signer.address.lower()
-    assert solver["donut_accrued_usd"] == 0.0  # no fills yet
+    assert solver["donut_accrued_usd_micro"] == 0  # no fills yet
     assert solver["active"] is True
 
 
@@ -262,10 +258,10 @@ def test_funds_actively_filling_intents_across_solana_protocols(server, auth_hea
         assert stored["adapter_id"] == expected["adapter_id"]
         assert stored["spinner_addr"].lower() == signer.address.lower()
 
-    # The Spinner is NOT any of these Builders → donut_accrued_usd stays 0.
+    # The Spinner is NOT any of these Builders → donut_accrued stays 0.
     r = requests.get(f"{server.base_url}/api/hosting/solvers/{solver_id}")
     assert r.status_code == 200
-    assert r.json()["donut_accrued_usd"] == 0.0
+    assert r.json()["donut_accrued_usd_micro"] == 0
 
 
 def test_spinner_who_is_also_the_builder_accrues_donut(server, auth_headers):
@@ -301,22 +297,22 @@ def test_spinner_who_is_also_the_builder_accrues_donut(server, auth_headers):
     )
     assert r.status_code == 200, r.text
 
-    # donut_accrued_usd should be exactly profit × 0.0049 × 0.70.
-    expected = profit * DONUT_BPS * CREATOR_FRAC
+    # donut_accrued should equal the creator's share, in micro-USD.
+    _, expected_creator, _, _, _ = expected_split_micro(profit)
     r = requests.get(f"{server.base_url}/api/hosting/solvers/{solver_id}")
-    accrued = r.json()["donut_accrued_usd"]
-    assert abs(accrued - expected) < 1e-9, f"accrued={accrued}, expected={expected}"
+    accrued = r.json()["donut_accrued_usd_micro"]
+    assert accrued == expected_creator, f"accrued={accrued}, expected={expected_creator}"
 
 
 # ── 4. Is the TSUL 70 / 20 / 10 split wired together end-to-end? ─────────────
 
 def test_tsul_70_20_10_split_is_correct(server, auth_headers):
-    """For a synthetic $100 profit fill the attestation must say:
-       - donut_take_usd   = $0.49      (49 bps of $100)
-       - creator_share    = $0.343     (70% of donut)
-       - reviewer_share   = $0.098     (20%)
-       - ecosystem_share  = $0.049     (10%)
-       - shares sum to donut_take within 1e-9.
+    """For a synthetic $100 profit fill the attestation must say (in micro-USD):
+       - donut_take_usd_micro      = 490_000      (49 bps of $100 = $0.49)
+       - creator_share_usd_micro   = 343_000      (70% of donut)
+       - reviewer_share_usd_micro  =  98_000      (20%)
+       - ecosystem_share_usd_micro =  49_000      (10%)
+       - shares sum to donut_take exactly (integer math).
     And the same shape must round-trip from POST → GET ledger byte-stably."""
     signer = make_signer()
     # Provision.
@@ -342,17 +338,17 @@ def test_tsul_70_20_10_split_is_correct(server, auth_headers):
     att = env["attestation"]
 
     # Math checks — what the SIGNER computed.
-    assert abs(att["donut_take_usd"] - 0.49) < 1e-9, att["donut_take_usd"]
-    assert abs(att["creator_share_usd"] - 0.343) < 1e-9, att["creator_share_usd"]
-    assert abs(att["reviewer_share_usd"] - 0.098) < 1e-9, att["reviewer_share_usd"]
-    assert abs(att["ecosystem_share_usd"] - 0.049) < 1e-9, att["ecosystem_share_usd"]
+    assert att["donut_take_usd_micro"] == 490_000, att["donut_take_usd_micro"]
+    assert att["creator_share_usd_micro"] == 343_000, att["creator_share_usd_micro"]
+    assert att["reviewer_share_usd_micro"] == 98_000, att["reviewer_share_usd_micro"]
+    assert att["ecosystem_share_usd_micro"] == 49_000, att["ecosystem_share_usd_micro"]
     share_sum = (
-        att["creator_share_usd"]
-        + att["reviewer_share_usd"]
-        + att["ecosystem_share_usd"]
+        att["creator_share_usd_micro"]
+        + att["reviewer_share_usd_micro"]
+        + att["ecosystem_share_usd_micro"]
     )
-    assert abs(share_sum - att["donut_take_usd"]) < 1e-9
-    assert abs(att["spinner_keeps_usd"] - (profit - 0.49)) < 1e-9
+    assert share_sum == att["donut_take_usd_micro"]
+    assert att["spinner_keeps_usd_micro"] == 100 * MICRO_USD_PER_USD - 490_000
 
     # POST it and confirm the served ledger has the same numbers.
     r = requests.post(
@@ -366,13 +362,13 @@ def test_tsul_70_20_10_split_is_correct(server, auth_headers):
     assert r.status_code == 200
     served = r.json()[0]
     for key in (
-        "donut_take_usd",
-        "creator_share_usd",
-        "reviewer_share_usd",
-        "ecosystem_share_usd",
-        "spinner_keeps_usd",
+        "donut_take_usd_micro",
+        "creator_share_usd_micro",
+        "reviewer_share_usd_micro",
+        "ecosystem_share_usd_micro",
+        "spinner_keeps_usd_micro",
     ):
-        assert abs(served[key] - att[key]) < 1e-9, f"{key} drift: {served[key]} vs {att[key]}"
+        assert served[key] == att[key], f"{key} drift: {served[key]} vs {att[key]}"
 
 
 def test_tsul_split_is_correct_for_every_solana_protocol(server, auth_headers):
@@ -413,12 +409,12 @@ def test_tsul_split_is_correct_for_every_solana_protocol(server, auth_headers):
         assert att["adapter_id"] == want_adapter, (
             f"protocol={protocol} resolved {att['adapter_id']}, expected {want_adapter}"
         )
-        # 70/20/10 math.
-        expected_donut = max(profit, 0.0) * DONUT_BPS
-        assert abs(att["donut_take_usd"] - expected_donut) < 1e-9
-        assert abs(att["creator_share_usd"] - expected_donut * CREATOR_FRAC) < 1e-9
-        assert abs(att["reviewer_share_usd"] - expected_donut * REVIEWER_FRAC) < 1e-9
-        assert abs(att["ecosystem_share_usd"] - expected_donut * ECOSYSTEM_FRAC) < 1e-9
+        # 70/20/10 integer micro-USD math.
+        e_donut, e_creator, e_reviewer, e_ecosystem, _ = expected_split_micro(profit)
+        assert att["donut_take_usd_micro"] == e_donut
+        assert att["creator_share_usd_micro"] == e_creator
+        assert att["reviewer_share_usd_micro"] == e_reviewer
+        assert att["ecosystem_share_usd_micro"] == e_ecosystem
 
         r = requests.post(
             f"{server.base_url}/api/donut/attest",
@@ -473,7 +469,7 @@ def test_unregistered_adapter_routes_donut_to_ecosystem(server, auth_headers):
     # Spinner's row should NOT have accrued any donut — they're not the
     # ecosystem.
     r = requests.get(f"{server.base_url}/api/hosting/solvers/{solver_id}")
-    assert r.json()["donut_accrued_usd"] == 0.0
+    assert r.json()["donut_accrued_usd_micro"] == 0
 
 
 # ── 6. Can someone else write to my ledger? ──────────────────────────────────

@@ -1,0 +1,70 @@
+{
+  "_comment": "AdapterRegistry — maps adapter_id (resolved by donut_adjudicator::adapter_id_for_outcome) to the EVM addresses that receive the 70% / 20% donut shares. Loaded at solver-main boot by AdapterRegistry::load_default(). Public mirror served at GET /api/donut/registry. The 'ecosystem' address receives the 10% ecosystem share and ALSO catches the 70% + 20% fallthrough when a fill routes through an adapter not listed here (fail-closed). Replace the placeholder addresses below with real EVM addresses owned by the Builder + reviewer set of each adapter under TSUL.",
+  "ecosystem": "0x0000000000000000000000000000000000000eee",
+  "adapters": {
+    "mayan-solana-swift-v1": {
+      "_note": "Mayan Swift program on Solana (the Anchor program at src/protocol-adapters-solana/src/mayan_solana.rs). Routes Mayan auctions where EITHER src or dst is Solana.",
+      "builder": "0x1111111111111111111111111111111111111111",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    "mayan-evm-swift-v1": {
+      "_note": "Mayan Swift EVM contract path — EVM-source and EVM-destination only.",
+      "builder": "0x1111111111111111111111111111111111111112",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    "mayan-flash-solana-v1": {
+      "_note": "Mayan Flash LP program on Solana (src/protocol-adapters-solana/src/mayan_flash.rs). Distinct Anchor program from Swift — different Builder.",
+      "builder": "0x2222222222222222222222222222222222222222",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    "wormhole-ntt-solana-v1": {
+      "_note": "Wormhole NTT (Native Token Transfer) Solana program. Used on EVM→Solana fills via Guardian VAA relay.",
+      "builder": "0x3333333333333333333333333333333333333333",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    "debridge-dln-solana-v1": {
+      "_note": "deBridge DLN destination program on Solana (chain id 100_000_001). Distinct from the EVM DLN destination contract.",
+      "builder": "0x4444444444444444444444444444444444444444",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    "debridge-dln-v1": {
+      "_note": "deBridge DLN destination contract — EVM-destination path.",
+      "builder": "0x4444444444444444444444444444444444444445",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    "across-v3": {
+      "_note": "Across V3 SpokePool — EVM only.",
+      "builder": "0x5555555555555555555555555555555555555555",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    "lifi-meta-v2": {
+      "_note": "LiFi meta-router — sub-attribution happens inside LiFi's off-chain accounting; we treat the meta-router as a single Builder for donut purposes.",
+      "builder": "0x6666666666666666666666666666666666666666",
+      "reviewers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    }
+  }
+}
