@@ -14,7 +14,8 @@ use axum::{
 };
 
 pub mod hosting;
-use hosting::{HostingRegistry, HostingRegistryState};
+use hosting::{HostingRegistry, HostingRegistryState, PersistError};
+use donut_adjudicator::DonutAttestation;
 use wallet_manager::WalletManager;
 use portfolio_sidecar::{ActionLogEntry, PortfolioSidecar, rebalancer::BridgeAction};
 use futures::stream::{Stream, StreamExt};
@@ -347,8 +348,25 @@ impl SolverApi {
         let registry = self.hosting_registry();
         let hosting_api = Router::new()
             .route("/api/hosting/provision", post(hosting::provision_handler))
+            .route("/api/hosting/siwe-nonce", post(hosting::siwe_nonce_handler))
             .route("/api/hosting/solvers", get(hosting::list_solvers_handler))
             .route("/api/hosting/solvers/:solver_id", get(hosting::get_solver_handler))
+            .with_state(registry.clone());
+
+        // Donut attestation routes.
+        //
+        // - POST /api/donut/attest is gated by `require_solver_api_token`
+        //   (the same Bearer-token gate that protects mutation endpoints on
+        //   /api/solver/*). Only the Spinner OS can push attestations.
+        // - GET routes are public so dashboards and external auditors can
+        //   reconcile a Spinner's ledger.
+        let donut_write = Router::new()
+            .route("/api/donut/attest", post(donut_attest_handler))
+            .route_layer(middleware::from_fn(require_solver_api_token))
+            .with_state(registry.clone());
+        let donut_read = Router::new()
+            .route("/api/donut/ledger/:spinner_id", get(donut_ledger_handler))
+            .route("/api/donut/ledger/:spinner_id/head", get(donut_head_handler))
             .with_state(registry);
 
         Router::new()
@@ -356,6 +374,8 @@ impl SolverApi {
             .merge(solver_api)
             .merge(public_api)
             .merge(hosting_api)
+            .merge(donut_write)
+            .merge(donut_read)
             .layer(tower_http::cors::CorsLayer::permissive())
     }
 
@@ -1364,6 +1384,104 @@ async fn health_handler() -> Json<serde_json::Value> {
         "status": "ok",
         "service": "taifoon-solver-api",
     }))
+}
+
+// =============================================================================
+// Donut attestation routes
+// =============================================================================
+//
+// Status-code contract (matches `PersistError` variants):
+//   - 200  → attestation persisted
+//   - 400  → signature didn't verify (`InvalidSignature`)
+//   - 409  → duplicate fill_id (`DuplicateFill`)
+//   - 422  → bad chain link (`BadChain`)
+//   - 500  → internal failure (`Internal`)
+
+/// POST /api/donut/attest — Spinner pushes a signed [`DonutAttestation`].
+/// Gated by `require_solver_api_token`.
+async fn donut_attest_handler(
+    State(registry): State<HostingRegistryState>,
+    Json(att): Json<DonutAttestation>,
+) -> Response {
+    match registry.persist_attestation(&att) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "fill_id": att.fill_id,
+                "spinner_id": att.spinner_id,
+                "donut_take_usd": att.donut_take_usd,
+            })),
+        )
+            .into_response(),
+        Err(PersistError::InvalidSignature(msg)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid_signature", "detail": msg })),
+        )
+            .into_response(),
+        Err(PersistError::DuplicateFill(id)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "duplicate_fill_id", "fill_id": id })),
+        )
+            .into_response(),
+        Err(PersistError::BadChain { expected, got }) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "bad_chain_link",
+                "expected_prev_hash": expected,
+                "got_prev_hash": got,
+            })),
+        )
+            .into_response(),
+        Err(PersistError::Internal(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "internal", "detail": msg })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/donut/ledger/:spinner_id — public ledger read.
+async fn donut_ledger_handler(
+    State(registry): State<HostingRegistryState>,
+    axum::extract::Path(spinner_id): axum::extract::Path<String>,
+) -> Response {
+    match registry.ledger_for(&spinner_id) {
+        Ok(rows) => (StatusCode::OK, Json(serde_json::json!({
+            "spinner_id": spinner_id,
+            "count": rows.len(),
+            "attestations": rows,
+        })))
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/donut/ledger/:spinner_id/head — current chain head.
+async fn donut_head_handler(
+    State(registry): State<HostingRegistryState>,
+    axum::extract::Path(spinner_id): axum::extract::Path<String>,
+) -> Response {
+    match registry.ledger_head(&spinner_id) {
+        Ok((prev_hash, count)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "spinner_id": spinner_id,
+                "prev_hash": prev_hash,
+                "count": count,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 /// Single bridge action surfaced by the rebalance trigger response. Mirrors

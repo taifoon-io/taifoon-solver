@@ -38,10 +38,33 @@ use axum::{
     response::Json,
     http::StatusCode,
 };
+use donut_adjudicator::{
+    hash_for_chain, CanonicalAdjudicator, DonutAttestation, FeeSplitAdjudicator, ZERO_HASH,
+};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
+
+/// TTL for SIWE nonces. After this many seconds an issued nonce is no longer
+/// accepted as the `nonce` field of a SIWE message.
+const SIWE_NONCE_TTL_SECS: u64 = 300;
+
+/// Hard cap on the in-memory SIWE-nonce store. Without this an attacker who
+/// hammers `POST /api/hosting/siwe-nonce` can grow the map without bound
+/// between TTL-expirations. When the cap is hit, the oldest entries are
+/// evicted (regardless of TTL) — this preserves the security invariant
+/// (nonces remain single-use within their TTL) while keeping the worst-case
+/// memory usage bounded. Sized for ~5MB of overhead at 64B/entry.
+const SIWE_NONCE_MAX_ENTRIES: usize = 80_000;
+
+/// Pinned `chain_id` for SIWE messages. The actual chain doesn't matter for
+/// our purposes — we just need *some* fixed value so a signature scoped to
+/// one chain can't be replayed against another deployment. We pick `1`
+/// (Ethereum mainnet) by convention.
+const SIWE_CHAIN_ID: u64 = 1;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -99,6 +122,27 @@ pub struct ProvisionRequest {
     pub chains: Option<String>,
     /// Comma-separated e.g. "across,debridge,mayan"
     pub protocols: Option<String>,
+    /// Raw SIWE message text (EIP-4361). Optional — when present together
+    /// with `signature`, the server verifies before provisioning and marks
+    /// `siwe_verified = 1`.
+    pub siwe_message: Option<String>,
+    /// Hex signature (0x-prefixed) over `siwe_message`.
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SiweNonceRequest {
+    /// EVM address requesting a nonce. Lowercased; we scope each nonce to a
+    /// single address so two concurrent provisions can't accidentally
+    /// trample each other's nonce.
+    pub address: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SiweNonceResponse {
+    pub nonce: String,
+    pub issued_at: String,
+    pub ttl_seconds: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +161,17 @@ pub struct ProvisionResponse {
 
 pub struct HostingRegistry {
     db: Mutex<Connection>,
+    /// In-memory SIWE nonce store, keyed by `(lowercased address, nonce)`.
+    /// Each entry stores the `Instant` it was issued so we can expire stale
+    /// nonces and reject reuse.
+    ///
+    /// LIMITATION: this is process-local. If solver-api is deployed behind
+    /// a load balancer with N replicas, a client that hits replica A for
+    /// `/api/hosting/siwe-nonce` and replica B for `/api/hosting/provision`
+    /// will see a "nonce not found" error. For our single-pod hackathon
+    /// deployment this is fine; for a multi-replica deployment swap this
+    /// for Redis with `SETEX` + `GETDEL`.
+    siwe_nonces: Mutex<HashMap<(String, String), Instant>>,
 }
 
 impl HostingRegistry {
@@ -139,8 +194,107 @@ impl HostingRegistry {
                 active            INTEGER NOT NULL DEFAULT 1,
                 donut_accrued_usd REAL NOT NULL DEFAULT 0.0
             );
+            CREATE TABLE IF NOT EXISTS donut_attestations (
+                fill_id              TEXT PRIMARY KEY,
+                spinner_id           TEXT NOT NULL,
+                spinner_addr         TEXT NOT NULL,
+                adapter_id           TEXT NOT NULL,
+                protocol             TEXT NOT NULL,
+                dst_chain            INTEGER NOT NULL,
+                actual_profit_usd    REAL NOT NULL,
+                donut_take_usd       REAL NOT NULL,
+                creator_addr         TEXT NOT NULL,
+                creator_share_usd    REAL NOT NULL,
+                reviewer_addrs_json  TEXT NOT NULL,
+                reviewer_share_usd   REAL NOT NULL,
+                ecosystem_addr       TEXT NOT NULL,
+                ecosystem_share_usd  REAL NOT NULL,
+                spinner_keeps_usd    REAL NOT NULL,
+                ts                   TEXT NOT NULL,
+                prev_hash            TEXT NOT NULL,
+                signature_hex        TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_donut_spinner ON donut_attestations(spinner_id, ts);
         ")?;
-        Ok(Self { db: Mutex::new(conn) })
+
+        // Idempotent migration: add `siwe_verified` column if it doesn't
+        // already exist. SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT
+        // EXISTS`, so we just try and swallow the "duplicate column" error.
+        let alter = conn.execute(
+            "ALTER TABLE hosted_solvers ADD COLUMN siwe_verified INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        match alter {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(anyhow::anyhow!("failed to add siwe_verified column: {}", e));
+                }
+            }
+        }
+
+        Ok(Self {
+            db: Mutex::new(conn),
+            siwe_nonces: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Issue a fresh SIWE nonce scoped to `address`. 32 random bytes hex-
+    /// encoded. Stored with the current `Instant`; consumed on a successful
+    /// `provision` call.
+    pub fn issue_siwe_nonce(&self, address: &str) -> SiweNonceResponse {
+        use rand::RngCore;
+        let addr = address.trim().to_lowercase();
+
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        let nonce = hex::encode(bytes);
+
+        let now = Instant::now();
+        {
+            let mut store = self.siwe_nonces.lock().unwrap();
+            // Lazy GC: drop any expired entries before inserting a new one.
+            store.retain(|_, issued| now.duration_since(*issued) < Duration::from_secs(SIWE_NONCE_TTL_SECS));
+            // Hard cap eviction: if the TTL-pass didn't shrink us below the
+            // cap (i.e. an attacker is issuing faster than the TTL), evict
+            // the oldest entries until we're under the limit. Realistically
+            // only triggers under sustained abuse — legitimate traffic
+            // never approaches this size.
+            if store.len() >= SIWE_NONCE_MAX_ENTRIES {
+                let mut entries: Vec<((String, String), Instant)> =
+                    store.drain().collect();
+                entries.sort_by_key(|(_, issued)| *issued);
+                // Drop oldest until we have headroom for one insert.
+                let drop_count = entries.len().saturating_sub(SIWE_NONCE_MAX_ENTRIES - 1);
+                let kept = entries.into_iter().skip(drop_count);
+                store.extend(kept);
+                warn!(
+                    "SIWE nonce store hit cap ({}); dropped {} oldest entries",
+                    SIWE_NONCE_MAX_ENTRIES, drop_count
+                );
+            }
+            store.insert((addr.clone(), nonce.clone()), now);
+        }
+
+        SiweNonceResponse {
+            nonce,
+            issued_at: chrono::Utc::now().to_rfc3339(),
+            ttl_seconds: SIWE_NONCE_TTL_SECS,
+        }
+    }
+
+    /// Try to consume a SIWE nonce for `address`. Returns `true` if the
+    /// nonce was found, unexpired, and now removed. Returns `false` if the
+    /// nonce was missing or expired.
+    fn consume_siwe_nonce(&self, address: &str, nonce: &str) -> bool {
+        let addr = address.trim().to_lowercase();
+        let key = (addr, nonce.to_string());
+        let mut store = self.siwe_nonces.lock().unwrap();
+        match store.remove(&key) {
+            Some(issued) => Instant::now().duration_since(issued) < Duration::from_secs(SIWE_NONCE_TTL_SECS),
+            None => false,
+        }
     }
 
     pub fn provision(&self, req: &ProvisionRequest) -> anyhow::Result<(HostedSolver, String)> {
@@ -148,6 +302,21 @@ impl HostingRegistry {
         if !addr.starts_with("0x") || addr.len() != 42 {
             anyhow::bail!("invalid EVM address");
         }
+
+        // Determine SIWE verification status. When both `siwe_message` and
+        // `signature` are present, we MUST verify before allowing the
+        // provision to succeed — a stricter posture than the unauthenticated
+        // path because the user is asserting wallet ownership.
+        let siwe_verified = match (req.siwe_message.as_deref(), req.signature.as_deref()) {
+            (Some(msg), Some(sig)) => {
+                verify_siwe(msg, sig, &addr, |nonce| self.consume_siwe_nonce(&addr, nonce))?;
+                true
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                anyhow::bail!("siwe_message and signature must be provided together");
+            }
+            (None, None) => false,
+        };
 
         let solver_id = &addr[2..10]; // first 8 hex chars
         let now = chrono::Utc::now().to_rfc3339();
@@ -216,12 +385,26 @@ impl HostingRegistry {
         };
 
         let db = self.db.lock().unwrap();
+
+        // Detect re-provision so we can log a token rotation. `solver_id`
+        // is deterministic (first 8 hex of address), so an existing row
+        // here means the same wallet has provisioned before.
+        let already_existed: bool = db
+            .query_row(
+                "SELECT 1 FROM hosted_solvers WHERE solver_id = ?1",
+                params![solver.solver_id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+
+        // INSERT OR REPLACE keeps the deterministic solver_id stable while
+        // overwriting api_token_hash — effectively revoking the prior token.
         db.execute(
             "INSERT OR REPLACE INTO hosted_solvers
              (solver_id, name, evm_address, solana_address, signing_mode,
               signer_webhook_url, safe_address, email, chains, protocols,
-              api_token_hash, registered_at, active, donut_accrued_usd)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,0.0)",
+              api_token_hash, registered_at, active, donut_accrued_usd, siwe_verified)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,0.0,?13)",
             params![
                 solver.solver_id,
                 solver.name,
@@ -235,10 +418,23 @@ impl HostingRegistry {
                 solver.protocols,
                 token_hash,
                 now,
+                if siwe_verified { 1i64 } else { 0i64 },
             ],
         )?;
 
-        info!("[hosting] provisioned solver_id={} address={} mode={}", solver_id, addr, signing_mode);
+        // Truncate api_token in logs: never log more than the first 8 chars.
+        let token_preview = &api_token[..8.min(api_token.len())];
+        if already_existed {
+            info!(
+                "[hosting] re-provisioned solver_id={} address={} mode={} siwe_verified={} (api_token rotated, new prefix={}…)",
+                solver_id, addr, signing_mode, siwe_verified, token_preview,
+            );
+        } else {
+            info!(
+                "[hosting] provisioned solver_id={} address={} mode={} siwe_verified={} api_token_prefix={}…",
+                solver_id, addr, signing_mode, siwe_verified, token_preview,
+            );
+        }
         Ok((solver, api_token))
     }
 
@@ -307,15 +503,288 @@ impl HostingRegistry {
         Ok(rows.next().transpose().map_err(|e| anyhow::anyhow!(e))?.map(row_to_solver))
     }
 
-    pub fn record_donut_touch(&self, solver_id: &str, usd_value: f64) {
-        let creator_share = usd_value * 0.0049 * 0.70; // 49 bps * 70%
-        let db = self.db.lock().unwrap();
-        let _ = db.execute(
-            "UPDATE hosted_solvers SET donut_accrued_usd = donut_accrued_usd + ?1 WHERE solver_id = ?2",
-            params![creator_share, solver_id],
+    /// Persist a signed [`DonutAttestation`] to the ledger.
+    ///
+    /// Performs four checks in order:
+    /// 1. Signature must verify (recovers to `spinner_addr`) AND the donut
+    ///    math must be internally consistent. Delegated to
+    ///    [`CanonicalAdjudicator::verify`].
+    /// 2. `prev_hash` must equal the current ledger head for this Spinner —
+    ///    or [`ZERO_HASH`] when the Spinner has never attested before.
+    /// 3. The row is inserted; a duplicate `fill_id` returns [`PersistError::DuplicateFill`].
+    /// 4. `hosted_solvers.donut_accrued_usd` is incremented by
+    ///    `att.creator_share_usd` **only** if `att.creator_addr` matches the
+    ///    Spinner's registered `evm_address` — i.e. the Spinner is also the
+    ///    Builder of the adapter that produced the fill. Other Spinners do
+    ///    not get a counter bump for running someone else's adapter.
+    pub fn persist_attestation(&self, att: &DonutAttestation) -> Result<(), PersistError> {
+        // 1) signature + math. `verify` recovers the address from the
+        // signature and asserts it equals `att.spinner_addr`, binding the
+        // signature ↔ address pair.
+        CanonicalAdjudicator
+            .verify(att)
+            .map_err(|e| PersistError::InvalidSignature(e.to_string()))?;
+
+        // 1b) Bind the body's `spinner_id` to the recovered address.
+        //
+        // Without this check, any Spinner with a valid bearer token could
+        // POST an attestation that signs correctly under their OWN key but
+        // claims a different Spinner's `spinner_id` in the body — polluting
+        // a victim's ledger and breaking their hash chain. Hackathon-audit
+        // HIGH severity. The expected `spinner_id` is purely a function of
+        // the address, so we recompute it here and reject the request if
+        // the body disagrees.
+        let expected_spinner_id =
+            donut_adjudicator::spinner_id_from_addr(&att.spinner_addr);
+        if att.spinner_id.to_ascii_lowercase() != expected_spinner_id {
+            return Err(PersistError::InvalidSignature(format!(
+                "spinner_id `{}` does not match recovered address `{}` (expected `{}`)",
+                att.spinner_id,
+                att.spinner_addr,
+                expected_spinner_id
+            )));
+        }
+
+        // 2) chain link
+        let (expected_prev, _count) = self
+            .ledger_head(&att.spinner_id)
+            .map_err(|e| PersistError::Internal(e.to_string()))?;
+        if att.prev_hash != expected_prev {
+            return Err(PersistError::BadChain {
+                expected: expected_prev,
+                got: att.prev_hash.clone(),
+            });
+        }
+
+        // 3) insert (PK collision on fill_id → DuplicateFill)
+        let reviewer_addrs_json = serde_json::to_string(&att.reviewer_addrs)
+            .map_err(|e| PersistError::Internal(e.to_string()))?;
+        let spinner_addr_hex = format!("{:#x}", att.spinner_addr);
+        let creator_addr_hex = format!("{:#x}", att.creator_addr);
+        let ecosystem_addr_hex = format!("{:#x}", att.ecosystem_addr);
+        let ts_str = att.ts.to_rfc3339();
+
+        // INSERT + UPDATE wrapped in a single SQLite transaction so a
+        // crash between the two leaves the database in a consistent state
+        // (hackathon-audit HIGH severity). `db.transaction()` requires
+        // `&mut Connection` which we get via `MutexGuard::deref_mut`.
+        {
+            let mut db = self.db.lock().unwrap();
+            let tx = db
+                .transaction()
+                .map_err(|e| PersistError::Internal(e.to_string()))?;
+
+            let res = tx.execute(
+                "INSERT INTO donut_attestations (
+                    fill_id, spinner_id, spinner_addr, adapter_id, protocol,
+                    dst_chain, actual_profit_usd, donut_take_usd, creator_addr,
+                    creator_share_usd, reviewer_addrs_json, reviewer_share_usd,
+                    ecosystem_addr, ecosystem_share_usd, spinner_keeps_usd,
+                    ts, prev_hash, signature_hex
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                params![
+                    att.fill_id,
+                    att.spinner_id,
+                    spinner_addr_hex,
+                    att.adapter_id,
+                    att.protocol,
+                    att.dst_chain as i64,
+                    att.actual_profit_usd,
+                    att.donut_take_usd,
+                    creator_addr_hex,
+                    att.creator_share_usd,
+                    reviewer_addrs_json,
+                    att.reviewer_share_usd,
+                    ecosystem_addr_hex,
+                    att.ecosystem_share_usd,
+                    att.spinner_keeps_usd,
+                    ts_str,
+                    att.prev_hash,
+                    att.signature_hex,
+                ],
+            );
+            if let Err(e) = res {
+                // SQLite primary-key violation → duplicate fill.
+                let msg = e.to_string();
+                // Transaction will roll back when `tx` is dropped without
+                // commit. Explicitly drop here for clarity.
+                drop(tx);
+                if msg.contains("UNIQUE constraint failed")
+                    || msg.contains("PRIMARY KEY constraint")
+                {
+                    return Err(PersistError::DuplicateFill(att.fill_id.clone()));
+                }
+                return Err(PersistError::Internal(msg));
+            }
+
+            // Bump `donut_accrued_usd` only when the Spinner == Builder.
+            // Compare both hex addresses lowercased without 0x.
+            let solver_evm: Option<String> = tx
+                .query_row(
+                    "SELECT evm_address FROM hosted_solvers WHERE solver_id = ?1",
+                    params![att.spinner_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok();
+            if let Some(evm) = solver_evm {
+                let evm_norm = evm.trim_start_matches("0x").to_ascii_lowercase();
+                let creator_norm = creator_addr_hex.trim_start_matches("0x").to_ascii_lowercase();
+                if evm_norm == creator_norm {
+                    tx.execute(
+                        "UPDATE hosted_solvers
+                         SET donut_accrued_usd = donut_accrued_usd + ?1
+                         WHERE solver_id = ?2",
+                        params![att.creator_share_usd, att.spinner_id],
+                    )
+                    .map_err(|e| PersistError::Internal(e.to_string()))?;
+                }
+            }
+
+            tx.commit()
+                .map_err(|e| PersistError::Internal(e.to_string()))?;
+        }
+
+        info!(
+            spinner_id = %att.spinner_id,
+            adapter = %att.adapter_id,
+            donut_usd = att.donut_take_usd,
+            "[hosting] attestation persisted (recovered spinner {})",
+            att.spinner_addr
         );
+        Ok(())
+    }
+
+    /// Read back every attestation for a Spinner in chain order (oldest first).
+    /// The public ledger endpoint promises ASC so external indexers can replay
+    /// the chain from genesis without re-sorting client-side.
+    pub fn ledger_for(&self, spinner_id: &str) -> anyhow::Result<Vec<DonutAttestation>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT fill_id, spinner_id, spinner_addr, adapter_id, protocol,
+                    dst_chain, actual_profit_usd, donut_take_usd, creator_addr,
+                    creator_share_usd, reviewer_addrs_json, reviewer_share_usd,
+                    ecosystem_addr, ecosystem_share_usd, spinner_keeps_usd,
+                    ts, prev_hash, signature_hex
+             FROM donut_attestations
+             WHERE spinner_id = ?1
+             ORDER BY ts ASC",
+        )?;
+        let rows = stmt.query_map(params![spinner_id], row_to_attestation)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| anyhow::anyhow!(e))?);
+        }
+        Ok(out)
+    }
+
+    /// Current ledger head for a Spinner — `(prev_hash, count)` where
+    /// `prev_hash` is sha256 of the most-recent attestation's canonical JSON
+    /// with signature (the next attestation must thread this in its
+    /// `prev_hash` field). Empty ledger → [`ZERO_HASH`] and `count = 0`.
+    pub fn ledger_head(&self, spinner_id: &str) -> anyhow::Result<(String, u64)> {
+        let db = self.db.lock().unwrap();
+
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM donut_attestations WHERE spinner_id = ?1",
+            params![spinner_id],
+            |r| r.get(0),
+        )?;
+        if count == 0 {
+            return Ok((ZERO_HASH.to_string(), 0));
+        }
+        let count = count as u64;
+
+        let mut stmt = db.prepare(
+            "SELECT fill_id, spinner_id, spinner_addr, adapter_id, protocol,
+                    dst_chain, actual_profit_usd, donut_take_usd, creator_addr,
+                    creator_share_usd, reviewer_addrs_json, reviewer_share_usd,
+                    ecosystem_addr, ecosystem_share_usd, spinner_keeps_usd,
+                    ts, prev_hash, signature_hex
+             FROM donut_attestations
+             WHERE spinner_id = ?1
+             ORDER BY ts DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![spinner_id], row_to_attestation)?;
+        let head = rows
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("ledger head missing despite count > 0"))?
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let hash = hash_for_chain(&head)?;
+        Ok((hash, count))
     }
 }
+
+/// Failure modes for [`HostingRegistry::persist_attestation`]. Each variant
+/// maps directly to an HTTP status in the route layer.
+#[derive(Debug, thiserror::Error)]
+pub enum PersistError {
+    /// 400 — signature didn't verify or donut math is internally inconsistent.
+    #[error("invalid signature: {0}")]
+    InvalidSignature(String),
+    /// 409 — `fill_id` already in the ledger.
+    #[error("duplicate fill_id: {0}")]
+    DuplicateFill(String),
+    /// 422 — `prev_hash` doesn't match the current ledger head.
+    #[error("bad chain link: expected {expected}, got {got}")]
+    BadChain { expected: String, got: String },
+    /// 500 — anything else (SQLite, JSON encoding, ...).
+    #[error("internal: {0}")]
+    Internal(String),
+}
+
+// We pull `thiserror` from the workspace (already in Cargo.toml of other crates)
+// — re-export here would be redundant. Add it to solver-api/Cargo.toml.
+
+/// Decode a `donut_attestations` row back into a [`DonutAttestation`].
+fn row_to_attestation(r: &rusqlite::Row<'_>) -> rusqlite::Result<DonutAttestation> {
+    use alloy::primitives::Address;
+    use std::str::FromStr;
+
+    let parse_addr = |s: String| -> rusqlite::Result<Address> {
+        Address::from_str(&s).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+            )
+        })
+    };
+    let parse_addrs = |s: String| -> rusqlite::Result<Vec<Address>> {
+        serde_json::from_str::<Vec<Address>>(&s).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+            )
+        })
+    };
+    let ts_str: String = r.get(15)?;
+    let ts = chrono::DateTime::parse_from_rfc3339(&ts_str)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now());
+
+    Ok(DonutAttestation {
+        fill_id: r.get(0)?,
+        spinner_id: r.get(1)?,
+        spinner_addr: parse_addr(r.get(2)?)?,
+        adapter_id: r.get(3)?,
+        protocol: r.get(4)?,
+        dst_chain: r.get::<_, i64>(5)? as u64,
+        actual_profit_usd: r.get(6)?,
+        donut_take_usd: r.get(7)?,
+        creator_addr: parse_addr(r.get(8)?)?,
+        creator_share_usd: r.get(9)?,
+        reviewer_addrs: parse_addrs(r.get(10)?)?,
+        reviewer_share_usd: r.get(11)?,
+        ecosystem_addr: parse_addr(r.get(12)?)?,
+        ecosystem_share_usd: r.get(13)?,
+        spinner_keeps_usd: r.get(14)?,
+        ts,
+        prev_hash: r.get(16)?,
+        signature_hex: r.get(17)?,
+    })
+}
+
 
 // Internal row struct for SQLite deserialization
 struct HostedSolverRow {
@@ -356,9 +825,145 @@ fn row_to_solver(r: HostedSolverRow) -> HostedSolver {
     }
 }
 
+// ── SIWE verification ──────────────────────────────────────────────────────────
+
+/// Domain bound into every SIWE message we accept. Configurable via the
+/// `SIWE_DOMAIN` env var so the same binary can be reused for staging.
+fn siwe_domain() -> String {
+    std::env::var("SIWE_DOMAIN").unwrap_or_else(|_| "solver.taifoon.dev".to_string())
+}
+
+/// Verify a SIWE message + signature pair against the claimed address.
+///
+/// `expected_addr` is lowercased hex (with 0x prefix). `consume_nonce` is a
+/// callback that returns `true` iff the nonce embedded in the SIWE message
+/// is currently valid (not expired, not previously consumed). It MUST
+/// consume the nonce as a side-effect — we only call this after every other
+/// check passes, so a verification failure does not burn the nonce.
+fn verify_siwe<F>(
+    raw_message: &str,
+    raw_signature: &str,
+    expected_addr: &str,
+    consume_nonce: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(&str) -> bool,
+{
+    use siwe::{Message, VerificationOpts};
+    use std::str::FromStr;
+
+    let msg = Message::from_str(raw_message)
+        .map_err(|e| anyhow::anyhow!("invalid SIWE message: {}", e))?;
+
+    // Pin the domain. A SIWE message signed for `evil.example.com` should
+    // never authenticate against our deployment, even if the signature is
+    // cryptographically valid.
+    let expected_domain = siwe_domain();
+    let msg_domain = msg.domain.to_string();
+    if msg_domain != expected_domain {
+        anyhow::bail!(
+            "SIWE domain mismatch: expected {}, got {}",
+            expected_domain,
+            msg_domain
+        );
+    }
+
+    // Pin the chain — same logic as domain: prevent cross-chain replay.
+    if msg.chain_id != SIWE_CHAIN_ID {
+        anyhow::bail!(
+            "SIWE chain_id mismatch: expected {}, got {}",
+            SIWE_CHAIN_ID,
+            msg.chain_id
+        );
+    }
+
+    // Compare addresses by lowercased hex. The SIWE `address` field is a
+    // 20-byte array; `expected_addr` arrives as "0x…" lowercased.
+    let msg_addr_hex = format!("0x{}", hex::encode(msg.address));
+    if msg_addr_hex.to_lowercase() != expected_addr.to_lowercase() {
+        anyhow::bail!(
+            "SIWE address mismatch: message says {}, request says {}",
+            msg_addr_hex,
+            expected_addr
+        );
+    }
+
+    // Explicit expiration check. SIWE makes `expiration_time` optional, but
+    // we require it for provision flows so a stolen signature can't be
+    // replayed indefinitely.
+    //
+    // `siwe::TimeStamp` Display's as RFC3339 — parse via chrono to compare
+    // against `Utc::now()` without dragging in the `time` crate just for this.
+    let exp = msg
+        .expiration_time
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("SIWE message missing expiration_time"))?;
+    let now = chrono::Utc::now();
+    let exp_str = exp.to_string();
+    let exp_dt = chrono::DateTime::parse_from_rfc3339(&exp_str)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map_err(|e| anyhow::anyhow!("invalid SIWE expiration_time '{}': {}", exp_str, e))?;
+    if exp_dt <= now {
+        anyhow::bail!("SIWE message expired at {}", exp_dt);
+    }
+
+    // Strip 0x prefix from signature and decode.
+    let sig_hex = raw_signature.trim_start_matches("0x");
+    let sig_bytes = hex::decode(sig_hex)
+        .map_err(|e| anyhow::anyhow!("invalid signature hex: {}", e))?;
+    if sig_bytes.len() != 65 {
+        anyhow::bail!("SIWE signature must be 65 bytes, got {}", sig_bytes.len());
+    }
+    let mut sig_arr = [0u8; 65];
+    sig_arr.copy_from_slice(&sig_bytes);
+
+    // Cryptographic verification — recover the signer from the EIP-191
+    // personal_sign digest of `raw_message` and check it matches `msg.address`.
+    // We've already manually checked domain, nonce, and expiration above.
+    // Leave VerificationOpts as default so the library only does the
+    // cryptographic recovery + EIP-1271 hooks. Our explicit checks make
+    // failure modes easier to surface in error responses.
+    let opts = VerificationOpts::default();
+    // siwe's verify is async but does no I/O (no EIP-1271 contract call
+    // when we leave `rpc_provider` unset). Drive it to completion with the
+    // futures crate's executor so this helper stays sync-callable from
+    // inside the axum handler — we can't start a new tokio runtime here
+    // (Tokio panics on nested runtime construction).
+    let verify_fut = msg.verify(&sig_arr, &opts);
+    let result = futures::executor::block_on(verify_fut);
+    result.map_err(|e| anyhow::anyhow!("SIWE signature verification failed: {}", e))?;
+
+    // Finally, consume the nonce. Single-use — the closure removes it from
+    // the in-memory store. We do this LAST so a transient cryptographic
+    // failure doesn't burn a perfectly good nonce.
+    if !consume_nonce(&msg.nonce) {
+        anyhow::bail!("SIWE nonce not recognized or expired");
+    }
+
+    Ok(())
+}
+
 // ── Axum handlers ──────────────────────────────────────────────────────────────
 
 pub type HostingRegistryState = Arc<HostingRegistry>;
+
+/// POST /api/hosting/siwe-nonce
+/// Public endpoint — issues a one-shot SIWE nonce scoped to `address`.
+/// Client embeds this in the `nonce` field of the SIWE message it asks the
+/// user to sign, then includes the signed message in `/api/hosting/provision`.
+pub async fn siwe_nonce_handler(
+    State(registry): State<HostingRegistryState>,
+    Json(req): Json<SiweNonceRequest>,
+) -> Result<Json<SiweNonceResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let addr = req.address.trim().to_lowercase();
+    if !addr.starts_with("0x") || addr.len() != 42 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid EVM address" })),
+        ));
+    }
+    Ok(Json(registry.issue_siwe_nonce(&addr)))
+}
 
 /// POST /api/hosting/provision
 /// Public endpoint — no auth required. Anyone can register.
@@ -454,6 +1059,8 @@ mod tests {
             email: Some("test@test.com".into()),
             chains: Some("base,arbitrum".into()),
             protocols: Some("across".into()),
+            siwe_message: None,
+            signature: None,
         };
         let (solver, token) = r.provision(&req).unwrap();
         assert_eq!(solver.solver_id, "00000000");
@@ -474,6 +1081,8 @@ mod tests {
             email: None,
             chains: None,
             protocols: None,
+            siwe_message: None,
+            signature: None,
         };
         assert!(r.provision(&req).is_err());
     }
@@ -497,6 +1106,8 @@ mod tests {
             email: None,
             chains: None,
             protocols: None,
+            siwe_message: None,
+            signature: None,
         };
         let (solver, _token) = r.provision(&req).unwrap();
         let list = r.list().unwrap();
@@ -505,12 +1116,45 @@ mod tests {
         assert!(matches!(list[0].signing_mode, SigningMode::RemoteSigner));
     }
 
-    #[test]
-    fn donut_accrual_accumulates() {
-        let r = registry();
+    use alloy::signers::local::PrivateKeySigner;
+    use donut_adjudicator::{
+        hash_for_chain, AdapterRegistry, CanonicalAdjudicator, FeeSplitAdjudicator, ZERO_HASH,
+    };
+    use executor::OutcomeRecord;
+
+    fn test_signer() -> PrivateKeySigner {
+        "0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"
+            .parse()
+            .unwrap()
+    }
+
+    fn test_outcome(intent: &str, tx: &str, profit: f64) -> OutcomeRecord {
+        OutcomeRecord {
+            ts: chrono::Utc::now(),
+            intent_id: intent.into(),
+            protocol: "across".into(),
+            src_chain: 1,
+            dst_chain: 42161,
+            decision: "executed".into(),
+            tx_hash: Some(tx.into()),
+            predicted_gas: None,
+            gas_used: Some(100_000),
+            effective_gas_price_wei: None,
+            predicted_profit_usd: Some(profit),
+            actual_profit_usd: Some(profit),
+            skip_reason: None,
+            error: None,
+            solver_id: Some("00000000".into()),
+            claim_tx_hash: None,
+            claim_fee_usd: None,
+        }
+    }
+
+    fn provision_signer(r: &HostingRegistry, signer: &PrivateKeySigner) -> String {
+        let addr = format!("{:#x}", signer.address());
         let req = ProvisionRequest {
-            name: "donut-test".into(),
-            evm_address: "0x1111111111111111111111111111111111111111".into(),
+            name: "test".into(),
+            evm_address: addr,
             solana_address: None,
             signing_mode: None,
             signer_webhook_url: None,
@@ -518,13 +1162,366 @@ mod tests {
             email: None,
             chains: None,
             protocols: None,
+            siwe_message: None,
+            signature: None,
         };
-        let (solver, _) = r.provision(&req).unwrap();
-        r.record_donut_touch(&solver.solver_id, 1000.0); // $1000 fill value
-        r.record_donut_touch(&solver.solver_id, 500.0);
-        let updated = r.get_by_id(&solver.solver_id).unwrap().unwrap();
-        // 49 bps * 70% of $1500 = 0.0049 * 0.70 * 1500 = $5.145
-        let expected = 0.0049 * 0.70 * 1500.0;
-        assert!((updated.donut_accrued_usd - expected).abs() < 0.001);
+        let (solver, _token) = r.provision(&req).unwrap();
+        solver.solver_id
+    }
+
+    #[tokio::test]
+    async fn persist_attestation_round_trips() {
+        let r = registry();
+        let signer = test_signer();
+        let spinner_id = provision_signer(&r, &signer);
+
+        // Spinner == Builder: builder_addr in registry equals signer.address().
+        let reg = AdapterRegistry::new(
+            "0x000000000000000000000000000000000000eeee".parse().unwrap(),
+        )
+        .with_adapter("across-v3", signer.address(), vec![]);
+
+        let fill = test_outcome("i1", "0xaa", 1.0);
+        let att = CanonicalAdjudicator
+            .attest(&fill, &reg, &signer, ZERO_HASH)
+            .await
+            .unwrap();
+        // Override spinner_id so persisted row matches the provisioned solver_id.
+        let mut att = att;
+        att.spinner_id = spinner_id.clone();
+        // Re-sign since spinner_id changed.
+        let canonical = donut_adjudicator::canonical_json_for_signing(&att).unwrap();
+        use alloy::signers::SignerSync;
+        let sig = signer.sign_message_sync(canonical.as_bytes()).unwrap();
+        att.signature_hex = format!("0x{}", hex::encode(sig.as_bytes()));
+
+        r.persist_attestation(&att).expect("persist ok");
+
+        let updated = r.get_by_id(&spinner_id).unwrap().unwrap();
+        // Spinner == Builder → counter bumped by creator_share.
+        assert!((updated.donut_accrued_usd - att.creator_share_usd).abs() < 1e-12);
+
+        let ledger = r.ledger_for(&spinner_id).unwrap();
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].fill_id, att.fill_id);
+
+        let (head, count) = r.ledger_head(&spinner_id).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(head, hash_for_chain(&att).unwrap());
+    }
+
+    #[tokio::test]
+    async fn persist_duplicate_fill_id_fails() {
+        let r = registry();
+        let signer = test_signer();
+        let spinner_id = provision_signer(&r, &signer);
+        let reg = AdapterRegistry::new(
+            "0x000000000000000000000000000000000000eeee".parse().unwrap(),
+        )
+        .with_adapter("across-v3", signer.address(), vec![]);
+
+        let fill = test_outcome("i1", "0xaa", 1.0);
+        let mut att = CanonicalAdjudicator
+            .attest(&fill, &reg, &signer, ZERO_HASH)
+            .await
+            .unwrap();
+        att.spinner_id = spinner_id.clone();
+        let canonical = donut_adjudicator::canonical_json_for_signing(&att).unwrap();
+        use alloy::signers::SignerSync;
+        let sig = signer.sign_message_sync(canonical.as_bytes()).unwrap();
+        att.signature_hex = format!("0x{}", hex::encode(sig.as_bytes()));
+
+        r.persist_attestation(&att).unwrap();
+        // chain advanced; new prev_hash now matches first row's hash, so the
+        // chain check would pass — but PK on fill_id fires first.
+        let head = hash_for_chain(&att).unwrap();
+        let mut dup = att.clone();
+        dup.prev_hash = head; // satisfy chain
+        let canonical2 = donut_adjudicator::canonical_json_for_signing(&dup).unwrap();
+        let sig2 = signer.sign_message_sync(canonical2.as_bytes()).unwrap();
+        dup.signature_hex = format!("0x{}", hex::encode(sig2.as_bytes()));
+
+        match r.persist_attestation(&dup) {
+            Err(PersistError::DuplicateFill(_)) => {}
+            other => panic!("expected DuplicateFill, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_bad_chain_link_fails() {
+        let r = registry();
+        let signer = test_signer();
+        let spinner_id = provision_signer(&r, &signer);
+        let reg = AdapterRegistry::new(
+            "0x000000000000000000000000000000000000eeee".parse().unwrap(),
+        )
+        .with_adapter("across-v3", signer.address(), vec![]);
+
+        // First attestation uses a non-zero prev_hash — ledger is empty so the
+        // expected prev_hash is ZERO_HASH. Persist must reject.
+        let fill = test_outcome("i1", "0xaa", 1.0);
+        let mut att = CanonicalAdjudicator
+            .attest(
+                &fill,
+                &reg,
+                &signer,
+                "0x1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .await
+            .unwrap();
+        att.spinner_id = spinner_id.clone();
+        let canonical = donut_adjudicator::canonical_json_for_signing(&att).unwrap();
+        use alloy::signers::SignerSync;
+        let sig = signer.sign_message_sync(canonical.as_bytes()).unwrap();
+        att.signature_hex = format!("0x{}", hex::encode(sig.as_bytes()));
+
+        match r.persist_attestation(&att) {
+            Err(PersistError::BadChain { .. }) => {}
+            other => panic!("expected BadChain, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_counter_only_when_spinner_is_builder() {
+        let r = registry();
+        let signer = test_signer();
+        let spinner_id = provision_signer(&r, &signer);
+
+        // Builder is a DIFFERENT address. Spinner runs someone else's adapter.
+        let other_builder: alloy::primitives::Address =
+            "0x000000000000000000000000000000000000bbbb".parse().unwrap();
+        let reg = AdapterRegistry::new(
+            "0x000000000000000000000000000000000000eeee".parse().unwrap(),
+        )
+        .with_adapter("across-v3", other_builder, vec![]);
+
+        let fill = test_outcome("i1", "0xaa", 1.0);
+        let mut att = CanonicalAdjudicator
+            .attest(&fill, &reg, &signer, ZERO_HASH)
+            .await
+            .unwrap();
+        att.spinner_id = spinner_id.clone();
+        let canonical = donut_adjudicator::canonical_json_for_signing(&att).unwrap();
+        use alloy::signers::SignerSync;
+        let sig = signer.sign_message_sync(canonical.as_bytes()).unwrap();
+        att.signature_hex = format!("0x{}", hex::encode(sig.as_bytes()));
+
+        r.persist_attestation(&att).unwrap();
+        let updated = r.get_by_id(&spinner_id).unwrap().unwrap();
+        assert_eq!(updated.donut_accrued_usd, 0.0);
+    }
+
+    // ── SIWE / provision verification tests ────────────────────────────────────
+
+    /// Helper — build a SIWE message string and sign it with a known key.
+    /// `domain` and `chain_id` default to the production values; tests
+    /// override them to exercise the rejection paths.
+    fn build_siwe(
+        signer: &PrivateKeySigner,
+        nonce: &str,
+        expiration: chrono::DateTime<chrono::Utc>,
+        domain: &str,
+        chain_id: u64,
+    ) -> (String, String) {
+        use alloy::signers::SignerSync;
+
+        // siwe-rs enforces EIP-55 checksum in `Message::from_str`. Alloy's
+        // `Address::to_string()` produces the checksummed form.
+        let addr_eip55 = signer.address().to_string();
+
+        let issued_at = chrono::Utc::now().to_rfc3339();
+        let exp_str = expiration.to_rfc3339();
+
+        let message = format!(
+            "{domain} wants you to sign in with your Ethereum account:\n\
+             {addr}\n\
+             \n\
+             Sign to provision a Taifoon solver pod. This signature is used to prove address ownership and is not a transaction. No funds are moved.\n\
+             \n\
+             URI: https://{domain}\n\
+             Version: 1\n\
+             Chain ID: {chain_id}\n\
+             Nonce: {nonce}\n\
+             Issued At: {issued_at}\n\
+             Expiration Time: {exp_str}",
+            domain = domain,
+            addr = addr_eip55,
+            chain_id = chain_id,
+            nonce = nonce,
+            issued_at = issued_at,
+            exp_str = exp_str,
+        );
+
+        let sig = signer.sign_message_sync(message.as_bytes()).unwrap();
+        let sig_hex = format!("0x{}", hex::encode(sig.as_bytes()));
+        (message, sig_hex)
+    }
+
+    fn siwe_signer() -> PrivateKeySigner {
+        // Fresh key distinct from `test_signer()` so re-use across files
+        // can't accidentally make a test pass via a stale ledger entry.
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+            .parse()
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn siwe_provision_verifies_and_marks_row() {
+        let r = registry();
+        let signer = siwe_signer();
+        let addr_hex = format!("0x{}", hex::encode(signer.address()));
+
+        // Issue a real nonce — the verifier consumes from the registry's
+        // in-memory store, not a hand-rolled value.
+        let nonce_resp = r.issue_siwe_nonce(&addr_hex);
+        let exp = chrono::Utc::now() + chrono::Duration::minutes(2);
+        let (msg, sig) = build_siwe(&signer, &nonce_resp.nonce, exp, "solver.taifoon.dev", 1);
+
+        let req = ProvisionRequest {
+            name: "siwe-pod".into(),
+            evm_address: addr_hex.clone(),
+            solana_address: None,
+            signing_mode: Some("self_hosted".into()),
+            signer_webhook_url: None,
+            safe_address: None,
+            email: None,
+            chains: None,
+            protocols: None,
+            siwe_message: Some(msg),
+            signature: Some(sig),
+        };
+
+        let (solver, _token) = r.provision(&req).expect("siwe provision should succeed");
+        // Read back the verified flag from sqlite directly — it's not in
+        // the public HostedSolver struct.
+        let db = r.db.lock().unwrap();
+        let v: i64 = db
+            .query_row(
+                "SELECT siwe_verified FROM hosted_solvers WHERE solver_id = ?1",
+                params![solver.solver_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn siwe_expired_message_is_rejected() {
+        let r = registry();
+        let signer = siwe_signer();
+        let addr_hex = format!("0x{}", hex::encode(signer.address()));
+        let nonce_resp = r.issue_siwe_nonce(&addr_hex);
+
+        // 1 minute in the past — siwe `expiration_time` must be future.
+        let exp = chrono::Utc::now() - chrono::Duration::minutes(1);
+        let (msg, sig) = build_siwe(&signer, &nonce_resp.nonce, exp, "solver.taifoon.dev", 1);
+
+        let req = ProvisionRequest {
+            name: "x".into(),
+            evm_address: addr_hex,
+            solana_address: None,
+            signing_mode: None,
+            signer_webhook_url: None,
+            safe_address: None,
+            email: None,
+            chains: None,
+            protocols: None,
+            siwe_message: Some(msg),
+            signature: Some(sig),
+        };
+        let err = r.provision(&req).err().expect("must reject expired siwe");
+        let msg = err.to_string().to_lowercase();
+        assert!(msg.contains("expired") || msg.contains("expiration"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn siwe_nonce_reuse_is_rejected() {
+        let r = registry();
+        let signer = siwe_signer();
+        let addr_hex = format!("0x{}", hex::encode(signer.address()));
+        let nonce_resp = r.issue_siwe_nonce(&addr_hex);
+
+        let exp = chrono::Utc::now() + chrono::Duration::minutes(2);
+        let (msg, sig) = build_siwe(&signer, &nonce_resp.nonce, exp, "solver.taifoon.dev", 1);
+
+        let make_req = || ProvisionRequest {
+            name: "x".into(),
+            evm_address: addr_hex.clone(),
+            solana_address: None,
+            signing_mode: None,
+            signer_webhook_url: None,
+            safe_address: None,
+            email: None,
+            chains: None,
+            protocols: None,
+            siwe_message: Some(msg.clone()),
+            signature: Some(sig.clone()),
+        };
+
+        // First call consumes the nonce.
+        r.provision(&make_req()).expect("first provision ok");
+        // Second call with the same SIWE message must fail because the nonce
+        // is single-use.
+        let err = r.provision(&make_req()).err().expect("second call must fail");
+        assert!(err.to_string().to_lowercase().contains("nonce"));
+    }
+
+    #[test]
+    fn provision_without_siwe_marks_row_unverified() {
+        let r = registry();
+        let req = ProvisionRequest {
+            name: "no-siwe".into(),
+            evm_address: "0x2222222222222222222222222222222222222222".into(),
+            solana_address: None,
+            signing_mode: None,
+            signer_webhook_url: None,
+            safe_address: None,
+            email: None,
+            chains: None,
+            protocols: None,
+            siwe_message: None,
+            signature: None,
+        };
+        let (solver, _token) = r.provision(&req).expect("provision without siwe must succeed");
+
+        let db = r.db.lock().unwrap();
+        let v: i64 = db
+            .query_row(
+                "SELECT siwe_verified FROM hosted_solvers WHERE solver_id = ?1",
+                params![solver.solver_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, 0);
+    }
+
+    #[test]
+    fn reprovision_rotates_token_but_keeps_solver_id() {
+        let r = registry();
+        let addr = "0x3333333333333333333333333333333333333333";
+        let make_req = || ProvisionRequest {
+            name: "rotator".into(),
+            evm_address: addr.into(),
+            solana_address: None,
+            signing_mode: None,
+            signer_webhook_url: None,
+            safe_address: None,
+            email: None,
+            chains: None,
+            protocols: None,
+            siwe_message: None,
+            signature: None,
+        };
+
+        let (solver1, token1) = r.provision(&make_req()).unwrap();
+        // Sleep briefly so the nanosecond-based token seed differs.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let (solver2, token2) = r.provision(&make_req()).unwrap();
+
+        // solver_id derived from address — must be stable.
+        assert_eq!(solver1.solver_id, solver2.solver_id);
+        // New api_token must be different — the previous token is revoked
+        // because `api_token_hash` in the row has been overwritten.
+        assert_ne!(token1, token2);
     }
 }

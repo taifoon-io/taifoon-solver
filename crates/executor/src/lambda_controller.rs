@@ -664,6 +664,14 @@ impl LambdaController {
                 Ok(result) => {
                     info!("🎉 Mayan Flash confirmed: {} sig={}", intent.id, result.signature);
                     self.transition(&intent.id, IntentState::Confirmed, Some(&result.signature), None);
+                    // Donut adjudicator depends on every confirmed fill landing
+                    // in the outcome log — see `append_solana_confirmed` rationale.
+                    self.append_solana_confirmed(
+                        intent,
+                        &result.signature,
+                        flash_intent.compute_units_estimate,
+                        test.as_ref().map(|t| t.net_profit_usd),
+                    );
                     let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Confirmed {
                         tx_hash: result.signature,
@@ -727,6 +735,16 @@ impl LambdaController {
                 Ok(result) => {
                     info!("🎉 Mayan Solana confirmed: {} sig={}", intent.id, result.signature);
                     self.transition(&intent.id, IntentState::Confirmed, Some(&result.signature), None);
+                    // Hackathon-critical: Mayan-Solana has no on-chain donut
+                    // enforcement path. The off-chain attestation is the only
+                    // record, so this OutcomeRecord write is the single source
+                    // of truth the adjudicator/reconciler can sign against.
+                    self.append_solana_confirmed(
+                        intent,
+                        &result.signature,
+                        solana_intent.compute_units_estimate,
+                        test.as_ref().map(|t| t.net_profit_usd),
+                    );
                     if let Err(e) = self.wallet.release(&intent.id) {
                         warn!("wallet release failed for {}: {e}", intent.id);
                     }
@@ -795,6 +813,12 @@ impl LambdaController {
                 Ok(result) => {
                     info!("🎉 DLN Solana confirmed: {} sig={}", intent.id, result.signature);
                     self.transition(&intent.id, IntentState::Confirmed, Some(&result.signature), None);
+                    self.append_solana_confirmed(
+                        intent,
+                        &result.signature,
+                        dln_intent.compute_units_estimate,
+                        test.as_ref().map(|t| t.net_profit_usd),
+                    );
                     let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Confirmed {
                         tx_hash: result.signature,
@@ -849,6 +873,12 @@ impl LambdaController {
                 Ok(result) => {
                     info!("🌉 Wormhole NTT confirmed: {} sig={}", intent.id, result.signature);
                     self.transition(&intent.id, IntentState::Confirmed, Some(&result.signature), None);
+                    self.append_solana_confirmed(
+                        intent,
+                        &result.signature,
+                        ntt_intent.compute_units_estimate,
+                        test.as_ref().map(|t| t.net_profit_usd),
+                    );
                     let _ = self.wallet.release(&intent.id);
                     return Ok(LambdaExecuteOutcome::Confirmed {
                         tx_hash: result.signature,
@@ -1660,6 +1690,50 @@ impl LambdaController {
                 warn!("⚠️  outcome_log append: {e}");
             }
         }
+    }
+
+    /// Append an `executed` outcome record for a confirmed Solana fill.
+    ///
+    /// Mirrors the EVM `Confirmed` path at line 1383: every successful fill
+    /// must produce an OutcomeRecord so the donut-adjudicator's reconciler
+    /// can later attest to it. Without this, Solana fills never reach the
+    /// off-chain attestation layer — and Mayan-Solana / Wormhole-NTT /
+    /// DLN-Solana have **no on-chain donut enforcement** as a fallback.
+    ///
+    /// `compute_units` is the Solana equivalent of gas_used; we map it onto
+    /// the `gas_used` column so SQLite back-compat with the EVM rows is
+    /// preserved. The `effective_gas_price_wei` column is left None — Solana
+    /// uses lamports/CU, not gwei.
+    fn append_solana_confirmed(
+        &self,
+        intent: &Intent,
+        tx_signature: &str,
+        compute_units: u64,
+        predicted_profit_usd: Option<f64>,
+    ) {
+        self.append_outcome(OutcomeRecord {
+            ts: chrono::Utc::now(),
+            intent_id: intent.id.clone(),
+            protocol: intent.protocol.clone(),
+            src_chain: intent.src_chain,
+            dst_chain: intent.dst_chain,
+            decision: "executed".into(),
+            tx_hash: Some(tx_signature.to_string()),
+            predicted_gas: Some(compute_units),
+            gas_used: Some(compute_units),
+            effective_gas_price_wei: None,
+            predicted_profit_usd,
+            // actual profit on Solana paths requires post-confirmation
+            // settlement accounting (Mayan auction proceeds, DLN unlock,
+            // NTT release). For now the predicted value is forwarded —
+            // the reconciler will overwrite when the settlement lands.
+            actual_profit_usd: predicted_profit_usd,
+            skip_reason: None,
+            error: None,
+            solver_id: None,
+            claim_tx_hash: None,
+            claim_fee_usd: None,
+        });
     }
 
     async fn emit_genome_feedback(&self, intent: &Intent, tx_hash: &str, gas_used: u64) {

@@ -5,8 +5,11 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useAccount } from 'wagmi'
 import { NavBar, Footer, Card, CardHeader, Stepper, StepBody, Button, Snippet, Tag } from '@/components/ui'
 import { protocolColors } from '@/lib/tokens'
+import { WalletConnectStep, type SiweArtifacts } from '@/components/onboard/WalletConnectStep'
+import { ProvisionedSolver, type ProvisionResult } from '@/components/onboard/ProvisionedSolver'
 
 const STEPS = [
   { label: 'Identity', description: 'Name & operator email' },
@@ -43,15 +46,6 @@ const PROTOCOL_OPTIONS = [
 
 type SigningMode = 'self_hosted' | 'remote_signer' | 'session_key'
 
-interface ProvisionResult {
-  solver_id: string
-  api_token: string
-  portal_url: string
-  watch_url: string
-  signing_mode: string
-  tsul_note: string
-}
-
 function isValidEvm(addr: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(addr.trim())
 }
@@ -70,16 +64,48 @@ export default function OnboardPage() {
 
   // Step 2 — key authority
   const [signingMode, setSigningMode] = useState<SigningMode>('self_hosted')
-  const [evmAddress, setEvmAddress] = useState('')
   const [solanaAddress, setSolanaAddress] = useState('')
   const [webhookUrl, setWebhookUrl] = useState('')
   const [safeAddress, setSafeAddress] = useState('')
-  const [addressError, setAddressError] = useState<string | null>(null)
+
+  // Wallet-derived state — `evmAddress` is now driven by the connected
+  // wagmi account, not a manual input field.
+  const { address: connectedAddress } = useAccount()
+  const evmAddress = connectedAddress ?? ''
+  const [siwe, setSiwe] = useState<SiweArtifacts | null>(null)
+  const [welcomeBack, setWelcomeBack] = useState<{ solver_id: string } | null>(null)
 
   // Step 3 — provisioning
   const [provisioning, setProvisioning] = useState(false)
   const [provisionResult, setProvisionResult] = useState<ProvisionResult | null>(null)
   const [provisionError, setProvisionError] = useState<string | null>(null)
+
+  // Welcome-back detection: when the user connects with a wallet that was
+  // previously provisioned, we hit GET /api/hosting/solvers/:solver_id to
+  // confirm and surface a "you've been here before" hint. We derive the
+  // solver_id client-side from the address so we don't need a separate
+  // lookup endpoint.
+  useEffect(() => {
+    if (!connectedAddress) {
+      setWelcomeBack(null)
+      return
+    }
+    const solverId = connectedAddress.toLowerCase().replace(/^0x/, '').slice(0, 8)
+    let cancelled = false
+    fetch(`/api/hosting/solvers/${solverId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return
+        if (data && data.solver_id) setWelcomeBack({ solver_id: data.solver_id })
+        else setWelcomeBack(null)
+      })
+      .catch(() => {
+        if (!cancelled) setWelcomeBack(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [connectedAddress])
 
   const launchCmd = useMemo(() => {
     const addr = evmAddress || '<your_evm_address>'
@@ -136,7 +162,9 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
   const canAdvance = (() => {
     if (step === 0) return !!name && !!email
     if (step === 1) return chains.size > 0 && protocols.size > 0
-    if (step === 2) return isValidEvm(evmAddress)
+    // Step 2: wallet must be connected AND the SIWE signature captured so
+    // the server can flip `siwe_verified=1` on the row.
+    if (step === 2) return isValidEvm(evmAddress) && !!siwe
     return true
   })()
 
@@ -164,6 +192,10 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
           email: email || undefined,
           chains: Array.from(chains).join(','),
           protocols: Array.from(protocols).join(','),
+          // SIWE artifacts — server verifies these before issuing the
+          // api_token and flips `siwe_verified=1` on the row.
+          siwe_message: siwe?.message,
+          signature: siwe?.signature,
         }),
       })
 
@@ -349,30 +381,28 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                     </div>
                   </div>
 
-                  {/* EVM address — always required */}
-                  <Field
-                    label="Your EVM address"
-                    hint="This address receives 70% of the TSUL donut on every fill — perpetually, on-chain."
-                  >
-                    <input
-                      value={evmAddress}
-                      onChange={(e) => {
-                        setEvmAddress(e.target.value)
-                        setAddressError(null)
-                      }}
-                      onBlur={() => {
-                        if (evmAddress && !isValidEvm(evmAddress))
-                          setAddressError('Must be a valid 0x… EVM address (42 chars)')
-                      }}
-                      placeholder="0x…"
-                      spellCheck={false}
-                      autoComplete="off"
-                      className="w-full bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] px-4 h-11 text-sm font-mono focus:border-[var(--brand-cyan)] outline-none"
+                  {/* Wallet connect + SIWE — replaces manual address entry. */}
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-tertiary)] mb-3 font-bold">
+                      Connect & verify
+                    </div>
+                    <WalletConnectStep
+                      onSiweReady={setSiwe}
+                      existing={siwe}
                     />
-                    {addressError && (
-                      <p className="mt-1 text-[11px] text-[var(--danger)]">{addressError}</p>
+                    {welcomeBack && (
+                      <div className="mt-3 rounded-[var(--r-md)] border border-[var(--brand-blue)]/30 bg-[var(--brand-blue)]/5 px-4 py-3">
+                        <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--brand-blue)] font-bold mb-1">
+                          Welcome back
+                        </div>
+                        <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+                          This wallet is already provisioned as{' '}
+                          <code className="font-mono text-[var(--brand-blue)]">{welcomeBack.solver_id}</code>.
+                          Re-provisioning will <strong>rotate your API token</strong> (the old one stops working).
+                        </p>
+                      </div>
                     )}
-                  </Field>
+                  </div>
 
                   {/* Solana address — optional */}
                   <Field
@@ -495,44 +525,10 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                       )}
                     </>
                   ) : (
-                    /* Post-provision success screen */
+                    /* Post-provision success screen — solver_id, one-time
+                       api_token, install + keychain commands, portal link. */
                     <div className="space-y-4">
-                      <div className="rounded-[var(--r-md)] border border-[var(--solana-mint)]/40 bg-[var(--solana-mint)]/5 px-5 py-4">
-                        <div className="text-[var(--solana-mint)] text-sm font-bold mb-1">
-                          ✓ Registered — solver_id: {provisionResult.solver_id}
-                        </div>
-                        <p className="text-[12px] text-[var(--text-secondary)]">
-                          {provisionResult.tsul_note}
-                        </p>
-                      </div>
-
-                      <Card padding="md" className="bg-[var(--bg-raised)]">
-                        <CardHeader title="Your API token — save this now" />
-                        <div className="font-mono text-[11px] bg-black/30 rounded px-3 py-2 break-all text-[var(--brand-cyan)] border border-[var(--border-subtle)]">
-                          {provisionResult.api_token}
-                        </div>
-                        <p className="mt-2 text-[11px] text-[var(--danger)]">
-                          This token is shown once and not stored. Use it as <code>SOLVER_API_TOKEN</code> env var.
-                        </p>
-                      </Card>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <a
-                          href={provisionResult.portal_url}
-                          className="block rounded-[var(--r-md)] border border-[var(--brand-blue)]/30 bg-[var(--brand-blue)]/5 px-4 py-3 text-center hover:border-[var(--brand-blue)] transition-all"
-                        >
-                          <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Solver Portal</div>
-                          <div className="font-mono text-[12px] text-[var(--brand-blue)]">/portal/{provisionResult.solver_id}</div>
-                        </a>
-                        <a
-                          href={provisionResult.watch_url}
-                          className="block rounded-[var(--r-md)] border border-[var(--solana-mint)]/30 bg-[var(--solana-mint)]/5 px-4 py-3 text-center hover:border-[var(--solana-mint)] transition-all"
-                        >
-                          <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] mb-1">Wallet Watch</div>
-                          <div className="font-mono text-[12px] text-[var(--solana-mint)] truncate">/watch?address=…</div>
-                        </a>
-                      </div>
-
+                      <ProvisionedSolver result={provisionResult} />
                       <Snippet code={launchCmd} lang="bash" />
                     </div>
                   )}

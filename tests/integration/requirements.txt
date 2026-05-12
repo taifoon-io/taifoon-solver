@@ -1,0 +1,6 @@
+# Python integration test rig dependencies.
+# Install with:  python3 -m pip install -r requirements.txt
+pytest>=7.4
+requests>=2.31
+eth-account>=0.13
+siwe>=2.5

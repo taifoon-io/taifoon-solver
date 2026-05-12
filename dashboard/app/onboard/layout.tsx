@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { OnboardProviders } from '@/lib/providers'
 
 export const metadata: Metadata = {
   title: 'Onboarding — Spin up a cross-chain solver',
@@ -19,5 +20,8 @@ export default function OnboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  return children
+  // Wrap the entire onboard subtree in wagmi + react-query providers so
+  // the wallet hooks work on this route without leaking the providers into
+  // every other page (marketing, portal, docs).
+  return <OnboardProviders>{children}</OnboardProviders>
 }

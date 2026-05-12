@@ -28,3 +28,10 @@ tower-http.workspace = true
 chrono.workspace = true
 futures.workspace = true
 alloy.workspace = true
+
+[dev-dependencies]
+# Solana-protocol attestation sandbox tests use the live adjudicator
+# crate and the executor's OutcomeRecord shape — pinned via path so the
+# tests fail if either type drifts.
+donut-adjudicator = { path = "../donut-adjudicator" }
+executor = { path = "../executor" }

@@ -5,11 +5,20 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+# Minimal HTTP test server — boots the SolverApi router against a temp
+# SQLite so Python integration tests can exercise the live HTTP surface.
+# Not used in production; solver-main owns the real binary.
+[[bin]]
+name = "solver-api-testbin"
+path = "src/bin/testbin.rs"
+
 [dependencies]
 # Internal: executor crate owns the rusqlite outcome log + P&L aggregator.
 # solver-api depends on it so the dashboard endpoints can read realized P&L
 # without duplicating the SQL logic.
 executor = { path = "../executor" }
+# Donut adjudicator — signed off-chain attestations for the TSUL fee split.
+donut-adjudicator = { path = "../donut-adjudicator" }
 
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
@@ -18,7 +27,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tower-http = { version = "0.6", features = ["cors"] }
 anyhow = "1"
+thiserror = "1"
 tracing = "0.1"
+alloy = { workspace = true }
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json"] }
@@ -27,3 +38,7 @@ portfolio-sidecar = { path = "../portfolio-sidecar" }
 genome-client = { path = "../genome-client" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 hex = "0.4"
+# SIWE verification on /api/hosting/provision (Track B).
+siwe = { workspace = true }
+# Random bytes for SIWE nonces.
+rand = "0.8"

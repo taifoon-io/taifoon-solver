@@ -16,6 +16,7 @@ members = [
     "crates/portfolio-sidecar",
     "crates/solver-registry",
     "crates/solver-sandbox",
+    "crates/donut-adjudicator",
 ]
 
 [workspace.package]
@@ -65,3 +66,13 @@ hex = "0.4"
 
 # WebSocket
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# Async trait support (donut-adjudicator uses this for the async FeeSplitAdjudicator trait)
+async-trait = "0.1"
+
+# SHA-256 (donut-adjudicator hash-chain + canonical-JSON digesting)
+sha2 = "0.10"
+
+# SIWE — Sign-In With Ethereum (EIP-4361). solver-api verifies provision
+# requests by recovering the SIWE message signature to the claimed address.
+siwe = "0.6"
