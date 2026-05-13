@@ -456,10 +456,12 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                       TSUL Rule #4
                     </div>
                     <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed">
-                      From the moment your address is registered, 70% of every 49 bps fill fee routes
-                      to your wallet automatically via{' '}
-                      <code className="font-mono text-[var(--brand-cyan)]">BuildersRegistry.recordRevenueTouch()</code>.
-                      Perpetual. Irrevocable. No claim required — push-based.
+                      From the moment your address is registered, every settled fill emits
+                      a signed donut attestation that redistributes the adapter-owner
+                      inflow 70 / 20 / 10 across <code className="font-mono text-[var(--brand-cyan)]">adapter_builder</code>,{' '}
+                      <code className="font-mono text-[var(--brand-cyan)]">adapter_reviewers</code>,{' '}
+                      <code className="font-mono text-[var(--brand-cyan)]">adapter_ecosystem</code>.
+                      Perpetual. Irrevocable. Append-only ledger.
                     </p>
                   </div>
                 </div>

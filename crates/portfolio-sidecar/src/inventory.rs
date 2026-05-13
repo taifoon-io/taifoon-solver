@@ -11,22 +11,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Classification of a t3rn LiquidityWellCompact V4 pool on a given chain.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LwcStatus {
-    /// Pool available > threshold, not halted — can be used for fills.
-    Healthy,
-    /// Available < threshold but > 0 — may run out soon; top-up recommended.
-    LowPool,
-    /// Available == 0 or canInstantExecution returned false.
-    EmptyPool,
-    /// isIngressHalted or isEgressHalted is true.
-    Halted,
-    /// No LWC contract deployed on this chain.
-    NotDeployed,
-}
-
 /// Classification of a chain's current token + gas position.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,28 +76,6 @@ impl InventoryTarget {
         (self.target_stable_usd - current_usd).max(0.0)
     }
 }
-
-/// Classify a well's state from the LwcChainState fields on ChainSnapshot.
-pub fn classify_lwc(
-    pool_available_usd: f64,
-    can_instant_exec: bool,
-    is_halted: bool,
-    low_pool_threshold_usd: f64,
-) -> LwcStatus {
-    if is_halted {
-        return LwcStatus::Halted;
-    }
-    if !can_instant_exec || pool_available_usd <= 0.0 {
-        return LwcStatus::EmptyPool;
-    }
-    if pool_available_usd < low_pool_threshold_usd {
-        LwcStatus::LowPool
-    } else {
-        LwcStatus::Healthy
-    }
-}
-
-pub const LWC_LOW_POOL_THRESHOLD_USD: f64 = 100.0;
 
 // ── Solana gas thresholds ────────────────────────────────────────────────────
 //
@@ -323,33 +285,6 @@ mod tests {
         let t = target(50.0, 150.0, 400.0, 0.002);
         assert!((t.stable_shortfall(80.0) - 70.0).abs() < 0.01);
         assert_eq!(t.stable_shortfall(200.0), 0.0);
-    }
-
-    // ── LwcStatus tests ──────────────────────────────────────────────────────
-
-    #[test]
-    fn lwc_healthy_when_pool_deep() {
-        assert_eq!(classify_lwc(500.0, true, false, 100.0), LwcStatus::Healthy);
-    }
-
-    #[test]
-    fn lwc_low_pool_when_below_threshold() {
-        assert_eq!(classify_lwc(50.0, true, false, 100.0), LwcStatus::LowPool);
-    }
-
-    #[test]
-    fn lwc_empty_when_can_instant_exec_false() {
-        assert_eq!(classify_lwc(200.0, false, false, 100.0), LwcStatus::EmptyPool);
-    }
-
-    #[test]
-    fn lwc_empty_when_zero_available() {
-        assert_eq!(classify_lwc(0.0, true, false, 100.0), LwcStatus::EmptyPool);
-    }
-
-    #[test]
-    fn lwc_halted_overrides_all() {
-        assert_eq!(classify_lwc(500.0, true, true, 100.0), LwcStatus::Halted);
     }
 
     // ── SolanaGasStatus tests ────────────────────────────────────────────────

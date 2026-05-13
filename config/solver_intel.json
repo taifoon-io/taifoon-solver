@@ -29,30 +29,6 @@
   },
   "protocols": [
     {
-      "id": "t3rn_lwc",
-      "name": "T3RN LWC",
-      "cat": "Intent",
-      "fee_bps": 5,
-      "sla_ms": 15000,
-      "dst_chains": 11,
-      "active_indexed": false,
-      "lambda_tracked": true,
-      "fills_168h": 7367,
-      "vol_168h": 0.0,
-      "fills_24h": 0,
-      "vol_24h": 0.0,
-      "fills_1h": 0,
-      "fills_4h": 0,
-      "active_solvers": 1,
-      "fill_rate": 73.7,
-      "exec_total": 10000,
-      "exec_success": 7367,
-      "exec_expired": 2633,
-      "avg_fee_bps_observed": null,
-      "est_revenue_168h_usd": 0.0,
-      "status": "ACTIVE"
-    },
-    {
       "id": "across_v3",
       "name": "Across Protocol V3",
       "cat": "Bridge",
@@ -1068,44 +1044,7 @@
       "severity": "INFO"
     }
   ],
-  "t3rn_lambda": {
-    "total_orders": 10000,
-    "by_state": {
-      "Executed": 7367,
-      "Expired": 2633
-    },
-    "by_chain": {
-      "1329": 350,
-      "324": 375,
-      "56": 2896,
-      "250": 139,
-      "2741": 35,
-      "143": 199,
-      "252": 22,
-      "100": 290,
-      "84532": 137,
-      "42161": 1560,
-      "59144": 229,
-      "81457": 38,
-      "130": 50,
-      "1284": 26,
-      "1": 1993,
-      "1135": 35,
-      "747": 56,
-      "999": 346,
-      "33139": 53,
-      "10": 160,
-      "534352": 613,
-      "43114": 398
-    }
-  },
   "recency_matrix": {
-    "t3rn_lwc": {
-      "1h": "\u2b1c",
-      "4h": "\u2b1c",
-      "24h": "\u2b1c",
-      "168h": "\ud83d\udfe2"
-    },
     "across_v3": {
       "1h": "\u2b1c",
       "4h": "\u2b1c",

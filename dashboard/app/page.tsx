@@ -20,7 +20,7 @@ const PROTOCOLS = [
   'Hop', 'Connext', 'Synapse', 'Celer cBridge', 'Wormhole', 'LayerZero v2',
   'Hyperlane', 'Axelar GMP', 'CCIP', 'Socket', 'Squid Router', 'Rango',
   'Symbiosis', 'Meson', 'Allbridge', 'Router Protocol', 'Orbiter',
-  't3rn LWC', 'Relay', 'Arbitrum native', 'Optimism native',
+  'Relay', 'Arbitrum native', 'Optimism native',
   '1inch Fusion', 'Uniswap v4', 'Bancor', 'Wormhole NTT',
 ] as const
 

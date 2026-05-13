@@ -18,7 +18,7 @@ Most cross-chain solvers are built as private, MEV-extractive infrastructure. We
 
 - **9-adapter UniversalOperator fleet** already routes real volume — Across, deBridge, Mayan, Lambda, Hyperlane, LiFi, Squid, CCIP, Stargate. Frontier-day demo plugs a Solana-Mayan flow on stage.
 - **V5 MMR proofs anchor every fill** to a SuperRoot. No other Frontier project demos cryptographically provable cross-chain settlement. (See `docs/architecture.md`.)
-- **TSUL + on-chain donut** is genuinely novel. 49 bps on every settled call routes 70/20/10 to creator/reviewers/ecosystem — on-chain, automatic, irrevocable.
+- **TSUL + on-chain donut** is genuinely novel. The canonical 70/20/10 split on every settled call routes to creator/reviewers/ecosystem — on-chain, automatic, irrevocable.
 - **Agentic OS dispatch layer** lets anyone submit a Solana protocol gap and have the fleet pick it up. Submit a job → reviewer agents auto-replay → adapter merges → donut accrues to the contributor. End-to-end, no human in the loop.
 
 ---
@@ -30,11 +30,10 @@ Two licenses, deliberately split:
 | Path | License | Why |
 |------|---------|-----|
 | Solver core (this repo) | **Apache 2.0** | Public Goods. Anyone can fork, embed, integrate. Maximum reach. |
-| BuildersRegistry & adapter contracts ([yawningmonsoon/spinner](https://github.com/yawningmonsoon/spinner)) | **TSUL v1.0** (fair-code) | The donut routing must be enforceable. TSUL is the contract. |
-| Contributor templates ([spinner/templates/adapter-v1](https://github.com/yawningmonsoon/spinner/tree/master/templates/adapter-v1)) | **Apache 2.0** | The template is unrestricted. Contributions inherit TSUL on merge. |
+| Upstream platform contracts (separate repo) | **TSUL v1.0** (fair-code) | The donut redistribution must be enforceable. TSUL is the contract. |
+| Contributor templates | **Apache 2.0** | The template is unrestricted. Contributions inherit TSUL on merge. |
 
-Canonical TSUL: https://github.com/yawningmonsoon/spinner/blob/master/LICENSE.md  
-Public FAQ: https://taifoon.io/legal/tsul  
+Public TSUL FAQ: https://taifoon.io/legal/tsul  
 License questions: **taifooon@proton.me**
 
 ---
@@ -74,12 +73,12 @@ License questions: **taifooon@proton.me**
                        [ ON-CHAIN SETTLEMENT ]
                                 │
                                 ▼
-        [ BuildersRegistry.recordRevenueTouch(adapter, value) ]
-                49 bps donut → 70/20/10 split
-                creator / reviewers / ecosystem
+        [ Spinner receives adapter-owner inflow from upstream registry ]
+                signed off-chain attestation → 70 / 20 / 10 split
+                adapter_builder / adapter_reviewers / adapter_ecosystem
 ```
 
-Full architecture: `docs/architecture.md`.
+Full architecture: [`docs/donut_flow.md`](./docs/donut_flow.md).
 
 ---
 
@@ -132,7 +131,7 @@ The "Brain" indicator on https://taifoon.io/os/dispatch pulses on every dispatch
 
 - Pick an open route under TSUL: https://taifoon.io/builders/bounties
 - Submit a new route to the flywheel: https://taifoon.io/os/submit-job
-- Run the dispatcher locally: clone [yawningmonsoon/spinner](https://github.com/yawningmonsoon/spinner) → see `BUILDERS_PROGRAM.md`
+- Run the dispatcher locally: see the public dispatcher API surface and single-ABI-method integration notes published at https://taifoon.io/legal/tsul
 - License or bespoke commercial questions: **taifooon@proton.me**
 
 Built by the Taifoon project. Fair-code lineage: https://faircode.io/.

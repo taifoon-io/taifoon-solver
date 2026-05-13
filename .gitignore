@@ -35,3 +35,9 @@ outcomes/
 node_modules/
 dashboard/package-lock.json
 dashboard/yarn.lock
+
+# Sibling-aggregated repos that live INSIDE this tree for development
+# convenience but carry their own .git and ship as standalone crates.
+# Never commit upward. These contain internal strategy not for public eyes.
+/trade/
+/helm/

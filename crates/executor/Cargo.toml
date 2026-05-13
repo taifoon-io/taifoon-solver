@@ -7,7 +7,6 @@ authors.workspace = true
 [dependencies]
 genome-client = { path = "../genome-client" }
 profit-calc = { path = "../profit-calc" }
-t3rn-sidecar = { path = "../t3rn-sidecar" }
 protocol-adapters = { path = "../protocol-adapters" }
 protocol-adapters-solana = { path = "../protocol-adapters-solana" }
 wallet-manager = { path = "../wallet-manager" }

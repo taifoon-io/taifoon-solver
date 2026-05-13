@@ -4,7 +4,7 @@
 //! The rule: funds may only move to addresses that are:
 //!
 //!   1. The solver's own address (same key, different chain)
-//!   2. A t3rn LiquidityWellCompact V4 contract
+//!   2. A liquidity well contract on a partner protocol (passed in via `wells`)
 //!   3. An Across V3 SpokePool (bridge infrastructure; recipient = solver)
 //!   4. Mayan Forwarder or MayanSwift contracts (EVM side; Solana dest is off-chain)
 //!   5. A Uniswap V3 SwapRouter (swap; recipient = solver_addr)
@@ -77,38 +77,28 @@ fn is_approve_calldata(data: &[u8]) -> bool {
 #[derive(Debug, Clone)]
 pub struct TxGuard {
     solver_addr:     Address,
-    lwc_well_addrs:  HashSet<Address>,
+    well_addrs:      HashSet<Address>,
     token_addrs:     HashSet<Address>, // ERC-20 stables we may approve
 }
 
 impl TxGuard {
-    /// Build from solver address + LWC deployment list.
-    /// `token_addrs` should include all primary_stable addresses from lwc_deployments.json
-    /// plus any other ERC-20 tokens the rebalancer approves (WETH, USDT, etc.).
-    pub fn new(solver_addr: Address, lwc_wells: Vec<Address>, token_addrs: Vec<Address>) -> Self {
+    /// Build from solver address + a partner-protocol liquidity-well allowlist.
+    /// `token_addrs` should include the stable addresses the rebalancer may
+    /// approve (USDC, USDT, WETH, etc.). Pass an empty `wells` list when no
+    /// partner-protocol well allowlist is needed.
+    pub fn new(solver_addr: Address, wells: Vec<Address>, token_addrs: Vec<Address>) -> Self {
         Self {
             solver_addr,
-            lwc_well_addrs: lwc_wells.into_iter().collect(),
+            well_addrs: wells.into_iter().collect(),
             token_addrs: token_addrs.into_iter().collect(),
         }
     }
 
-    /// Load from lwc_deployments.json (reads at call time).
-    pub fn from_deployments(solver_addr: Address) -> Self {
-        use crate::lwc_manager::load_deployments;
-        let deps = load_deployments();
-
-        let wells: Vec<Address> = deps.iter()
-            .filter_map(|d| d.well_v4.parse().ok())
-            .collect();
-
-        let tokens: Vec<Address> = deps.iter()
-            .filter_map(|d| d.primary_stable.parse().ok())
-            .filter(|a| *a != Address::ZERO)
-            .collect();
-
-        // Also include known ERC-20 tokens the rebalancer touches
-        let mut all_tokens = tokens;
+    /// Convenience constructor that preloads the rebalancer's standard ERC-20
+    /// allowlist (USDC variants, USDT, WETH) so the caller only needs to
+    /// supply a `solver_addr` and any extra partner-protocol well addresses.
+    pub fn with_default_tokens(solver_addr: Address, wells: Vec<Address>) -> Self {
+        let mut all_tokens: Vec<Address> = Vec::new();
         for addr_str in &[
             "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT Base
             "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC Ethereum
@@ -130,7 +120,6 @@ impl TxGuard {
                 all_tokens.push(a);
             }
         }
-
         Self::new(solver_addr, wells, all_tokens)
     }
 
@@ -167,8 +156,8 @@ impl TxGuard {
             return Ok(());
         }
 
-        // LWC V4 wells
-        if self.lwc_well_addrs.contains(&to) {
+        // Partner-protocol liquidity wells (allowlisted at construction)
+        if self.well_addrs.contains(&to) {
             return Ok(());
         }
 
@@ -215,7 +204,7 @@ impl TxGuard {
 
         // Unknown address — block
         let reason = format!(
-            "tx_guard: BLOCKED — to={:#x} is not a known LWC well, bridge, swap, or solver address",
+            "tx_guard: BLOCKED — to={:#x} is not a known well, bridge, swap, or solver address",
             to
         );
         error!("{}", reason);
@@ -284,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn lwc_well_allowed() {
+    fn allowlisted_well_allowed() {
         let well: Address = "0xDF84cbCFc9eF2089c67BfC794A012ea3b30c3DE9".parse().unwrap();
         let g = TxGuard::new(solver(), vec![well], vec![]);
         assert!(g.check(well, &[], &[]).is_ok());

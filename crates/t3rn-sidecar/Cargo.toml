@@ -1,27 +1,8 @@
+# DELETED -- partner sidecar crate removed pre-hackathon.
+# The Cargo.toml is kept only so any stragglers that may still resolve
+# this directory have a parseable manifest; it is NOT a workspace member.
 [package]
-name = "t3rn-sidecar"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-
-[dependencies]
-alloy.workspace = true
-anyhow.workspace = true
-tracing.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-reqwest.workspace = true
-tokio.workspace = true
-axum.workspace = true
-futures.workspace = true
-hex.workspace = true
-tracing-subscriber.workspace = true
-rusqlite = { version = "0.32", features = ["bundled"] }
-chrono = { version = "0.4", features = ["serde"] }
-tower-http.workspace = true
-genome-client = { path = "../genome-client" }
-portfolio-sidecar = { path = "../portfolio-sidecar" }
-
-[[bin]]
-name = "t3rn-solver"
-path = "src/bin/t3rn_solver.rs"
+name = "partner-sidecar-removed"
+version = "0.0.0"
+edition = "2021"
+publish = false

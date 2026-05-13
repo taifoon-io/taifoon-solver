@@ -423,7 +423,7 @@ mod tests {
     fn test_profit_calculation() {
         let mut calc = ProfitCalculator::new(1.0);
 
-        // Manually set LiFi fee (49 bps)
+        // Manually set LiFi relay fee
         calc.protocol_fees.insert("lifi_v2".to_string(), 49.0);
 
         let intent = Intent {
@@ -444,7 +444,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(calc.calculate(&intent)).unwrap();
 
-        // 10,000 USDC * 49 bps = $49 fee
+        // 10,000 USDC * configured LiFi relay fee = $49 fee
         // Gas: $5 (ETH) + $0.10 (Arb) = $5.10
         // Net profit: $49 - $5.10 = $43.90
         assert!(result.breakdown.protocol_fee_usd > 48.0);

@@ -9,7 +9,7 @@
 //! ## Protocol
 //!
 //! ```text
-//! Solver  →  POST /api/solver/lwc-permit
+//! Solver  →  POST /api/solver/well-permit
 //!            { intent_id, chain_id, amount_wei, solver_address }
 //!
 //! Spinner checks:
@@ -32,8 +32,8 @@ use tracing::{info, warn};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/// Permit issued by the Spinner authorising a solver to draw from the LWC well
-/// for a specific intent fill on a specific chain.
+/// Permit issued by the Spinner authorising a solver to draw from the
+/// liquidity well for a specific intent fill on a specific chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FillPermit {
     /// Hex-encoded 32-byte intent ID.
@@ -113,7 +113,7 @@ impl RegistryClient {
         chain_id: u64,
         amount_wei: U256,
     ) -> Result<FillPermit, RegistryError> {
-        let url = format!("{}/api/solver/lwc-permit", self.spinner_url);
+        let url = format!("{}/api/solver/well-permit", self.spinner_url);
         let body = serde_json::json!({
             "intent_id": intent_id,
             "chain_id": chain_id,
@@ -163,18 +163,18 @@ impl RegistryClient {
 
 // ── Auth guard (enforces permit uniqueness + signature locally) ───────────────
 
-/// Guards LWC fund draws by validating Spinner-issued permits before use.
+/// Guards well-permit fund draws by validating Spinner-issued permits before use.
 ///
 /// - Verifies the permit's ECDSA signature against the known Spinner public key.
 /// - Rejects expired permits.
 /// - Prevents double-use of a permit by persisting used (intent_id, chain_id) pairs
 ///   in a local SQLite database.
-pub struct LwcAuthGuard {
+pub struct WellAuthGuard {
     spinner_pub_key: Address,
     db: Mutex<Connection>,
 }
 
-impl LwcAuthGuard {
+impl WellAuthGuard {
     pub fn new(spinner_pub_key: Address, db_path: &str) -> Result<Self> {
         let conn = Connection::open(db_path).context("open permit db")?;
         conn.execute_batch(
@@ -310,8 +310,8 @@ fn verify_permit_signature(permit: &FillPermit, expected_signer: Address) -> Res
 mod tests {
     use super::*;
 
-    fn test_guard() -> LwcAuthGuard {
-        LwcAuthGuard::new(Address::ZERO, ":memory:").unwrap()
+    fn test_guard() -> WellAuthGuard {
+        WellAuthGuard::new(Address::ZERO, ":memory:").unwrap()
     }
 
     fn expired_permit() -> FillPermit {
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn used_permit_rejected_after_consume() {
-        let guard = LwcAuthGuard::new(Address::ZERO, ":memory:").unwrap();
+        let guard = WellAuthGuard::new(Address::ZERO, ":memory:").unwrap();
         let permit = future_permit();
         // Mark as used directly (bypassing sig check for unit test)
         guard.consume(&permit, Some("0xdeadbeef")).unwrap();

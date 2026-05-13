@@ -387,7 +387,6 @@
   .c-hop    { background: #C77DFF; }
   .c-orbiter{ background: #FF6B6B; }
   .c-hyper  { background: #14F195; }
-  .c-t3rn   { background: #E6F0F7; }
 
   /* ── hackathon submission card ─────────────────────────────── */
   .submit { display: grid; grid-template-columns: 1fr 1fr; gap: 50px;
@@ -478,7 +477,7 @@
         </h1>
         <p class="lede">
           Solvers monitor every bridge mempool — Across, Mayan, LayerZero,
-          Stargate, LI.FI, Squid, Hop, Orbiter, Hyperlane, t3rn — pick the
+          Stargate, LI.FI, Squid, Hop, Orbiter, Hyperlane — pick the
           fillable orders, and settle them across 54 chains under
           Taifoon's SuperRoot proof anchor. Live on mainnet.
         </p>
@@ -544,8 +543,6 @@
               <text x="130" y="424" fill="rgba(153,69,255,0.7)" font-family="JetBrains Mono" font-size="8" letter-spacing="1">MAYAN</text>
               <circle cx="450" cy="490" r="2.5" fill="#3DA5FF"/>
               <text x="458" y="494" fill="rgba(61,165,255,0.7)" font-family="JetBrains Mono" font-size="8" letter-spacing="1">ACROSS</text>
-              <circle cx="180" cy="160" r="2.5" fill="#E6F0F7"/>
-              <text x="190" y="164" fill="rgba(230,240,247,0.6)" font-family="JetBrains Mono" font-size="8" letter-spacing="1">t3rn</text>
             </g>
           </svg>
           <div class="pf-cap">SOLVER · LIQUIDITY MANIFOLD · t=now</div>
@@ -575,7 +572,7 @@
         <div class="pd-card">
           <div class="pdn">PHASE 01 — DETECT</div>
           <h3 class="tf-display">Mempool monitor watches every bridge.</h3>
-          <p>The mempool-monitor crate ingests intent feeds from 10 bridge protocols in parallel — Across V3, Mayan Swift, LayerZero V2, Stargate V2, LI.FI V2, Squid Router, Hop, Orbiter, Hyperlane, and t3rn LWC. Every signed order surfaces here within one block of the source chain.</p>
+          <p>The mempool-monitor crate ingests intent feeds from 9 bridge protocols in parallel — Across V3, Mayan Swift, LayerZero V2, Stargate V2, LI.FI V2, Squid Router, Hop, Orbiter, and Hyperlane. Every signed order surfaces here within one block of the source chain.</p>
           <div class="code">
 <span class="dim">// fixtures/across_v3_intents.json — 1 of 10 sources</span><br/>
 <span class="blue">intent</span> 0xfA12...3D9 <span class="dim">·</span> base→arb <span class="dim">·</span> 5,000 USDC<br/>
@@ -698,7 +695,6 @@
       <div class="pl-cell"><span class="pl-tag c-hop"></span><div class="pl-mark">HOP</div><div class="pl-name">Hop Protocol</div><div class="pl-meta">EVM L2s</div></div>
       <div class="pl-cell"><span class="pl-tag c-orbiter"></span><div class="pl-mark">ORBITER</div><div class="pl-name">Orbiter Finance</div><div class="pl-meta">L2 mesh</div></div>
       <div class="pl-cell"><span class="pl-tag c-hyper"></span><div class="pl-mark">HYPERLANE</div><div class="pl-name">Hyperlane</div><div class="pl-meta">permissionless</div></div>
-      <div class="pl-cell"><span class="pl-tag c-t3rn"></span><div class="pl-mark">t3rn</div><div class="pl-name">t3rn LWC</div><div class="pl-meta">light-client</div></div>
       <div class="pl-cell"><span class="pl-tag c-mayan"></span><div class="pl-mark">LZ</div><div class="pl-name">LayerZero V2</div><div class="pl-meta">omnichain</div></div>
       <div class="pl-cell"><span class="pl-tag c-li-fi"></span><div class="pl-mark">JUP</div><div class="pl-name">Jupiter</div><div class="pl-meta">SOL aggregator</div></div>
       <div class="pl-cell"><span class="pl-tag c-hyper"></span><div class="pl-mark">PHX</div><div class="pl-name">Phoenix</div><div class="pl-meta">SOL CLOB</div></div>

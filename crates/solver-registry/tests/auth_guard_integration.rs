@@ -1,16 +1,16 @@
-//! Integration tests for LwcAuthGuard permit lifecycle.
+//! Integration tests for WellAuthGuard permit lifecycle.
 //!
 //! These are pure in-process (SQLite :memory:) tests — no network, no `#[ignore]`.
 
 use alloy::primitives::Address;
-use solver_registry::{FillPermit, LwcAuthGuard, RegistryError};
+use solver_registry::{FillPermit, WellAuthGuard, RegistryError};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn make_guard() -> LwcAuthGuard {
+fn make_guard() -> WellAuthGuard {
     // Address::ZERO as spinner_pub_key — sig checks will fail with InvalidSignature,
     // but we bypass them for lifecycle tests by calling consume() directly.
-    LwcAuthGuard::new(Address::ZERO, ":memory:").expect("open :memory: db")
+    WellAuthGuard::new(Address::ZERO, ":memory:").expect("open :memory: db")
 }
 
 fn expired_permit(intent_id: &str) -> FillPermit {

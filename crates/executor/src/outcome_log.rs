@@ -51,8 +51,10 @@ pub struct OutcomeRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claim_fee_usd: Option<f64>,
     /// **Gross fee** paid by the intent's submitter for filling — the
-    /// number the donut adjudicator multiplies by 49 bps. Decoded by the
-    /// executor from the SSE Genome intent BEFORE the fill broadcasts:
+    /// number the donut adjudicator redistributes per the per-adapter
+    /// inflow redistribution policy (see `donut-adjudicator` crate).
+    /// Decoded by the executor from the SSE Genome intent BEFORE the fill
+    /// broadcasts:
     ///
     /// | Protocol      | Source of `fee_usd`                                    |
     /// |---------------|---------------------------------------------------------|

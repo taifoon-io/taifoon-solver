@@ -1081,7 +1081,7 @@ impl Rebalancer {
 
         // Pre-flight guard: router must be an allowed Uniswap router;
         // recipient in swap params is solver_addr (enforces no external fund drain).
-        TxGuard::from_deployments(self.solver_addr)
+        TxGuard::with_default_tokens(self.solver_addr, vec![])
             .enforce(router, &swap_calldata, &[self.solver_addr])
             .context("tx_guard blocked ETH→USDC swap")?;
 
@@ -1461,7 +1461,7 @@ impl Rebalancer {
         let approve = approveCall { spender: spender_addr, amount: U256::MAX }.abi_encode();
 
         // Guard: approve tx goes to a token contract — must be in the known token list.
-        TxGuard::from_deployments(self.solver_addr)
+        TxGuard::with_default_tokens(self.solver_addr, vec![])
             .enforce(token_addr, &approve, &[])
             .context("tx_guard blocked ensure_allowance")?;
 
@@ -1486,11 +1486,12 @@ impl Rebalancer {
         let bytes = hex::decode(data.trim_start_matches("0x")).context("decode calldata")?;
 
         // ── Pre-flight guard ─────────────────────────────────────────────────
-        // Block any tx whose destination is not a known LWC well, bridge contract,
-        // swap router, WETH, or the solver's own address.
-        // `recipient`/`depositor` fields must be solver_addr — enforced in callers
-        // that pass embedded_recipients; here we check only the `to` address.
-        TxGuard::from_deployments(self.solver_addr)
+        // Block any tx whose destination is not a known partner-protocol well,
+        // bridge contract, swap router, WETH, or the solver's own address.
+        // `recipient`/`depositor` fields must be solver_addr — enforced in
+        // callers that pass embedded_recipients; here we check only the `to`
+        // address.
+        TxGuard::with_default_tokens(self.solver_addr, vec![])
             .enforce(to_addr, &bytes, &[])
             .context("tx_guard blocked send_raw_value")?;
         // ────────────────────────────────────────────────────────────────────

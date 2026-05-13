@@ -6,7 +6,6 @@ members = [
     "crates/executor",
     "crates/solver-main",
     "crates/solver-api",
-    "crates/t3rn-sidecar",
     "crates/protocol-adapters",
     "crates/protocol-adapters-solana",
     "crates/mempool-monitor",

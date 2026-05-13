@@ -1,9 +1,5 @@
-//! In-memory LWC V4 well simulator.
-//!
-//! Implements the same semantics as the LiquidityWellCompact V4 contract:
-//! - add/remove liquidity with LP tracking per solver
-//! - reserve/release for in-flight fills
-//! - canPerformInstantExecution check
+//! Generic in-memory liquidity-well simulator. Tracks pool depth, reservations,
+//! and settlement for sandbox tests.
 //!
 //! Used by the CompeteSim binary so competing solvers run against a realistic
 //! well without touching mainnet.
@@ -61,7 +57,7 @@ pub struct WellSnapshot {
     pub lp_count: usize,
 }
 
-/// In-memory LWC well simulator keyed by (chain_id, asset_symbol).
+/// In-memory liquidity-well simulator keyed by (chain_id, asset_symbol).
 pub struct WellSimulator {
     pools: HashMap<(u64, String), WellPool>,
 }

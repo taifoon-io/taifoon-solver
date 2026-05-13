@@ -752,15 +752,6 @@ pub struct PortfolioFillStats {
     pub realized_profit_usd: f64,
 }
 
-/// LWC well state for a single chain, as returned by /t3rn/status proxy.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LwcChainInfo {
-    pub chain_id: u64,
-    pub chain_key: String,
-    pub available_usd: f64,
-    pub status: String,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PortfolioResponse {
     pub solver_address: String,
@@ -769,9 +760,6 @@ pub struct PortfolioResponse {
     pub chains: Vec<ChainInventory>,
     pub fills: PortfolioFillStats,
     pub as_of: DateTime<Utc>,
-    /// LWC well states from the t3rn solver (may be empty if solver is not running).
-    #[serde(default)]
-    pub lwc_chains: Vec<LwcChainInfo>,
     /// Solver Solana wallet native balance, in SOL. `None` when SOLANA_ADDRESS
     /// is unset or the Solana RPC was unreachable on this request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1070,30 +1058,12 @@ async fn portfolio_handler(
     };
     drop(stats);
 
-    // Fetch LWC well states from the t3rn solver sidecar (best-effort).
-    let t3rn_port = std::env::var("T3RN_SOLVER_PORT")
-        .ok().and_then(|s| s.parse::<u16>().ok()).unwrap_or(8092);
-    let lwc_chains: Vec<LwcChainInfo> = match client
-        .get(format!("http://127.0.0.1:{}/t3rn/status", t3rn_port))
-        .timeout(std::time::Duration::from_secs(2))
-        .send().await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            resp.json::<serde_json::Value>().await
-                .ok()
-                .and_then(|v| v.get("chains").and_then(|c| serde_json::from_value::<Vec<LwcChainInfo>>(c.clone()).ok()))
-                .unwrap_or_default()
-        }
-        _ => vec![],
-    };
-
     Json(PortfolioResponse {
         solver_address: solver_addr,
         solana_address: solana_addr,
         chains,
         fills,
         as_of: Utc::now(),
-        lwc_chains,
         solana_sol_balance,
         solana_gas_status,
     })
@@ -1518,9 +1488,10 @@ async fn donut_head_handler(
 /// GET /api/donut/policy — public, unauthenticated.
 ///
 /// Returns the canonical donut-policy constants. This is the single
-/// source of truth for "the 49 bps × 70/20/10 split applied uniformly
-/// across every provisioned Builder." Auditors and dashboards read this
-/// to verify a Spinner's attestations match the published policy.
+/// source of truth for the canonical 70/20/10 redistribution applied
+/// uniformly across every provisioned adapter. Auditors and dashboards
+/// read this to verify a Spinner's attestations match the published
+/// policy.
 async fn donut_policy_handler(
     State(_reg): State<Arc<AdapterRegistry>>,
 ) -> Response {

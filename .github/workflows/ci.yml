@@ -117,10 +117,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: grep for forbidden upstream terms
+      - name: grep for forbidden upstream-private terms
         shell: bash
         run: |
-          PATTERN='BuildersRegistry|SurgeFeeManager|SurgeRouter|YAWNING|FOONSpinnerRewards|dev_treasury|yawning_stakers|user_rebate|ArcExecutor|LiquidityWellCompact|\b49 bps\b|\b40 / 30 / 20 / 10\b'
+          # Strict pattern — keeps every upstream-private contract /
+          # token name AND every pre-hackathon "purged" term out of the
+          # committed surfaces. After the 2026-05 cleanup the public
+          # repo no longer references partner LWC contracts, the
+          # t3rn-sidecar crate, the legacy "49 bps" donut shorthand, or
+          # the yawningmonsoon/spinner GitHub URL.
+          PATTERN='BuildersRegistry|SurgeFeeManager|SurgeRouter|FOONSpinnerRewards|\bYAWNING\b|yawning_stakers|dev_treasury|ArcExecutor|LiquidityWellCompact|\bLWC\b|t3rn[-_]sidecar|yawningmonsoon/spinner|\b49 bps\b'
           DIRS='crates docs skills deploy config landing dashboard/app/policy'
           echo "scanning: $DIRS"
           HITS=$(grep -rnE --include='*.rs' --include='*.ts' --include='*.tsx' \
@@ -128,8 +134,8 @@ jobs:
                           --include='*.toml' --include='*.yml' \
                           "$PATTERN" $DIRS 2>/dev/null || true)
           if [ -n "$HITS" ]; then
-            echo "::error::Upstream-source terms leaked into the public repo:"
+            echo "::error::Upstream-private terms leaked into the public repo:"
             echo "$HITS"
             exit 1
           fi
-          echo "✅ no upstream terms in committed surfaces"
+          echo "✅ no upstream-private terms in committed surfaces"

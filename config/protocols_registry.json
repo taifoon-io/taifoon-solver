@@ -453,30 +453,6 @@
       "volume_usd_168h": 0.0
     },
     {
-      "id": "t3rn_lwc",
-      "name": "t3rn Lambda Witness Contract",
-      "category": "intent",
-      "description": "T3RN protocol order execution via Lambda",
-      "fee_bps": 5,
-      "sla_ms": 15000,
-      "chains": [1, 10, 8453, 42161, 137, 56, 100, 324, 59144, 81457, 43114],
-      "events": {
-        "deposit": [
-          "0x1e5f09566c518bd8ddb1f0c3fd1da318e49162cf94b58c4508d2835fc971e60d",
-          "0x3bb399125b923176baf5098f432689e4843dee54b68daf1d7cadd91d99a63601"
-        ],
-        "fill": [
-          "0xba78a15e874441cf1871e3d2633ba91540bab663ae8664088ace7d60009ddd65"
-        ]
-      },
-      "contracts": {},
-      "priority": 1,
-      "status": "ACTIVE",
-      "fills_168h": 7367,
-      "volume_usd_168h": 0.0,
-      "lambda_tracked": true
-    },
-    {
       "id": "celer_cbridge",
       "name": "Celer cBridge",
       "category": "bridge",

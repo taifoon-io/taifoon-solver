@@ -21,7 +21,8 @@ use tokio::sync::{broadcast, mpsc, Semaphore};
 use tracing::{error, info, warn};
 use tracing_subscriber::Layer;
 use wallet_manager::WalletManager;
-use t3rn_sidecar::{delivery_router, DeliveryMatrix, T3RNSidecar};
+// Partner sidecar integration removed pre-hackathon — the solver no longer
+// embeds a partner-protocol delivery worker in the main binary.
 
 /// A tracing layer that forwards formatted log lines to a broadcast channel.
 struct BroadcastLogLayer {
@@ -165,40 +166,11 @@ async fn main() -> Result<()> {
         }
     });
 
-    // ── LWC delivery worker (open-mamba webhook target) ───────────────────────
-    if std::env::var("T3RN_LWC_ENABLED").map(|v| v == "true" || v == "1").unwrap_or(false) {
-        let lwc_port: u16 = std::env::var("LWC_WORKER_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(8091);
-        let private_key = std::env::var("SOLVER_PRIVATE_KEY").unwrap_or_default();
-        let scan_interval_secs: u64 = std::env::var("LWC_SCAN_INTERVAL_SECS")
-            .ok().and_then(|s| s.parse().ok()).unwrap_or(60);
-        let mamba_url = std::env::var("MAMBA_LAKE_URL").ok();
-        match private_key.parse::<alloy::signers::local::PrivateKeySigner>() {
-            Ok(signer) => {
-                let sidecar = Arc::new(T3RNSidecar::new(signer));
-                let matrix  = Arc::new(DeliveryMatrix::new());
-                let router  = delivery_router(sidecar.clone(), matrix.clone());
-
-                // Parallel scan-and-report loop — posts matrix snapshot to open-mamba
-                t3rn_sidecar::spawn_delivery_loop(matrix.clone(), scan_interval_secs, mamba_url);
-
-                tokio::spawn(async move {
-                    match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", lwc_port)).await {
-                        Ok(listener) => {
-                            info!("✅ LWC delivery worker on :{}", lwc_port);
-                            if let Err(e) = axum::serve(listener, router).await {
-                                error!("LWC worker error: {}", e);
-                            }
-                        }
-                        Err(e) => error!("LWC worker bind {}: {}", lwc_port, e),
-                    }
-                });
-            }
-            Err(e) => warn!("T3RN_LWC_ENABLED=true but SOLVER_PRIVATE_KEY invalid: {} — LWC worker skipped", e),
-        }
-    }
+    // (Removed pre-hackathon: a partner-protocol liquidity-well delivery
+    // worker used to be wired in here under a feature flag. The solver
+    // now talks to partner protocols only via their public adapter API +
+    // single ABI methods, with no sidecar process embedded in this
+    // binary.)
 
     // ── Profit calc (used as a sanity check beside Spinner test-run) ──────────
     let mut profit_calc = ProfitCalculator::new(min_profit_usd);
@@ -1064,7 +1036,7 @@ async fn main() -> Result<()> {
         }
 
         // Legacy path — only reached by protocols that cleared filter_match but aren't
-        // routable (e.g. Orbiter/Socket/t3rn). Skip entirely if protocol filter excludes them.
+        // routable (e.g. Orbiter/Socket). Skip entirely if protocol filter excludes them.
         if !filter_match {
             continue;
         }

@@ -9,7 +9,7 @@
 3. `https://taifoon.io/builders/bounties`
 4. `https://taifoon.io/legal/tsul`
 5. Solana explorer (Solscan or Solana FM) at the demo wallet
-6. (Hidden) `https://github.com/yawningmonsoon/spinner/blob/master/LICENSE.md`
+6. (Hidden) `https://taifoon.io/legal/tsul`
 
 **Pre-flight:**
 - `python3 ../open-mamba/brain_bridge.py synthetic` running in a tmux pane (so the Brain pulses on stage even if no real submission lands during the recording window).
@@ -35,7 +35,7 @@
 | 0:55 | (Optional, skip if time-tight) Click "LICENSE.md →" Volt button — opens canonical file in new tab. | "One file, one answer. The contract IS the license." |
 | 1:00 | Switch back to tab 1. Trigger the live Mayan-Solana fill via the deployed adapter. | "Now the actual settlement layer. I'm executing a real Solana fill through the deployed Mayan adapter." |
 | 1:10 | (Adapter call fires.) Switch to Solana explorer (tab 5). | "V5 proof anchors the settlement to a SuperRoot. Every fill cryptographically reproducible. No other Frontier project demos this." |
-| 1:20 | Show the on-chain donut event — `RevenueTouch` log on Etherscan-equivalent for devnet 36927. | "And here's the donut routing: 49 bps split 70/20/10 to creator, reviewers, ecosystem. Automatic. Irrevocable." |
+| 1:20 | Show the on-chain donut event — `RevenueTouch` log on Etherscan-equivalent for devnet 36927. | "And here's the donut routing: the canonical 70/20/10 split to creator, reviewers, ecosystem. Automatic. Irrevocable." |
 | 1:28 | Cut. | "That's Taifoon. We didn't build a solver. We built the OS that makes solvers a public good." |
 
 ---
@@ -60,7 +60,7 @@ Run through immediately before clicking "Submit" on the Colosseum form:
 - [ ] GitHub repo URL: `https://github.com/yawningmonsoon/taifoon-solver`.
 - [ ] Live demo URL: `https://solver.taifoon.dev`.
 - [ ] Public dashboard URL: `https://taifoon.io/os/dispatch`.
-- [ ] License posture in submission long-description: "Apache 2.0 on solver core (this repo) + TSUL fair-code on platform contracts (yawningmonsoon/spinner)."
+- [ ] License posture in submission long-description: "Apache 2.0 on solver core (this repo) + TSUL fair-code on platform contracts (see https://taifoon.io/legal/tsul)."
 - [ ] One-liner: "The first solver-as-an-OS. Fair-code. On-chain donut economics. Solana-native cross-chain fills with cryptographic settlement proofs."
 - [ ] Long description: paste from `demo/long-description.md`.
 - [ ] Confirmation email screenshot saved to `demo/submission-receipt.png`.

@@ -60,7 +60,7 @@ pub fn default_debridge_dln_addresses() -> HashMap<u64, Address> {
 
 /// Pick a default mainnet RPC URL when the environment doesn't provide one.
 /// Production deployments should always set the per-chain `RPC_URL_<chain>`.
-/// Premium RPCs sourced from rpc-hunter / t3rn-guardian endpoints.
+/// Premium RPCs sourced from rpc-hunter / partner guardian endpoints.
 pub fn default_rpc_for_chain(chain_id: u64) -> Option<&'static str> {
     match chain_id {
         1 => Some("https://ethereum-rpc.publicnode.com"),
@@ -224,7 +224,7 @@ impl EstimateAdapter for DeBridgeEstimateAdapter {
 }
 
 
-/// Per-chain gas price ranges (gwei). Mirrors t3rn-guardian GAS_PRICE_RANGES.
+/// Per-chain gas price ranges (gwei). Mirrors the partner guardian GAS_PRICE_RANGES.
 /// Used as floor/ceiling guards when Razor API is unavailable.
 /// L2s (OP-stack, Arbitrum): typical ~0.001–0.005 gwei.
 /// L1 (Ethereum): typical ~5–20 gwei. BSC: typical ~3–5 gwei.
@@ -283,7 +283,7 @@ async fn fetch_rpc_gas_price_gwei(chain_id: u64) -> Option<f64> {
 
 /// Compute the optimal maxFeePerGas (wei) for a chain.
 ///
-/// Strategy (mirrors t3rn-guardian + Python filler):
+/// Strategy (mirrors the partner guardian + Python filler):
 ///   1. Try Razor API for live gas price.
 ///   2. Clamp result against per-chain min/max from `GAS_PRICE_RANGES`.
 ///   3. Apply 1.2× safety buffer.

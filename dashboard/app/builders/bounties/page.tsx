@@ -167,16 +167,17 @@ function TsulBanner() {
           Under TSUL, every adapter you ship is permanently co-owned — the on-chain
           donut routes{' '}
           <span style={{ color: 'var(--solana-mint)', fontWeight: 500 }}>
-            70 % to the creator, 20 % to reviewer agents, 10 % to the ecosystem
+            70 % to the adapter_builder, 20 % to the adapter_reviewers, 10 % to the adapter_ecosystem
           </span>{' '}
-          from the merge block forward. The{' '}
+          from the merge block forward. The redistribution is enforced at the{' '}
           <code
             className="font-mono text-[0.875rem] px-1.5 py-0.5 rounded"
             style={{ background: 'rgba(20,241,149,0.1)', color: 'var(--solana-mint)' }}
           >
-            BuildersRegistry.recordRevenueTouch()
+            upstream adapter-registry contract
           </code>{' '}
-          call is on-chain and irrevocable — removing it breaks the license.
+          and recorded off-chain via signed attestations — irrevocable, the
+          license depends on it.
         </p>
 
         {/* CTA row */}
@@ -322,7 +323,7 @@ function HowItWorks() {
     {
       n: '01',
       title: 'Ship the adapter',
-      body: 'Clone the template under templates/adapter-v1. Implement quote() + fill(). Submit via BuildersRegistry.submitAdapter() — your wallet is the creator address.',
+      body: 'Clone the template under templates/adapter-v1. Implement quote() + fill(). Submit via the upstream adapter-registry contract — your wallet is the adapter_builder address.',
     },
     {
       n: '02',
@@ -337,7 +338,7 @@ function HowItWorks() {
     {
       n: '04',
       title: '70% perpetually to your wallet',
-      body: 'BuildersRegistry.recordRevenueTouch() fires on every settled call. Pull any time via claim(). On-chain, irrevocable, no cliff.',
+      body: 'A signed donut attestation fires on every settled fill. Your adapter_builder share is hash-chained on the public ledger and pullable via the upstream adapter-registry contract. On-chain, irrevocable, no cliff.',
     },
   ]
 

@@ -2132,8 +2132,8 @@ fn parse_inclusion_proof_json(v: &serde_json::Value) -> Option<InclusionProof> {
     })
 }
 
-/// 4-byte selector for `claim()` — Universal Operator pull pattern (matches
-/// `FOONSpinnerRewards.claim()` on the Taifoon ecosystem side).
+/// 4-byte selector for `claim()` — Universal Operator pull pattern, used
+/// to claim accrued ecosystem-side rewards on the operator's behalf.
 pub fn claim_selector() -> [u8; 4] {
     function_selector("claim()")
 }

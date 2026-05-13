@@ -52,7 +52,7 @@ ISSUES=$(cat <<'JSON'
   },
   {
     "title": "Phase A · CONTRIBUTOR_LICENSE_AGREEMENT.md + CLA bot",
-    "body": "TSUL is only enforceable if contributions are clearly licensed in. n8n's CLA pattern is the simplest path to relicensing rights.\n\n**Acceptance criteria:**\n- CLA mirrors n8n's structure, six clauses, plain English\n- On-chain signing via BuildersRegistry.submitAdapter() documented\n- CLA_VERSION_HASH constant added to BuildersRegistry.sol\n- .github/cla-bot.yml for off-chain PRs\n- taifooon@proton.me on contact section\n\n**Blocked by:** #1",
+    "body": "TSUL is only enforceable if contributions are clearly licensed in. n8n's CLA pattern is the simplest path to relicensing rights.\n\n**Acceptance criteria:**\n- CLA mirrors n8n's structure, six clauses, plain English\n- On-chain signing flow documented for the upstream adapter-registry contract\n- CLA_VERSION_HASH constant added at the upstream contract layer\n- .github/cla-bot.yml for off-chain PRs\n- taifooon@proton.me on contact section\n\n**Blocked by:** #1",
     "labels": "frontier:hackathon,license:tsul,fair-code,phase:A-legal,priority:P1",
     "milestone": "frontier-A-legal"
   },

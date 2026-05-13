@@ -50,7 +50,6 @@ export const protocolColors: Record<string, string> = {
   lifi: '#F1C40F',
   orbiter: '#95A5A6',
   stargate: '#6BC8FF',
-  t3rn: '#14F195',
   wormhole: '#FE5E68',
   cctp: '#2775CA',
   hop: '#B45BFF',
