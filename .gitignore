@@ -29,3 +29,9 @@ config/local.toml
 outcomes/
 *.sqlite
 .claude/scheduled_tasks.lock
+
+# Node — dashboard is pnpm-only; the pnpm-lock.yaml IS committed but
+# never want stray npm/yarn lockfiles next to it.
+node_modules/
+dashboard/package-lock.json
+dashboard/yarn.lock

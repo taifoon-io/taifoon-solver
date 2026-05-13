@@ -16,16 +16,14 @@ grep -RIn "from.*LivePnL\|<LivePnL" dashboard/app dashboard/components 2>/dev/nu
     exit 1
 }
 
-echo "[phase5] dashboard build (next.js)"
-# Prefer pnpm only when a pnpm-lock is present; otherwise fall back to npm
-# (the dashboard ships with package-lock.json, not pnpm-lock.yaml).
-if command -v pnpm >/dev/null 2>&1 && [ -f dashboard/pnpm-lock.yaml ]; then
-    (cd dashboard && pnpm install --frozen-lockfile && pnpm build)
-elif command -v npm >/dev/null 2>&1; then
-    (cd dashboard && npm install && npm run build)
-else
-    echo "WARN: no pnpm/npm; skipping dashboard build" >&2
+echo "[phase5] dashboard build (next.js, pnpm)"
+# Dashboard is pnpm-only. The `packageManager` field in
+# dashboard/package.json pins the pnpm version; Corepack activates it
+# automatically on Node 22+.
+if ! command -v pnpm >/dev/null 2>&1; then
+    echo "ERROR: pnpm not on PATH. Run: corepack enable" >&2
     exit 1
 fi
+(cd dashboard && pnpm install --frozen-lockfile && pnpm build)
 
 echo "[phase5] PASS"

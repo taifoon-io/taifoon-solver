@@ -1,17 +1,18 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+This package uses **pnpm** (pinned via `packageManager` in `package.json`,
+auto-installed by Corepack on Node 22+). Don't mix with `npm` — the
+`pnpm-lock.yaml` is the source of truth and CI gates on
+`pnpm install --frozen-lockfile`.
+
 ## Getting Started
 
 First, run the development server:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+corepack enable           # one-time, picks up the pinned pnpm version
+pnpm install              # installs against pnpm-lock.yaml
+pnpm dev                  # starts Next on http://localhost:3000
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
