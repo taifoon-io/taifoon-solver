@@ -1,41 +1,51 @@
-//! Donut adjudicator — signed attestations for TSUL fee splits.
+//! Donut adjudicator — signed attestations for adapter-owner inflow
+//! redistribution.
 //!
 //! ## What this crate does
 //!
-//! Every fill produced by a Spinner generates an `OutcomeRecord` (see
-//! `executor::outcome_log`). When the realized profit is positive, the TSUL
-//! contract reserves **49 bps of `max(0, actual_profit_usd)`** as the "donut"
-//! and splits it three ways:
+//! The Spinner is the registered adapter owner with the upstream order
+//! contract / fee distributor (see `api.taifoon.dev`). On each fill, the
+//! upstream fee distributor routes a small per-fill **inflow** to the
+//! Spinner's wallet as the adapter-owner share. The Spinner then
+//! **redistributes that inflow internally** to three purposes:
 //!
-//! * **70 %** → Builder (the developer who shipped the adapter contract)
-//! * **20 %** → Reviewer set (open-mamba code-review agents)
-//! * **10 %** → Ecosystem treasury
+//! * **70%** → adapter_builder (whoever shipped the bridge integration)
+//! * **20%** → adapter_reviewers (the open-mamba code-review agents
+//!             registered for the adapter)
+//! * **10%** → adapter_ecosystem (catch-all + fail-closed absorber)
 //!
-//! On EVM paths the split is enforced by `BuildersRegistry.recordRevenueTouch()`
-//! at fill time. But two protocol families cannot be enforced on-chain:
+//! The `DonutAttestation` records this **internal redistribution** as a
+//! signed, hash-chained receipt. It does NOT record the upstream
+//! protocol-level fee split — that is handled independently by the
+//! upstream fee distributor.
 //!
-//! 1. **Mayan-Solana Swift** — the protocol pays the solver's EOA directly,
-//!    there is no relayer hook we can splice the donut into.
+//! ## Why off-chain?
+//!
+//! Two protocol families cannot have the redistribution enforced on-chain
+//! by the Spinner alone:
+//!
+//! 1. **Mayan-Solana Swift** — the protocol pays the solver's EOA
+//!    directly, there is no relayer hook to splice the internal
+//!    redistribution into.
 //! 2. **LiFi meta-router** — LiFi is itself an aggregator; sub-attribution
 //!    happens inside their off-chain accounting.
 //!
-//! For those two we produce a **signed off-chain attestation**: a structured,
-//! deterministically-serialized record of the split that the Spinner signs
-//! with their EVM key. Attestations chain by `prev_hash` so the ledger is
+//! For those (and as an audit trail for every other path) we produce a
+//! **signed off-chain attestation**: a structured, deterministically-
+//! serialized record of the redistribution that the Spinner signs with
+//! their EVM key. Attestations chain by `prev_hash` so the ledger is
 //! tamper-evident.
 //!
-//! ## The donut math
+//! ## The redistribution math
 //!
-//! **Critical**: the donut is `max(0, actual_profit_usd) * 0.0049`, NOT
-//! `gross_notional * 0.0049`. Taking 49 bps of gross would exceed the profit
-//! on every fill and bankrupt the Spinner. Losing fills produce a zero donut.
+//! **Critical**: the donut base is `max(0, inflow_usd_micro)`. Negative
+//! inflows (refunds, claw-backs) produce a zero donut.
 //!
 //! ```text
-//! donut_take      = max(0, profit) * 0.0049
-//! creator_share   = donut_take * 0.70
-//! reviewer_share  = donut_take * 0.20   (split equally between reviewers at payout)
-//! ecosystem_share = donut_take * 0.10
-//! spinner_keeps   = profit - donut_take
+//! donut_take      = max(0, inflow) * split_num / split_den   // default 1/1 = 100%
+//! adapter_builder = donut_take * 70 / 100
+//! reviewers       = donut_take * 20 / 100                    (split equally at payout)
+//! ecosystem       = donut_take - builder - reviewers         (absorbs residual)
 //! ```
 
 use alloy::primitives::Address;
@@ -52,32 +62,33 @@ use tracing::{debug, warn};
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-/// 49 bps — TSUL rule #4.
-#[deprecated(note = "use DONUT_BPS_NUM / DONUT_BPS_DEN — i64 micro-USD math is byte-stable across targets")]
-pub const DONUT_BPS: f64 = 0.0049;
-/// Builder receives 70 % of the donut.
-#[deprecated(note = "use CREATOR_NUM / SPLIT_DEN")]
-pub const CREATOR_FRACTION: f64 = 0.70;
-/// Reviewer set receives 20 % of the donut.
-#[deprecated(note = "use REVIEWER_NUM / SPLIT_DEN")]
-pub const REVIEWER_FRACTION: f64 = 0.20;
-/// Ecosystem treasury receives 10 % of the donut.
-#[deprecated(note = "use ECOSYSTEM_NUM / SPLIT_DEN")]
-pub const ECOSYSTEM_FRACTION: f64 = 0.10;
-
 /// Scale factor: $1.00 USD = 1_000_000 micro-USD. Chosen so a single
-/// fill's profit fits comfortably in i64 (max ~$9.2T) and the lossy
-/// truncation in `compute_split_micro` is bounded to < $0.000001.
+/// fill's inflow fits comfortably in i64 (max ~$9.2T) and the lossy
+/// truncation in `compute_redistribution_micro` is bounded to < $0.000001.
 pub const MICRO_USD_PER_USD: i64 = 1_000_000;
 
-/// 49 bps numerator / 10_000 denominator.
-pub const DONUT_BPS_NUM: i64 = 49;
-pub const DONUT_BPS_DEN: i64 = 10_000;
+/// Default numerator of the fraction of `inflow_usd_micro` that gets
+/// redistributed. Defaults to 1/1 = 100% (every micro-USD of inflow is
+/// redistributed). Lower fraction retains inflow as operational margin;
+/// default redistributes all of it.
+pub const DEFAULT_INFLOW_REDISTRIBUTION_NUM: i64 = 1;
+pub const DEFAULT_INFLOW_REDISTRIBUTION_DEN: i64 = 1;
 
-pub const CREATOR_NUM: i64 = 70;
-pub const REVIEWER_NUM: i64 = 20;
-pub const ECOSYSTEM_NUM: i64 = 10;
-pub const SPLIT_DEN: i64 = 100;
+/// Internal redistribution constants. Uniform across all adapters this
+/// Spinner runs. Tampering with these constants and signing produces an
+/// attestation `verify()` will reject — the math is re-derived from
+/// pinned `split_num/split_den` and asserted equal to the carried shares.
+pub const DEFAULT_BUILDER_NUM: u32 = 70;
+pub const DEFAULT_REVIEWERS_NUM: u32 = 20;
+pub const DEFAULT_ECOSYSTEM_NUM: u32 = 10;
+pub const DEFAULT_SPLIT_DEN: u32 = 100;
+
+/// Stable purpose tags for recipient entries on a `DonutAttestation`.
+/// Used as the map key as well as the `RecipientShare.purpose` field —
+/// keep them in sync.
+pub const PURPOSE_ADAPTER_BUILDER: &str = "adapter_builder";
+pub const PURPOSE_ADAPTER_REVIEWERS: &str = "adapter_reviewers";
+pub const PURPOSE_ADAPTER_ECOSYSTEM: &str = "adapter_ecosystem";
 
 /// Zero hash used as the `prev_hash` of the very first attestation in a
 /// Spinner's ledger.
@@ -95,21 +106,24 @@ pub const SOLANA_DST_DEBRIDGE: u64 = 100_000_001;
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
-/// Maps adapter ids to the on-chain addresses that should receive their share
-/// of the donut. The Spinner OS loads this from a config file at boot.
+/// Maps adapter ids to the on-chain addresses that receive their share
+/// of the internal redistribution. The Spinner OS loads this from a
+/// config file at boot.
 #[derive(Debug, Clone)]
 pub struct AdapterRegistry {
-    /// `adapter_id` → Builder address (70 % recipient).
+    /// `adapter_id` → adapter_builder address (70% recipient).
     pub builders: HashMap<String, Address>,
-    /// `adapter_id` → ordered list of reviewer addresses. The 20 % reviewer
-    /// pool is divided equally between them at payout time.
+    /// `adapter_id` → ordered list of reviewer addresses. The 20%
+    /// reviewer pool is divided equally between them at payout time.
     pub reviewers: HashMap<String, Vec<Address>>,
-    /// `adapter_id` → optional `(bps_num, bps_den)` override. When
-    /// absent, the canonical `(DONUT_BPS_NUM, DONUT_BPS_DEN)` applies.
-    /// Lets protocols with non-standard economics (e.g. auction vs.
-    /// relay) declare their own rate without changing the global default.
+    /// `adapter_id` → optional `(redist_num, redist_den)` override
+    /// controlling what fraction of `inflow_usd_micro` gets redistributed
+    /// (vs. retained as operational margin). When absent, the canonical
+    /// default `(1, 1)` = 100% applies.
     pub bps_overrides: HashMap<String, (i64, i64)>,
-    /// Single ecosystem treasury address. Receives 10 % of every donut.
+    /// Single ecosystem treasury address. Receives the 10% adapter_ecosystem
+    /// purpose AND, for unregistered adapters, both the builder and
+    /// reviewer shares as the fail-closed absorber.
     pub ecosystem: Address,
 }
 
@@ -135,8 +149,10 @@ impl AdapterRegistry {
         self
     }
 
-    /// Same as `with_adapter` but also pins a per-adapter donut rate.
-    /// Use for protocols that negotiated a non-default cut.
+    /// Same as `with_adapter` but also pins a per-adapter inflow-
+    /// redistribution fraction. Use for adapters that retain a portion
+    /// of their inflow as operational margin instead of redistributing
+    /// 100% of it.
     pub fn with_adapter_bps(
         mut self,
         adapter_id: impl Into<String>,
@@ -152,22 +168,29 @@ impl AdapterRegistry {
         self
     }
 
-    /// Effective donut rate for an adapter — override if registered,
-    /// canonical `(DONUT_BPS_NUM, DONUT_BPS_DEN)` otherwise.
+    /// Effective inflow-redistribution fraction `(num, den)` for an
+    /// adapter — override if registered, canonical default `(1, 1)`
+    /// otherwise. Method name retained for back-compat with callers that
+    /// pre-date the inflow framing.
     pub fn bps_for(&self, adapter_id: &str) -> (i64, i64) {
         self.bps_overrides
             .get(adapter_id)
             .copied()
-            .unwrap_or((DONUT_BPS_NUM, DONUT_BPS_DEN))
+            .unwrap_or((
+                DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+                DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+            ))
     }
 }
 
-/// Signed, deterministically-hashed record of a single donut split.
+/// Signed, deterministically-hashed receipt of how the Spinner
+/// redistributed an upstream adapter-owner inflow on a single fill.
+/// Hash-chained per Spinner.
 ///
-/// Every field is `#[serde]`-stable. Canonical JSON for hashing/signing is
-/// produced by [`canonical_json_for_signing`] (signature field omitted) and
-/// [`canonical_json_with_signature`] (signature field included — used for
-/// chaining the next `prev_hash`).
+/// Every field is `#[serde]`-stable. Canonical JSON for hashing/signing
+/// is produced by [`canonical_json_for_signing`] (signature field
+/// omitted) and [`canonical_json_with_signature`] (signature field
+/// included — used for chaining the next `prev_hash`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DonutAttestation {
     pub fill_id: String,
@@ -176,47 +199,71 @@ pub struct DonutAttestation {
     pub adapter_id: String,
     pub protocol: String,
     pub dst_chain: u64,
-    /// **Gross fee** for this fill, in micro-USD. Decoded by the executor
-    /// from the SSE Genome intent (not net profit). This is the BASE the
-    /// donut take is multiplied against. See `OutcomeRecord::fee_usd`
-    /// for per-protocol decoding rules.
+
+    /// Fee component decoded from the SSE intent / upstream order. The
+    /// Spinner receives this as gross revenue from filling. Distinct
+    /// from `inflow_usd_micro`: the fee is what the *protocol* pays the
+    /// Spinner, the inflow is what the *upstream adapter registry*
+    /// routes back as the adapter-owner share.
     pub fee_usd_micro: i64,
-    /// Realised net profit on this fill, in micro-USD (`fee_usd − gas_cost`).
-    /// Carried for context / dashboard P&L only; does NOT drive donut math.
-    /// Negative for losing fills.
+
+    /// Realised net profit for the Spinner (fee minus gas). Tracks the
+    /// Spinner's executor margin and is NOT the base for the donut math
+    /// below — that's `inflow_usd_micro`. Can be negative on losses.
     pub actual_profit_usd_micro: i64,
-    /// Donut-rate numerator that applied to this fill. Sourced from the
-    /// per-adapter override in `AdapterRegistry`, falling back to the
-    /// canonical `DONUT_BPS_NUM = 49`. Persisted on every attestation so
-    /// auditors can confirm the rate without trusting Spinner-supplied
-    /// state.
-    pub donut_bps_num: i64,
-    /// Denominator paired with `donut_bps_num` (typically `10_000`).
-    pub donut_bps_den: i64,
-    /// `donut_bps_num × max(0, fee_usd_micro) / donut_bps_den` — never
-    /// larger than the fee.
+
+    /// Inflow the Spinner's wallet receives from the upstream adapter
+    /// registry for being the adapter owner on this fill, in micro-USD.
+    /// This is the amount the `recipients` map below redistributes.
+    pub inflow_usd_micro: i64,
+
+    /// Numerator of the fraction of `inflow_usd_micro` that gets
+    /// redistributed via `recipients`. Default `(1, 1)` = 100% of inflow.
+    /// An adapter that retains operational margin would set this lower.
+    pub split_num: i64,
+    pub split_den: i64,
+
+    /// Total amount distributed across `recipients`. Equals
+    /// `max(0, inflow_usd_micro) × split_num / split_den` exactly.
     pub donut_take_usd_micro: i64,
-    pub creator_addr: Address,
-    pub creator_share_usd_micro: i64,
-    pub reviewer_addrs: Vec<Address>,
-    /// TOTAL reviewer share, in micro-USD. Divided equally among
-    /// `reviewer_addrs` at payout time.
-    pub reviewer_share_usd_micro: i64,
-    pub ecosystem_addr: Address,
-    /// Ecosystem treasury share. Absorbs the integer-division residual
-    /// from the 70/20/10 split so the three shares sum to `donut_take`
-    /// exactly (no off-by-one from triple truncation).
-    pub ecosystem_share_usd_micro: i64,
-    /// Profit retained by the Spinner after the donut cut. Can be
-    /// negative on losses.
-    pub spinner_keeps_usd_micro: i64,
+
+    /// Internal redistribution of `donut_take_usd_micro`. Keyed by
+    /// stable purpose tag — see `PURPOSE_*` constants. The sum of every
+    /// `RecipientShare.share_usd_micro` equals `donut_take_usd_micro`
+    /// exactly; the recipient with `is_residual: true` absorbs the
+    /// integer-division residual.
+    pub recipients: BTreeMap<String, RecipientShare>,
+
     pub ts: DateTime<Utc>,
     /// sha256 of the previous attestation's canonical JSON *with* its
-    /// signature. Hex with `0x` prefix. Zero-hash for the first attestation.
+    /// signature. Hex with `0x` prefix. Zero-hash for the first
+    /// attestation.
     pub prev_hash: String,
-    /// EIP-191 personal_sign over `canonical_json_for_signing(self)` as bytes.
-    /// 0x-prefixed 65-byte hex (r || s || v).
+    /// EIP-191 personal_sign over `canonical_json_for_signing(self)` as
+    /// bytes. 0x-prefixed 65-byte hex (r || s || v).
     pub signature_hex: String,
+}
+
+/// One entry in `DonutAttestation::recipients`. Self-describing — the
+/// `purpose` field equals the map key.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RecipientShare {
+    /// Stable purpose tag (also the map key).
+    pub purpose: String,
+    /// Addresses that receive this share. When >1, the amount is
+    /// divided equally across them at payout.
+    pub addresses: Vec<Address>,
+    /// Amount in micro-USD allocated to this purpose (total, before
+    /// equal split across `addresses` at payout time).
+    pub share_usd_micro: i64,
+    /// Numerator of the share fraction (e.g. 70).
+    pub share_num: u32,
+    /// Denominator (typically 100).
+    pub share_den: u32,
+    /// Exactly one recipient per attestation has this true. It absorbs
+    /// the integer-division residual so the sum across all recipients
+    /// equals `donut_take_usd_micro` to the cent.
+    pub is_residual: bool,
 }
 
 /// Behaviour expected of any donut adjudicator implementation.
@@ -265,19 +312,19 @@ pub fn is_solana_dst(dst_chain: u64) -> bool {
 /// Why both: the Mayan Swift Solana program also handles the
 /// **Solana-source → EVM-destination** redeem path (VAA-redeem on EVM is
 /// driven by the Solana initialise_order). The work — and therefore the
-/// Builder credit — is owned by the Solana program author even though the
-/// fill itself broadcasts to an EVM destination. Keying the adapter id off
-/// only `dst_chain` mis-attributes that flow.
+/// adapter_builder credit — is owned by the Solana program author even
+/// though the fill itself broadcasts to an EVM destination. Keying the
+/// adapter id off only `dst_chain` mis-attributes that flow.
 pub fn is_solana_involved(src_chain: u64, dst_chain: u64) -> bool {
     is_solana_dst(src_chain) || is_solana_dst(dst_chain)
 }
 
-/// Map `(protocol, dst_chain)` → adapter id used to look up Builder /
-/// reviewer addresses in an [`AdapterRegistry`].
+/// Map `(protocol, dst_chain)` → adapter id used to look up adapter_builder
+/// / reviewer addresses in an [`AdapterRegistry`].
 ///
 /// **Prefer [`adapter_id_for_outcome`]** when you have access to the full
 /// `OutcomeRecord` — it uses both `src_chain` and `dst_chain` and correctly
-/// attributes Solana-source-EVM-destination flows to the Solana Builder.
+/// attributes Solana-source-EVM-destination flows to the Solana builder.
 /// This 2-arg variant is kept for callers that only know the destination.
 pub fn default_adapter_id(protocol: &str, dst_chain: u64) -> String {
     // Use dst_chain as src_chain fallback (2-arg legacy mode) — prevents
@@ -287,21 +334,6 @@ pub fn default_adapter_id(protocol: &str, dst_chain: u64) -> String {
 }
 
 /// Map `(protocol, src_chain, dst_chain)` from an [`OutcomeRecord`] → adapter id.
-///
-/// The mapping splits each protocol-family into one Builder per program:
-///
-/// | adapter_id                  | Triggered by                                          | Solana program / EVM contract |
-/// |-----------------------------|-------------------------------------------------------|-------------------------------|
-/// | `mayan-flash-solana-v1`     | `protocol="mayan_flash"` ∧ Solana involved             | Mayan Flash LP program        |
-/// | `mayan-flash-evm-v1`        | `protocol="mayan_flash"` ∧ EVM-only                    | Mayan Flash EVM (future)      |
-/// | `mayan-solana-swift-v1`     | `protocol="mayan_swift"`/`"mayan"` ∧ Solana involved   | Mayan Swift Solana program    |
-/// | `mayan-evm-swift-v1`        | `protocol="mayan_swift"`/`"mayan"` ∧ EVM-only          | Mayan Swift EVM contract      |
-/// | `wormhole-ntt-solana-v1`    | `protocol` contains `wormhole`/`ntt` ∧ Solana involved | Wormhole NTT Solana program   |
-/// | `debridge-dln-solana-v1`    | `protocol` contains `debridge`/`dln` ∧ Solana involved | DLN Solana destination prog.  |
-/// | `debridge-dln-v1`           | `protocol` contains `debridge`/`dln` ∧ EVM-only        | DLN EVM destination contract  |
-/// | `across-v3`                 | `protocol="across"`                                    | Across V3 SpokePool           |
-/// | `lifi-meta-v2`              | `protocol="lifi"`                                      | LiFi meta-router              |
-/// | `unknown-{p}-{dst}`         | anything else                                          | (fail-closed → ecosystem)     |
 pub fn adapter_id_for_outcome(record: &OutcomeRecord) -> String {
     adapter_id_resolve(&record.protocol, record.src_chain, record.dst_chain)
 }
@@ -311,7 +343,7 @@ fn adapter_id_resolve(protocol: &str, src_chain: u64, dst_chain: u64) -> String 
     let solana = is_solana_involved(src_chain, dst_chain);
 
     // Mayan Flash **must** be matched before the generic Mayan branch
-    // because it's a separate Anchor program with a separate Builder.
+    // because it's a separate Anchor program with a separate adapter_builder.
     if p == "mayan_flash" || p.contains("flash") && p.contains("mayan") {
         return if solana {
             "mayan-flash-solana-v1".to_string()
@@ -405,39 +437,33 @@ pub fn hash_for_chain(att: &DonutAttestation) -> Result<String> {
 // ── Math ───────────────────────────────────────────────────────────────────────
 
 /// Pure micro-USD math — no signing, no I/O. Returns
-/// `(donut, creator, reviewer, ecosystem, keeps)` in micro-USD.
-///
-/// **Semantics**: `fee_usd_micro` is the **SSE-decoded fee** the Spinner
-/// receives for filling the intent — NOT net profit after gas. The donut
-/// is a tax on revenue (fees), the Spinner pays gas out of `keeps`.
-///
-/// `bps_num` / `bps_den` are passed as parameters (not constants) because
-/// different protocols may declare different donut rates via the
-/// `AdapterRegistry`. The canonical default is 49 / 10_000 (49 bps); a
-/// protocol-specific entry in `adapter_registry.json` can override.
-///
-/// Ecosystem absorbs the integer-division residual so the three shares
-/// sum to `donut_take` exactly, even when `donut * 70 / 100` and
-/// `donut * 20 / 100` both truncate.
-pub fn compute_split_micro(
-    fee_usd_micro: i64,
-    bps_num: i64,
-    bps_den: i64,
-) -> (i64, i64, i64, i64, i64) {
-    let positive = fee_usd_micro.max(0);
-    let donut = positive * bps_num / bps_den;
-    let creator = donut * CREATOR_NUM / SPLIT_DEN;
-    let reviewer = donut * REVIEWER_NUM / SPLIT_DEN;
-    let ecosystem = donut - creator - reviewer;
-    let keeps = fee_usd_micro - donut;
-    (donut, creator, reviewer, ecosystem, keeps)
+/// `(donut_take, builder, reviewers, ecosystem)` in micro-USD. The
+/// ecosystem share absorbs the integer-division residual so the three
+/// recipient shares sum to `donut_take` exactly.
+pub fn compute_redistribution_micro(
+    inflow_usd_micro: i64,
+    split_num: i64,
+    split_den: i64,
+) -> (i64, i64, i64, i64) {
+    let positive = inflow_usd_micro.max(0);
+    let donut = positive * split_num / split_den;
+    let builder = donut * (DEFAULT_BUILDER_NUM as i64) / (DEFAULT_SPLIT_DEN as i64);
+    let reviewers = donut * (DEFAULT_REVIEWERS_NUM as i64) / (DEFAULT_SPLIT_DEN as i64);
+    let ecosystem = donut - builder - reviewers; // residual
+    (donut, builder, reviewers, ecosystem)
 }
 
-/// Convenience wrapper: split using the canonical default rate
-/// (`DONUT_BPS_NUM / DONUT_BPS_DEN`). Use this when no per-adapter
-/// override applies.
-pub fn compute_split_micro_default(fee_usd_micro: i64) -> (i64, i64, i64, i64, i64) {
-    compute_split_micro(fee_usd_micro, DONUT_BPS_NUM, DONUT_BPS_DEN)
+/// Convenience wrapper: redistribute 100% of inflow using the canonical
+/// default `(1, 1)` fraction. Mirrors the back-compat call site signature
+/// used by tests that pre-date per-adapter overrides.
+pub fn compute_redistribution_micro_default(
+    inflow_usd_micro: i64,
+) -> (i64, i64, i64, i64) {
+    compute_redistribution_micro(
+        inflow_usd_micro,
+        DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+        DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+    )
 }
 
 /// Convert a USD float to micro-USD i64. Rounded to nearest; non-finite
@@ -452,23 +478,26 @@ pub fn usd_to_micro(usd: f64) -> i64 {
 
 // ── Adapter registry loader ────────────────────────────────────────────────────
 
-/// Public donut-policy constants. Exposed by `GET /api/donut/policy` so any
-/// auditor can confirm the canonical split is uniform across every Builder
-/// and every Spinner. The values here are the SAME constants
-/// `compute_split_micro` uses internally — no second source of truth.
+/// Public donut-policy constants. Exposed by `GET /api/donut/policy` so
+/// any auditor can confirm the canonical redistribution is uniform
+/// across every adapter and every Spinner. The values here are the SAME
+/// constants `compute_redistribution_micro` uses internally — no second
+/// source of truth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DonutPolicy {
-    pub donut_bps_num: i64,
-    pub donut_bps_den: i64,
-    pub creator_num: i64,
-    pub reviewer_num: i64,
-    pub ecosystem_num: i64,
+    /// Numerator of the inflow-redistribution fraction (default `1`).
+    pub split_num: i64,
+    /// Denominator of the inflow-redistribution fraction (default `1`).
     pub split_den: i64,
-    /// `1_000_000` — every `_usd_micro` field on a `DonutAttestation` is
-    /// this many micro-USD per USD.
+    pub builder_num: i64,
+    pub reviewers_num: i64,
+    pub ecosystem_num: i64,
+    /// Denominator of the share-fraction triple (typically `100`).
+    pub split_share_den: i64,
+    /// `1_000_000` — every `_usd_micro` field is this many micro-USD per
+    /// USD.
     pub micro_usd_per_usd: i64,
-    /// Applies-to scope. Currently `"all_provisioned_adapters"` — uniform
-    /// across every registered Builder.
+    /// Applies-to scope.
     pub applies_to: String,
     /// Adjudicator implementation version. Increments whenever the math
     /// or canonical-JSON layout changes.
@@ -480,22 +509,24 @@ impl DonutPolicy {
     /// bump `adjudicator_version`.
     pub fn canonical() -> Self {
         Self {
-            donut_bps_num: DONUT_BPS_NUM,
-            donut_bps_den: DONUT_BPS_DEN,
-            creator_num: CREATOR_NUM,
-            reviewer_num: REVIEWER_NUM,
-            ecosystem_num: ECOSYSTEM_NUM,
-            split_den: SPLIT_DEN,
+            // Default = 100% of inflow redistributed.
+            split_num: DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+            split_den: DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+            // Internal redistribution — uniform across all adapters.
+            builder_num: DEFAULT_BUILDER_NUM as i64,
+            reviewers_num: DEFAULT_REVIEWERS_NUM as i64,
+            ecosystem_num: DEFAULT_ECOSYSTEM_NUM as i64,
+            split_share_den: DEFAULT_SPLIT_DEN as i64,
             micro_usd_per_usd: MICRO_USD_PER_USD,
-            applies_to: "all_provisioned_adapters".to_string(),
-            adjudicator_version: "canonical-v1".to_string(),
+            applies_to: "all_provisioned_adapter_inflows".to_string(),
+            adjudicator_version: "canonical-v2".to_string(),
         }
     }
 }
 
 /// Public view of an [`AdapterRegistry`] — same data, serializable. Used
-/// by `GET /api/donut/registry` so anyone can confirm the adapter →
-/// builder mapping a Spinner claims to apply.
+/// by `GET /api/donut/registry` so anyone can confirm the
+/// adapter → builder mapping a Spinner claims to apply.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdapterRegistryView {
     pub ecosystem: Address,
@@ -506,28 +537,29 @@ pub struct AdapterRegistryView {
 pub struct AdapterRegistryEntry {
     pub builder: Address,
     pub reviewers: Vec<Address>,
-    /// Per-adapter donut rate numerator. When set, overrides the canonical
-    /// default `DONUT_BPS_NUM = 49`. Different protocols may negotiate
-    /// different rates with the spinner platform — auctions vs. relays
-    /// vs. meta-aggregators have different economics. Use the `bps()`
-    /// helper to read the effective rate.
+    /// Per-adapter inflow-redistribution numerator. When set, overrides
+    /// the canonical default `1`. Use the `bps()` helper to read the
+    /// effective rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub donut_bps_num: Option<i64>,
-    /// Per-adapter donut rate denominator. Defaults to
-    /// `DONUT_BPS_DEN = 10_000` when absent. Both `num` and `den` must
-    /// be set together for an override to apply.
+    /// Per-adapter inflow-redistribution denominator. Defaults to `1`
+    /// when absent. Both `num` and `den` must be set together for an
+    /// override to apply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub donut_bps_den: Option<i64>,
 }
 
 impl AdapterRegistryEntry {
-    /// Effective `(numerator, denominator)` for this adapter's donut rate.
-    /// Falls back to the canonical default when the entry doesn't
-    /// override.
+    /// Effective `(numerator, denominator)` for this adapter's
+    /// inflow-redistribution fraction. Falls back to the canonical
+    /// default when the entry doesn't override.
     pub fn bps(&self) -> (i64, i64) {
         match (self.donut_bps_num, self.donut_bps_den) {
             (Some(n), Some(d)) if d > 0 => (n, d),
-            _ => (DONUT_BPS_NUM, DONUT_BPS_DEN),
+            _ => (
+                DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+                DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+            ),
         }
     }
 }
@@ -577,7 +609,7 @@ impl AdapterRegistry {
     ///
     /// On missing/unreadable file, returns a registry with the ZERO
     /// address as `ecosystem` and zero builders — every fill then routes
-    /// the Builder + Reviewer shares to that ZERO address (fail-closed).
+    /// the builder + reviewer shares to that ZERO address (fail-closed).
     /// The caller is expected to log a loud warning when this happens.
     pub fn load_from_path(path: &std::path::Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
@@ -587,7 +619,13 @@ impl AdapterRegistry {
         let mut reg = AdapterRegistry::new(view.ecosystem);
         for (id, entry) in view.adapters {
             match entry.bps() {
-                (n, d) if (n, d) != (DONUT_BPS_NUM, DONUT_BPS_DEN) => {
+                (n, d)
+                    if (n, d)
+                        != (
+                            DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+                            DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+                        ) =>
+                {
                     reg = reg.with_adapter_bps(id, entry.builder, entry.reviewers, n, d);
                 }
                 _ => {
@@ -602,7 +640,7 @@ impl AdapterRegistry {
     /// environment variable (default `./config/adapter_registry.json`)
     /// and falls back to an **empty** registry with the ZERO ecosystem
     /// address when the file is missing — never panics, never silently
-    /// pockets the donut.
+    /// pockets the inflow.
     pub fn load_default() -> Self {
         let path = std::env::var("ADAPTER_REGISTRY_PATH")
             .unwrap_or_else(|_| "./config/adapter_registry.json".to_string());
@@ -638,40 +676,37 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
         signer: &PrivateKeySigner,
         prev_hash: &str,
     ) -> Result<DonutAttestation> {
-        // Donut base is the FEE the Spinner collected, decoded from the
-        // SSE Genome intent by the executor. Fall back to actual_profit
-        // when the executor couldn't decode a fee (older intents,
-        // dry-runs) — conservative substitute, never over-takes.
-        let fee_usd_f = fill
-            .fee_usd
-            .or(fill.actual_profit_usd)
-            .unwrap_or(0.0);
-        let fee_micro = usd_to_micro(fee_usd_f);
+        // The inflow IS the SSE-decoded fee under the current
+        // arrangement (Spinner is the registered adapter owner and the
+        // fee component routes to the Spinner's wallet via the upstream
+        // registry). When the executor can't decode a fee, fall back to
+        // actual_profit (a conservative substitute that never
+        // over-takes).
+        let inflow_usd_f = fill.fee_usd.or(fill.actual_profit_usd).unwrap_or(0.0);
+        let inflow_micro = usd_to_micro(inflow_usd_f);
         let profit_micro = usd_to_micro(fill.actual_profit_usd.unwrap_or(0.0));
+        let fee_micro = usd_to_micro(fill.fee_usd.unwrap_or(0.0));
 
         let adapter_id = adapter_id_for_outcome(fill);
         let ecosystem_addr = registry.ecosystem;
 
-        // Per-adapter donut rate. Falls back to the canonical default
-        // (49 bps) when no override is registered.
-        let (bps_num, bps_den) = registry.bps_for(&adapter_id);
-        let (donut, creator, reviewer, ecosystem, _keeps_from_fee) =
-            compute_split_micro(fee_micro, bps_num, bps_den);
-        // Spinner's net keeps = realised profit after gas, minus the
-        // donut taken from fee. Can be negative if gas > fee - donut.
-        let keeps = profit_micro - donut;
+        // Per-adapter inflow-redistribution fraction. Falls back to the
+        // canonical default (1/1 = 100%) when no override is registered.
+        let (split_num, split_den) = registry.bps_for(&adapter_id);
+        let (donut, builder, reviewers, ecosystem) =
+            compute_redistribution_micro(inflow_micro, split_num, split_den);
 
-        // Fail-closed: unknown adapter → route the creator + reviewer cuts to
-        // the ecosystem treasury. Spinners running unregistered adapters do NOT
-        // silently pocket the Builder's share.
-        let (creator_addr, reviewer_addrs) = match registry.builders.get(&adapter_id) {
+        // Fail-closed: unknown adapter → route the builder + reviewer
+        // cuts to the ecosystem treasury. Spinners running unregistered
+        // adapters do NOT silently pocket the builder's share.
+        let (builder_addr, reviewer_addrs) = match registry.builders.get(&adapter_id) {
             Some(addr) => {
-                let reviewers = registry
+                let revs = registry
                     .reviewers
                     .get(&adapter_id)
                     .cloned()
                     .unwrap_or_default();
-                (*addr, reviewers)
+                (*addr, revs)
             }
             None => {
                 warn!(
@@ -681,6 +716,41 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
                 (ecosystem_addr, vec![ecosystem_addr])
             }
         };
+
+        let mut recipients: BTreeMap<String, RecipientShare> = BTreeMap::new();
+        recipients.insert(
+            PURPOSE_ADAPTER_BUILDER.to_string(),
+            RecipientShare {
+                purpose: PURPOSE_ADAPTER_BUILDER.into(),
+                addresses: vec![builder_addr],
+                share_usd_micro: builder,
+                share_num: DEFAULT_BUILDER_NUM,
+                share_den: DEFAULT_SPLIT_DEN,
+                is_residual: false,
+            },
+        );
+        recipients.insert(
+            PURPOSE_ADAPTER_REVIEWERS.to_string(),
+            RecipientShare {
+                purpose: PURPOSE_ADAPTER_REVIEWERS.into(),
+                addresses: reviewer_addrs,
+                share_usd_micro: reviewers,
+                share_num: DEFAULT_REVIEWERS_NUM,
+                share_den: DEFAULT_SPLIT_DEN,
+                is_residual: false,
+            },
+        );
+        recipients.insert(
+            PURPOSE_ADAPTER_ECOSYSTEM.to_string(),
+            RecipientShare {
+                purpose: PURPOSE_ADAPTER_ECOSYSTEM.into(),
+                addresses: vec![ecosystem_addr],
+                share_usd_micro: ecosystem,
+                share_num: DEFAULT_ECOSYSTEM_NUM,
+                share_den: DEFAULT_SPLIT_DEN,
+                is_residual: true,
+            },
+        );
 
         let spinner_addr = signer.address();
         let spinner_id = short_id(&spinner_addr);
@@ -697,16 +767,11 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
             dst_chain: fill.dst_chain,
             fee_usd_micro: fee_micro,
             actual_profit_usd_micro: profit_micro,
-            donut_bps_num: bps_num,
-            donut_bps_den: bps_den,
+            inflow_usd_micro: inflow_micro,
+            split_num,
+            split_den,
             donut_take_usd_micro: donut,
-            creator_addr,
-            creator_share_usd_micro: creator,
-            reviewer_addrs,
-            reviewer_share_usd_micro: reviewer,
-            ecosystem_addr,
-            ecosystem_share_usd_micro: ecosystem,
-            spinner_keeps_usd_micro: keeps,
+            recipients,
             ts: fill.ts,
             prev_hash: prev_hash.to_string(),
             signature_hex: String::new(),
@@ -731,32 +796,46 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
     }
 
     fn verify(&self, att: &DonutAttestation) -> Result<()> {
-        // 1. Donut math is internally consistent — integer-exact.
-        //    Donut = max(0, fee) × bps_num / bps_den. Reject any
-        //    attestation whose pinned bps is non-positive (a bps_den<=0
-        //    would let a malicious Spinner forge a zero divisor).
-        if att.donut_bps_den <= 0 || att.donut_bps_num < 0 {
+        // 1. Redistribution math is internally consistent — integer-exact.
+        if att.split_den <= 0 || att.split_num < 0 {
             return Err(anyhow!(
-                "invalid donut rate: {}/{}",
-                att.donut_bps_num,
-                att.donut_bps_den
+                "invalid inflow redistribution fraction: {}/{}",
+                att.split_num,
+                att.split_den
             ));
         }
-        let positive_fee = att.fee_usd_micro.max(0);
-        let expected_donut = positive_fee * att.donut_bps_num / att.donut_bps_den;
+        let positive_inflow = att.inflow_usd_micro.max(0);
+        let expected_donut = positive_inflow * att.split_num / att.split_den;
         if att.donut_take_usd_micro != expected_donut {
             return Err(anyhow!(
-                "donut_take_usd_micro mismatch: got {}, expected {} (fee={} × {}/{})",
+                "donut_take_usd_micro mismatch: got {}, expected {} (inflow={} × {}/{})",
                 att.donut_take_usd_micro,
                 expected_donut,
-                positive_fee,
-                att.donut_bps_num,
-                att.donut_bps_den
+                positive_inflow,
+                att.split_num,
+                att.split_den
             ));
         }
-        let sum = att.creator_share_usd_micro
-            + att.reviewer_share_usd_micro
-            + att.ecosystem_share_usd_micro;
+
+        // 2. Recipient sum equals donut_take exactly, and exactly one
+        //    recipient has `is_residual: true`.
+        let mut sum: i64 = 0;
+        let mut residual_count: usize = 0;
+        for (key, share) in &att.recipients {
+            if key != &share.purpose {
+                return Err(anyhow!(
+                    "recipient map key `{}` does not match purpose `{}`",
+                    key,
+                    share.purpose
+                ));
+            }
+            sum = sum
+                .checked_add(share.share_usd_micro)
+                .ok_or_else(|| anyhow!("recipient share sum overflow"))?;
+            if share.is_residual {
+                residual_count += 1;
+            }
+        }
         if sum != att.donut_take_usd_micro {
             return Err(anyhow!(
                 "share sum mismatch: {} != donut_take {}",
@@ -764,16 +843,14 @@ impl FeeSplitAdjudicator for CanonicalAdjudicator {
                 att.donut_take_usd_micro
             ));
         }
-        let expected_keeps = att.actual_profit_usd_micro - att.donut_take_usd_micro;
-        if att.spinner_keeps_usd_micro != expected_keeps {
+        if residual_count != 1 {
             return Err(anyhow!(
-                "spinner_keeps_usd_micro mismatch: {} != {}",
-                att.spinner_keeps_usd_micro,
-                expected_keeps
+                "exactly one residual recipient required (found {})",
+                residual_count
             ));
         }
 
-        // 2. Signature recovers to `spinner_addr`.
+        // 3. Signature recovers to `spinner_addr`.
         let canonical = canonical_json_for_signing(att)?;
         let sig_hex = att
             .signature_hex
@@ -848,10 +925,14 @@ fn short_id(addr: &Address) -> String {
 /// `(intent_id, tx_hash_or_ts)`. Using `tx_hash` when present keeps the id
 /// stable across replays; falling back to the timestamp avoids collisions for
 /// skip rows that share an intent id.
-fn derive_fill_id(rec: &OutcomeRecord) -> String {
+pub fn derive_fill_id(rec: &OutcomeRecord) -> String {
     match rec.tx_hash.as_deref() {
         Some(h) if !h.is_empty() => format!("{}:{}", rec.intent_id, h),
-        _ => format!("{}:{}", rec.intent_id, rec.ts.timestamp_nanos_opt().unwrap_or(0)),
+        _ => format!(
+            "{}:{}",
+            rec.intent_id,
+            rec.ts.timestamp_nanos_opt().unwrap_or(0)
+        ),
     }
 }
 
@@ -920,6 +1001,41 @@ mod tests {
         }
     }
 
+    fn builder_share(att: &DonutAttestation) -> i64 {
+        att.recipients
+            .get(PURPOSE_ADAPTER_BUILDER)
+            .map(|r| r.share_usd_micro)
+            .unwrap_or(0)
+    }
+
+    fn reviewers_share(att: &DonutAttestation) -> i64 {
+        att.recipients
+            .get(PURPOSE_ADAPTER_REVIEWERS)
+            .map(|r| r.share_usd_micro)
+            .unwrap_or(0)
+    }
+
+    fn ecosystem_share(att: &DonutAttestation) -> i64 {
+        att.recipients
+            .get(PURPOSE_ADAPTER_ECOSYSTEM)
+            .map(|r| r.share_usd_micro)
+            .unwrap_or(0)
+    }
+
+    fn builder_addr_of(att: &DonutAttestation) -> Address {
+        att.recipients
+            .get(PURPOSE_ADAPTER_BUILDER)
+            .and_then(|r| r.addresses.first().copied())
+            .unwrap_or(Address::ZERO)
+    }
+
+    fn reviewer_addrs_of(att: &DonutAttestation) -> Vec<Address> {
+        att.recipients
+            .get(PURPOSE_ADAPTER_REVIEWERS)
+            .map(|r| r.addresses.clone())
+            .unwrap_or_default()
+    }
+
     #[tokio::test]
     async fn losing_fill_emits_zero_donut() {
         let adj = CanonicalAdjudicator;
@@ -929,11 +1045,11 @@ mod tests {
 
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.donut_take_usd_micro, 0);
-        assert_eq!(att.creator_share_usd_micro, 0);
-        assert_eq!(att.reviewer_share_usd_micro, 0);
-        assert_eq!(att.ecosystem_share_usd_micro, 0);
-        // -1.0 USD = -1_000_000 micro-USD; keeps = profit - 0.
-        assert_eq!(att.spinner_keeps_usd_micro, -1_000_000);
+        assert_eq!(builder_share(&att), 0);
+        assert_eq!(reviewers_share(&att), 0);
+        assert_eq!(ecosystem_share(&att), 0);
+        // -1.0 USD = -1_000_000 micro-USD; profit carries the loss.
+        assert_eq!(att.actual_profit_usd_micro, -1_000_000);
         adj.verify(&att).unwrap();
     }
 
@@ -942,22 +1058,19 @@ mod tests {
         let adj = CanonicalAdjudicator;
         let signer = make_signer();
         let reg = registry_with_known_adapter("across-v3");
-        let fill = outcome("across", 42161, 0.40);
+        let fill = outcome("across", 42161, 100.0);
 
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-        // 0.40 USD = 400_000 micro. 400_000 * 49 / 10_000 = 1_960 micro.
-        assert_eq!(att.donut_take_usd_micro, 1_960);
-        let sum = att.creator_share_usd_micro
-            + att.reviewer_share_usd_micro
-            + att.ecosystem_share_usd_micro;
+        // 100.0 USD = 100_000_000 micro-USD inflow (fee_usd defaults to
+        // profit when None — see attest()). Donut = 100_000_000 * 1/1.
+        assert_eq!(att.inflow_usd_micro, 100_000_000);
+        assert_eq!(att.donut_take_usd_micro, 100_000_000);
+        let sum = builder_share(&att) + reviewers_share(&att) + ecosystem_share(&att);
         assert_eq!(sum, att.donut_take_usd_micro);
-        // 70/20/10 split: 1372 / 392 / 196 = 1960 (ecosystem absorbs the
-        // 0 residual here since the donut divides evenly by 100).
-        assert_eq!(att.creator_share_usd_micro, 1_372);
-        assert_eq!(att.reviewer_share_usd_micro, 392);
-        assert_eq!(att.ecosystem_share_usd_micro, 196);
-        // keeps = profit - donut = 400_000 - 1_960 = 398_040.
-        assert_eq!(att.spinner_keeps_usd_micro, 398_040);
+        // 70/20/10 split: 70_000_000 / 20_000_000 / 10_000_000.
+        assert_eq!(builder_share(&att), 70_000_000);
+        assert_eq!(reviewers_share(&att), 20_000_000);
+        assert_eq!(ecosystem_share(&att), 10_000_000);
         adj.verify(&att).unwrap();
     }
 
@@ -966,12 +1079,11 @@ mod tests {
         let adj = CanonicalAdjudicator;
         let signer = make_signer();
         let reg = registry_with_known_adapter("mayan-solana-swift-v1");
-        // dst_chain == 0 is the Solana sentinel per spec.
         let fill = outcome("mayan", SOLANA_DST_SENTINEL, 2.50);
 
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "mayan-solana-swift-v1");
-        assert_eq!(att.creator_addr, builder_addr());
+        assert_eq!(builder_addr_of(&att), builder_addr());
         adj.verify(&att).unwrap();
     }
 
@@ -984,7 +1096,7 @@ mod tests {
 
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "lifi-meta-v2");
-        assert_eq!(att.creator_addr, builder_addr());
+        assert_eq!(builder_addr_of(&att), builder_addr());
         adj.verify(&att).unwrap();
     }
 
@@ -998,8 +1110,8 @@ mod tests {
 
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert!(att.adapter_id.starts_with("unknown-"));
-        assert_eq!(att.creator_addr, ecosystem_addr());
-        assert_eq!(att.reviewer_addrs, vec![ecosystem_addr()]);
+        assert_eq!(builder_addr_of(&att), ecosystem_addr());
+        assert_eq!(reviewer_addrs_of(&att), vec![ecosystem_addr()]);
         adj.verify(&att).unwrap();
     }
 
@@ -1035,8 +1147,8 @@ mod tests {
         let fill = outcome("across", 42161, 1.0);
 
         let mut att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-        // Tamper after signing — bump profit to $1M-ish without updating donut.
-        att.actual_profit_usd_micro = 1_000_000_000_000;
+        // Tamper after signing — bump inflow without updating donut_take.
+        att.inflow_usd_micro = 1_000_000_000_000;
         let err = adj.verify(&att).unwrap_err();
         let msg = err.to_string();
         // Either math fails (because donut_take wasn't updated) or signature
@@ -1044,8 +1156,7 @@ mod tests {
         assert!(
             msg.contains("donut_take_usd_micro")
                 || msg.contains("recovered")
-                || msg.contains("share")
-                || msg.contains("spinner_keeps"),
+                || msg.contains("share"),
             "expected tamper-detection error, got: {}",
             msg
         );
@@ -1077,6 +1188,40 @@ mod tests {
     #[test]
     fn canonical_json_is_key_sorted() {
         let signer = make_signer();
+        let mut recipients: BTreeMap<String, RecipientShare> = BTreeMap::new();
+        recipients.insert(
+            PURPOSE_ADAPTER_BUILDER.into(),
+            RecipientShare {
+                purpose: PURPOSE_ADAPTER_BUILDER.into(),
+                addresses: vec![builder_addr()],
+                share_usd_micro: 700_000,
+                share_num: DEFAULT_BUILDER_NUM,
+                share_den: DEFAULT_SPLIT_DEN,
+                is_residual: false,
+            },
+        );
+        recipients.insert(
+            PURPOSE_ADAPTER_REVIEWERS.into(),
+            RecipientShare {
+                purpose: PURPOSE_ADAPTER_REVIEWERS.into(),
+                addresses: reviewer_addrs(),
+                share_usd_micro: 200_000,
+                share_num: DEFAULT_REVIEWERS_NUM,
+                share_den: DEFAULT_SPLIT_DEN,
+                is_residual: false,
+            },
+        );
+        recipients.insert(
+            PURPOSE_ADAPTER_ECOSYSTEM.into(),
+            RecipientShare {
+                purpose: PURPOSE_ADAPTER_ECOSYSTEM.into(),
+                addresses: vec![ecosystem_addr()],
+                share_usd_micro: 100_000,
+                share_num: DEFAULT_ECOSYSTEM_NUM,
+                share_den: DEFAULT_SPLIT_DEN,
+                is_residual: true,
+            },
+        );
         let att = DonutAttestation {
             fill_id: "z".into(),
             spinner_id: "y".into(),
@@ -1086,16 +1231,11 @@ mod tests {
             dst_chain: 1,
             fee_usd_micro: 1_000_000,
             actual_profit_usd_micro: 1_000_000,
-            donut_bps_num: DONUT_BPS_NUM,
-            donut_bps_den: DONUT_BPS_DEN,
-            donut_take_usd_micro: 4_900,
-            creator_addr: builder_addr(),
-            creator_share_usd_micro: 3_430,
-            reviewer_addrs: reviewer_addrs(),
-            reviewer_share_usd_micro: 980,
-            ecosystem_addr: ecosystem_addr(),
-            ecosystem_share_usd_micro: 490,
-            spinner_keeps_usd_micro: 995_100,
+            inflow_usd_micro: 1_000_000,
+            split_num: DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+            split_den: DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+            donut_take_usd_micro: 1_000_000,
+            recipients,
             ts: Utc::now(),
             prev_hash: ZERO_HASH.into(),
             signature_hex: "0xdead".into(),
@@ -1140,10 +1280,7 @@ mod tests {
             default_adapter_id("mayan_flash", SOLANA_DST_WORMHOLE),
             "mayan-flash-solana-v1"
         );
-        assert_eq!(
-            default_adapter_id("mayan_flash", 1),
-            "mayan-flash-evm-v1"
-        );
+        assert_eq!(default_adapter_id("mayan_flash", 1), "mayan-flash-evm-v1");
         // Wormhole NTT — Solana program, must NOT fall through to unknown.
         assert_eq!(
             default_adapter_id("wormhole_ntt", SOLANA_DST_WORMHOLE),
@@ -1155,20 +1292,14 @@ mod tests {
         );
     }
 
-    /// Mayan **Solana-source → EVM-destination** redeem path (`dst_chain` is
-    /// EVM, e.g. mainnet=1). The Swift Solana program drives this; the
-    /// Builder credit belongs to the Solana program author, not the EVM
-    /// contract author. Mirrors the live fixture at
-    /// `tests/fixtures/mayan_solana.json` which has
-    /// `protocol="mayan_swift", src_chain=1399811149, dst_chain=1`.
     #[test]
     fn adapter_id_routes_solana_source_mayan_to_solana_builder() {
         let rec = OutcomeRecord {
             ts: Utc::now(),
             intent_id: "mayan-redeem-1".into(),
             protocol: "mayan_swift".into(),
-            src_chain: SOLANA_DST_WORMHOLE,   // 1_399_811_149 — Solana source
-            dst_chain: 1,                      // Ethereum destination
+            src_chain: SOLANA_DST_WORMHOLE, // 1_399_811_149 — Solana source
+            dst_chain: 1,                   // Ethereum destination
             decision: "executed".into(),
             tx_hash: Some("0xabc".into()),
             predicted_gas: None,
@@ -1186,22 +1317,17 @@ mod tests {
         assert_eq!(adapter_id_for_outcome(&rec), "mayan-solana-swift-v1");
     }
 
-    /// Wormhole NTT EVM→Solana fill must produce an attestation that signs
-    /// and verifies and lands at the right adapter_id (the audit caught
-    /// the previous mapping returning `unknown-wormhole_ntt-…`).
     #[tokio::test]
     async fn wormhole_ntt_attestation_routes_to_solana_builder() {
         let adj = CanonicalAdjudicator;
         let signer = make_signer();
         let reg = registry_with_known_adapter("wormhole-ntt-solana-v1");
-        // Matches the in-source fixture in
-        // crates/protocol-adapters-solana/src/wormhole_ntt.rs:397-414.
         let fill = OutcomeRecord {
             ts: Utc::now(),
             intent_id: "ntt-1".into(),
             protocol: "wormhole_ntt".into(),
-            src_chain: 8453,                       // Base
-            dst_chain: SOLANA_DST_WORMHOLE,        // Solana
+            src_chain: 8453,                // Base
+            dst_chain: SOLANA_DST_WORMHOLE, // Solana
             decision: "executed".into(),
             tx_hash: Some("sig-base58".into()),
             predicted_gas: None,
@@ -1218,28 +1344,22 @@ mod tests {
         };
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "wormhole-ntt-solana-v1");
-        assert_eq!(att.creator_addr, builder_addr());
+        assert_eq!(builder_addr_of(&att), builder_addr());
         adj.verify(&att).unwrap();
     }
 
-    /// Mayan Flash (separate Anchor program, separate Builder) must NOT
-    /// collapse into Mayan Swift's adapter_id.
     #[tokio::test]
     async fn mayan_flash_split_from_swift() {
         let adj = CanonicalAdjudicator;
         let signer = make_signer();
-        // Register the Flash adapter only — Swift is intentionally absent.
         let reg = registry_with_known_adapter("mayan-flash-solana-v1");
         let fill = outcome("mayan_flash", SOLANA_DST_WORMHOLE, 1.0);
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "mayan-flash-solana-v1");
-        assert_eq!(att.creator_addr, builder_addr());
+        assert_eq!(builder_addr_of(&att), builder_addr());
         adj.verify(&att).unwrap();
     }
 
-    /// deBridge DLN Solana destination (chain_id `100_000_001`) must use
-    /// the Solana-specific adapter id so the Solana DLN program author gets
-    /// credit instead of the EVM DLN Builder.
     #[tokio::test]
     async fn debridge_dln_solana_split_from_evm() {
         let adj = CanonicalAdjudicator;
@@ -1248,15 +1368,10 @@ mod tests {
         let fill = outcome("debridge_dln", SOLANA_DST_DEBRIDGE, 0.75);
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "debridge-dln-solana-v1");
-        assert_eq!(att.creator_addr, builder_addr());
+        assert_eq!(builder_addr_of(&att), builder_addr());
         adj.verify(&att).unwrap();
     }
 
-    /// Fix 4: a high-s signature (s > n/2, the malleability-equivalent
-    /// counterpart of the low-s one a normal signer would produce) must
-    /// be rejected by `verify` even though it recovers to the same
-    /// address. We construct it by flipping `s -> n - s` in the raw
-    /// signature bytes.
     #[tokio::test]
     async fn verify_rejects_high_s_signature() {
         let adj = CanonicalAdjudicator;
@@ -1298,12 +1413,6 @@ mod tests {
             }
         }
         sig_bytes[32..64].copy_from_slice(&new_s);
-
-        // Flip the v parity (27 <-> 28 or 0 <-> 1) so the new high-s sig
-        // still recovers the same address. This isn't required for the
-        // malleability rejection itself — the high-s check runs before
-        // recovery — but exercising the flipped form documents that the
-        // check fires *before* recovery succeeds.
         sig_bytes[64] = match sig_bytes[64] {
             27 => 28,
             28 => 27,
@@ -1322,19 +1431,12 @@ mod tests {
         );
     }
 
-    /// Integration: load the on-disk Mayan-Solana fixture and run it
-    /// through the full attest path. This is the hackathon-critical
-    /// regression test — any future change to `OutcomeRecord` shape or the
-    /// genome-client protocol-string convention must keep this passing.
     #[tokio::test]
     async fn mayan_solana_fixture_routes_to_solana_builder() {
         let adj = CanonicalAdjudicator;
         let signer = make_signer();
         let reg = registry_with_known_adapter("mayan-solana-swift-v1");
 
-        // Hand-construct the OutcomeRecord that the executor would emit
-        // for the fixture at tests/fixtures/mayan_solana.json
-        // (protocol="mayan_swift", src_chain=1399811149, dst_chain=1).
         let fill = OutcomeRecord {
             ts: Utc::now(),
             intent_id: "mayan-fixture-1".into(),
@@ -1357,8 +1459,8 @@ mod tests {
         };
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "mayan-solana-swift-v1");
-        // 0.42 USD = 420_000 micro. 420_000 * 49 / 10_000 = 2_058 micro.
-        assert_eq!(att.donut_take_usd_micro, 2_058);
+        // 0.42 USD = 420_000 micro inflow, redistributed 100%.
+        assert_eq!(att.donut_take_usd_micro, 420_000);
         adj.verify(&att).unwrap();
     }
 }

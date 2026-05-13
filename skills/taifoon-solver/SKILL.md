@@ -1,6 +1,6 @@
 ---
 name: taifoon-solver
-description: Use this skill whenever working in the /Users/mbaj/projects/taifoon-solver/ repo. It's a Rust workspace + Next.js dashboard for a cross-chain intent solver (Across, deBridge, Mayan, LiFi, Wormhole NTT — both EVM and Solana). The skill orients you to the donut fee-split (49 bps default × actual SSE-decoded fee, split 70/20/10), the Spinner / Solver / Builder hierarchy, the onboarding flow, and the test rigs. Triggers on any mention of Taifoon, Spinner, donut, TSUL, adapter_registry, solver-api, donut-adjudicator, or files under crates/ in this repo.
+description: Use this skill whenever working in the /Users/mbaj/projects/taifoon-solver/ repo. It's a Rust workspace + Next.js dashboard for a cross-chain intent solver (Across, deBridge, Mayan, LiFi, Wormhole NTT — both EVM and Solana). The skill orients you to the donut attestation flow (Spinner is the registered adapter owner; per-fill inflow is redistributed internally 70/20/10 to adapter_builder / adapter_reviewers / adapter_ecosystem), the Spinner / Solver / Builder hierarchy, the onboarding flow, and the test rigs. Triggers on any mention of Taifoon, Spinner, donut, adapter_registry, solver-api, donut-adjudicator, or files under crates/ in this repo.
 ---
 
 # Taifoon Solver — Orientation for Agents
@@ -13,45 +13,54 @@ that don't fit the obvious mental model.
 A solver that watches a cross-chain intent stream (Genome SSE), decides
 which intents to fill, and broadcasts fills through protocol adapters
 (Across, deBridge, Mayan Swift/Flash, LiFi, Wormhole NTT) on EVM and
-Solana. Every confirmed fill emits a **signed donut attestation** that
-splits the protocol fee 70 / 20 / 10 between the adapter Builder, the
-open-mamba reviewer set, and the ecosystem treasury.
+Solana. The Spinner is registered with the upstream order contract /
+fee distributor as the **adapter owner**; on each fill the Spinner's
+wallet receives a per-fill **inflow** as the adapter-owner share. Every
+confirmed fill emits a **signed donut attestation** that records how the
+Spinner redistributed that inflow internally to three purposes —
+adapter_builder (70%), adapter_reviewers (20%), adapter_ecosystem (10%).
 
 ## Three actors you must keep straight
 
 - **Spinner** = operator pod. Owns keys (Keychain on macOS), owns the
-  binary process, owns the capital. One Spinner can host many solver
-  modules. Registered in `crates/solver-api/src/hosting.rs::HostedSolver`.
+  binary process, owns the capital, and is the registered adapter
+  owner with the upstream order contract. One Spinner can host many
+  solver modules. Registered in
+  `crates/solver-api/src/hosting.rs::HostedSolver`.
 - **Solver module** = a protocol-family fill path inside the Spinner's
   binary. Code lives in `crates/executor/`.
-- **Builder** = developer who shipped an adapter contract. Receives the
-  70% donut creator-share. NOT the Spinner (usually). Configured in
-  `config/adapter_registry.json`.
+- **adapter_builder** = developer who shipped an adapter integration.
+  Receives the 70% share of the redistributed inflow. NOT the Spinner
+  (usually). Configured in `config/adapter_registry.json`.
 
-Reviewers (20%) live upstream in the private `yawningmonsoon/spinner`
-repo; we route their share to addresses listed under `reviewers` in
-`config/adapter_registry.json`. Ecosystem (10%) goes to a single address.
+adapter_reviewers (20%) are the open-mamba code-review agents
+registered for an adapter; the addresses live under `reviewers` in
+`config/adapter_registry.json`. adapter_ecosystem (10%) goes to a
+single address — the catch-all + fail-closed absorber.
 
 ## The donut math — fix the most common misconception first
 
-**The donut base is the SSE-decoded fee, NOT realised profit.** A Spinner
-collects a fee from filling an intent (Across relay fee, Mayan auction
-premium, deBridge spread, LiFi embedded fee, NTT bridge fee — all
-declared in the intent at submission). The donut comes out of that fee
-revenue. Gas is the Spinner's own cost, paid from what they keep.
+**The donut base is the upstream adapter-owner inflow, NOT realised
+profit and NOT the protocol fee itself.** The Spinner is the adapter
+owner with the upstream order contract. On each fill the upstream fee
+distributor routes a per-fill inflow to the Spinner's wallet; the donut
+attestation records how the Spinner redistributes that inflow
+internally. Under the current arrangement the inflow equals the SSE-
+decoded fee component on the intent.
 
 ```
-donut_take_usd_micro    = max(0, fee_usd_micro) × bps_num / bps_den
-creator_share_usd_micro = donut × 70 / 100           ──► Builder
-reviewer_share_usd_micro = donut × 20 / 100          ──► Reviewer set (split equally)
-ecosystem_share_usd_micro = donut − creator − reviewer  ──► Ecosystem (absorbs residual)
-spinner_keeps_usd_micro = actual_profit_usd_micro − donut   (gas is in profit)
+donut_take_usd_micro = max(0, inflow_usd_micro) × split_num / split_den
+recipients["adapter_builder"]    = donut × 70 / 100   ──► adapter_builder
+recipients["adapter_reviewers"]  = donut × 20 / 100   ──► reviewers (split equally)
+recipients["adapter_ecosystem"]  = donut − builder − reviewers (residual)
 ```
 
-`bps_num / bps_den` defaults to `49 / 10_000` (49 bps). Per-adapter
-overrides live in `config/adapter_registry.json` (optional
-`donut_bps_num` / `donut_bps_den` fields). The 70 / 20 / 10 split is
-fixed and uniform across all builders.
+`split_num / split_den` defaults to `1 / 1` (100% of inflow
+redistributed). Per-adapter overrides live in
+`config/adapter_registry.json` (optional `donut_bps_num` /
+`donut_bps_den` fields — the names predate the inflow framing). The
+70 / 20 / 10 internal split is fixed and uniform across all adapters
+this Spinner runs.
 
 All money is **i64 micro-USD** ($1.00 = 1_000_000). Floats only appear
 at the boundary (USD inputs from `OutcomeRecord.actual_profit_usd` /
@@ -146,7 +155,7 @@ mamba-messiah-key`). On Linux/CI use env vars from a secrets manager.
 
 ### "Modify the math"
 
-Change only `compute_split_micro` in
+Change only `compute_redistribution_micro` in
 `crates/donut-adjudicator/src/lib.rs`. Bump
 `DonutPolicy::canonical()`'s `adjudicator_version` string. Update every
 test in:
@@ -171,9 +180,9 @@ unverifiable.
 - **Never use float math for money** anywhere downstream of
   `usd_to_micro`. The whole point of the i64 migration was byte-stable
   signatures across platforms.
-- **Never silently route the Builder share to the Spinner** when an
-  adapter isn't registered. The adjudicator routes both 70% and 20% to
-  the ecosystem treasury as fail-closed behaviour. Tests cover this.
+- **Never silently route the adapter_builder share to the Spinner** when
+  an adapter isn't registered. The adjudicator routes both 70% and 20%
+  to the ecosystem treasury as fail-closed behaviour. Tests cover this.
 - **Never use `futures::executor::block_on` inside an axum handler.**
   SIWE verify is `async fn`; await it directly. Nested executors
   deadlock current-thread tokio.
@@ -185,16 +194,16 @@ unverifiable.
 
 ## Open work (good first issues)
 
-- **AttestationPump** in `crates/solver-main/src/main.rs` — background
-  task that polls `solver_outcomes` for new `executed` rows, signs an
-  attestation, POSTs to `/api/donut/attest`. The plumbing exists; the
-  loop doesn't.
-- **Dashboard `/policy` page** — renders `/api/donut/policy` +
-  `/api/donut/registry` as a public audit view.
+- **On-chain settlement reconciler** — when an on-chain contract
+  publishes for redistribution, the attestation flow stays and becomes
+  the off-chain reconciler against on-chain settlement.
 - **Per-platform RPC failover** in
   `crates/protocol-adapters-solana/src/send.rs` — current code uses one
   Solana RPC and retries on rate-limit; failover to a secondary endpoint
   would harden Mayan-Solana fills.
+- **Deploy box** — `deploy/` contains a containerised Spinner build for
+  operators who want to run an adapter operator pod without managing the
+  Rust toolchain locally.
 
 ## When in doubt
 

@@ -1,0 +1,29 @@
+# Keep the Docker build context small. target/ alone is gigabytes.
+target/
+**/target/
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+dist/
+**/dist/
+
+# IDE / OS noise
+.git/
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local secrets — must NEVER end up in the image.
+*.env
+.env
+.env.*
+*.pem
+*.key
+
+# Test artefacts
+coverage/
+.pytest_cache/
+__pycache__/
+*.pyc

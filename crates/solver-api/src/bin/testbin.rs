@@ -12,7 +12,9 @@
 //!    serialization in Python (Python's `json` and Rust's `serde_json` use
 //!    different float formatters in edge cases).
 //!
-//! `sign-attestation` stdin shape:
+//! `sign-attestation` stdin shape (back-compat field names — internally
+//! mapped to `adapter_builder` / `adapter_reviewers` / `adapter_ecosystem`
+//! recipients on the produced attestation):
 //!
 //! ```json
 //! {
@@ -145,9 +147,10 @@ fn sign_from_stdin() -> anyhow::Result<()> {
     };
 
     // Build a registry that maps the resolved adapter_id → the supplied
-    // creator + reviewers. The canonical adjudicator routes to ecosystem
-    // when the registry is empty, which is the fail-closed path — pass
-    // empty registry from Python to exercise that.
+    // adapter_builder + adapter_reviewers. The canonical adjudicator
+    // routes to ecosystem when the registry is empty, which is the
+    // fail-closed path — pass empty registry from Python to exercise
+    // that.
     //
     // adapter_id_for_outcome is what the adjudicator uses internally; we
     // need to call it the same way to know which key to insert into the

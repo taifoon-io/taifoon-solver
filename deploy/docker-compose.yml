@@ -1,0 +1,71 @@
+# Deployable adapter box — runs taifoon-solver as a containerised
+# Spinner pod against the live api.taifoon.dev surface. The operator's
+# private key never leaves the host: it's mounted read-only into
+# /data/keychain and loaded by the solver at boot.
+#
+# Required environment (export before `docker compose up -d`):
+#   - SOLVER_API_TOKEN      Bearer token from solver.taifoon.dev/onboard
+#   - SOLVER_PRIVATE_KEY    0x-prefixed hex (32-byte EVM secp256k1 key)
+#
+# Optional environment:
+#   - PORT                  External port to expose (default 8082)
+#   - DRY_RUN               "true" until the operator has dry-run + decides to go live
+#   - MAX_NOTIONAL_USD      Per-fill cap, e.g. "25"
+#   - ADAPTER_REGISTRY_PATH In-container path; default already correct
+#   - SIWE_DOMAIN           Domain pinning for SIWE messages
+#
+# The compose file mounts two named volumes:
+#   - solver_outcomes  → /data/outcomes  (SQLite append-only fill log)
+#   - solver_keychain  → /data/keychain  (read-only secret material)
+#
+# Health: the solver exposes /health on $PORT inside the container.
+
+services:
+  solver:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: taifoon-solver:latest
+    container_name: taifoon-solver
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8082}:8082"
+    environment:
+      # Wired by deploy/run.sh — required.
+      SOLVER_API_TOKEN: "${SOLVER_API_TOKEN:?SOLVER_API_TOKEN must be set}"
+      SOLVER_PRIVATE_KEY: "${SOLVER_PRIVATE_KEY:?SOLVER_PRIVATE_KEY must be set}"
+      # Upstream targets (public DNS — no secrets here).
+      SPINNER_API_URL: "${SPINNER_API_URL:-https://api.taifoon.dev}"
+      GENOME_SSE_URL: "${GENOME_SSE_URL:-https://api.taifoon.dev/api/genome/subscribe/sse}"
+      # Operational knobs.
+      DRY_RUN: "${DRY_RUN:-true}"
+      MAX_NOTIONAL_USD: "${MAX_NOTIONAL_USD:-10}"
+      RUST_LOG: "${RUST_LOG:-info}"
+      # Paths inside the container (match the volume mounts below).
+      ADAPTER_REGISTRY_PATH: "${ADAPTER_REGISTRY_PATH:-/config/adapter_registry.json}"
+      HOSTING_DB_PATH: "/data/outcomes/hosting.sqlite"
+      OUTCOME_DB_PATH: "/data/outcomes/outcomes.sqlite"
+      SIWE_DOMAIN: "${SIWE_DOMAIN:-solver.taifoon.dev}"
+    volumes:
+      - solver_outcomes:/data/outcomes
+      - solver_keychain:/data/keychain:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # The container drops to non-root inside the Dockerfile; harden the
+    # surface here too. seccomp + no-new-privileges keep the blast radius
+    # of any future RCE bug small.
+    security_opt:
+      - no-new-privileges:true
+    read_only: false   # SQLite needs to write under /data — leave RW
+    tmpfs:
+      - /tmp:size=64m
+
+volumes:
+  solver_outcomes:
+    name: taifoon_solver_outcomes
+  solver_keychain:
+    name: taifoon_solver_keychain

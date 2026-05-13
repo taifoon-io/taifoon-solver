@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'TSUL Donut Policy — Canonical fee split + adapter registry',
     description:
-      'The 49 bps × 70 / 20 / 10 split, applied uniformly across every provisioned adapter — verifiable by any auditor.',
+      'The 70 / 20 / 10 internal redistribution of adapter-owner inflow, applied uniformly across every provisioned adapter — verifiable by any auditor.',
     url: 'https://solver.taifoon.dev/policy',
     type: 'website',
   },

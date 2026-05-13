@@ -1,9 +1,10 @@
 # Donut Flow — End-to-End Architecture
 
-This is the canonical architecture document for the Taifoon donut fee-split
-flow: how a Spinner operator runs the solver, how every fill produces a
-signed attestation, and how the 70 / 20 / 10 split routes to the right
-addresses across **all provisioned builders**.
+This is the canonical architecture document for the Taifoon donut
+attestation flow: how a Spinner operator runs the solver, how every fill
+produces a signed attestation, and how the **internal redistribution of
+the upstream adapter-owner inflow** routes 70 / 20 / 10 to the right
+addresses for every adapter this Spinner runs.
 
 Treat this file as the single source of truth. The dashboard onboarding
 flow, the `SECURITY_ONBOARDING.md` runbook, and the per-crate doc
@@ -15,11 +16,11 @@ comments all derive from this.
 
 | Actor | Role | Owns |
 |---|---|---|
-| **Spinner** | Operator pod running the solver binary | Their own EVM + Solana keys (Keychain), the wallet capital, the binary process |
+| **Spinner** | Operator pod running the solver binary | Their own EVM + Solana keys (Keychain), the wallet capital, the binary process. **Also the registered adapter owner with the upstream order contract.** |
 | **Solver module** | A protocol-specific fill path | Inside the Spinner's binary — one module per protocol family |
-| **Builder** | Author of an adapter integration | The 70% donut creator-share at their EVM address |
-| **Reviewer set** | Open-mamba code-review agents in the upstream Spinner OS | The 20% reviewer-share, split equally |
-| **Ecosystem treasury** | Catch-all bucket | The 10% ecosystem-share AND any fail-closed routing |
+| **adapter_builder** | Author of an adapter integration | The 70% share of the redistributed inflow at their EVM address |
+| **adapter_reviewers** | Open-mamba code-review agents registered for the adapter | The 20% share, split equally between addresses listed in the registry |
+| **adapter_ecosystem** | Catch-all ecosystem treasury | The 10% share AND any fail-closed routing |
 
 No one centrally hosts a Spinner. Each operator runs their own binary on
 their own machine, holding their own keys. The Taifoon hosting registry
@@ -31,20 +32,23 @@ API-token issuance), not a custody service.
 ## 2. Where the donut amount comes from
 
 **Critical point that anchors everything else**: the donut base is the
-**SSE-decoded fee** that the Spinner collects for filling an intent, NOT
-the realised profit after gas. The donut is a tax on revenue (fees), not
-a tax on margin.
+**upstream adapter-owner inflow** that the Spinner's wallet receives on
+each fill, NOT the protocol fee itself and NOT the realised profit.
 
-Why: Across-style relayer fees, deBridge spreads, Mayan auction premia,
-LiFi embedded fees — these are all **declared in the intent at submission
-time** and stream over the Genome SSE feed. The Spinner reads them
-before broadcasting the fill. The donut is `(per-adapter bps) × fee`, the
-Spinner pays gas out of their net.
+The Spinner is registered with the upstream order contract / fee
+distributor as the adapter owner. On each fill, the upstream fee
+distributor splits the protocol-level fee (its own concern) and routes a
+small per-fill **inflow** to the Spinner's wallet as the adapter-owner
+share. The donut attestation records how the Spinner **redistributes that
+inflow internally** to the three recipient purposes.
 
-Per-protocol decoding rules live on the `OutcomeRecord::fee_usd` doc
-comment in `crates/executor/src/outcome_log.rs:53-71`:
+Under the current arrangement the inflow equals the SSE-decoded fee
+component on the intent — the Spinner's executor reads it from the
+Genome SSE feed and writes it into `OutcomeRecord.fee_usd`. Per-protocol
+decoding rules live on the `OutcomeRecord::fee_usd` doc comment in
+`crates/executor/src/outcome_log.rs:53-71`:
 
-| Protocol | Source of `fee_usd` |
+| Protocol | Source of `fee_usd` (= inflow under current arrangement) |
 |---|---|
 | Across V3 | `inputAmount − outputAmount` × token-USD-price |
 | deBridge DLN | `giveAmount − takeAmount` × token-USD-price |
@@ -52,12 +56,12 @@ comment in `crates/executor/src/outcome_log.rs:53-71`:
 | LiFi | embedded relay fee in the calldata |
 | Wormhole NTT | bridge-fee field on the NTT message |
 
-The `49 bps` we used to advertise is **the canonical default** — applied
-when an adapter doesn't declare its own rate. Protocols with different
-economics (auctions vs. relays vs. meta-aggregators) can declare a
-per-adapter rate in `config/adapter_registry.json` via the optional
-`donut_bps_num` / `donut_bps_den` fields. The 70 / 20 / 10 split applies
-to whatever donut amount results — that fraction stays uniform.
+The redistribution fraction defaults to `(1, 1)` = 100% of inflow gets
+redistributed. Adapters that need to retain operational margin can
+declare a per-adapter override in `config/adapter_registry.json` via the
+optional `donut_bps_num` / `donut_bps_den` fields. The 70 / 20 / 10
+split applies to whatever donut amount results — that fraction stays
+uniform across every adapter this Spinner runs.
 
 ---
 
@@ -135,16 +139,20 @@ to whatever donut amount results — that fraction stays uniform.
    │              to ./outcomes/mainnet_<ts>.sqlite                     │
    │                               │                                    │
    │                               ▼                                    │
-   │              AttestationPump  (TODO: planned crate)                │
+   │              AttestationPump                                       │
    │                ─ polls solver_outcomes for new executed rows       │
    │                ─ resolves adapter_id_for_outcome(&row)             │
-   │                ─ looks up builder + reviewers + bps in             │
-   │                  AdapterRegistry (loaded from                      │
+   │                ─ looks up adapter_builder + adapter_reviewers      │
+   │                  in AdapterRegistry (loaded from                   │
    │                  ./config/adapter_registry.json)                   │
    │                ─ CanonicalAdjudicator.attest(...)                  │
    │                  · canonical-JSON, EIP-191 signed                  │
-   │                  · math: donut = fee × bps_num / bps_den           │
-   │                          70/20/10 of that donut                    │
+   │                  · math: donut = max(0,inflow) ×                   │
+   │                                  split_num / split_den             │
+   │                          recipients =                              │
+   │                            adapter_builder    (70%)                │
+   │                            adapter_reviewers  (20%)                │
+   │                            adapter_ecosystem  (10%, residual)      │
    │                ─ POST /api/donut/attest with Bearer token          │
    │                ─ chains attestations via prev_hash                 │
    └─────────────────────────────────┬──────────────────────────────────┘
@@ -153,10 +161,11 @@ to whatever donut amount results — that fraction stays uniform.
    │                  PUBLIC AUDIT TRAIL (no auth)                       │
    │ ─────────────────────────────────────────────────────────────────── │
    │   GET /api/donut/policy                                             │
-   │       → { donut_bps_num: 49, donut_bps_den: 10000,                  │
-   │           creator_num: 70, reviewer_num: 20, ecosystem_num: 10,     │
-   │           applies_to: "all_provisioned_adapters",                   │
-   │           adjudicator_version: "canonical-v1" }                     │
+   │       → { split_num: 1, split_den: 1,                               │
+   │           builder_num: 70, reviewers_num: 20, ecosystem_num: 10,    │
+   │           split_share_den: 100,                                     │
+   │           applies_to: "all_provisioned_adapter_inflows",            │
+   │           adjudicator_version: "canonical-v2" }                     │
    │                                                                     │
    │   GET /api/donut/registry                                           │
    │       → { ecosystem, adapters: {                                    │
@@ -215,11 +224,12 @@ The map is exhaustive. Every box in the diagram has a code home.
 
 | Box | Symbol | Location |
 |---|---|---|
-| Canonical math (integer micro-USD, per-adapter bps) | `compute_split_micro(fee_micro, bps_num, bps_den)` | `src/lib.rs` |
-| Canonical default | `compute_split_micro_default(fee_micro)` | `src/lib.rs` |
+| Canonical math (integer micro-USD, per-adapter redistribution fraction) | `compute_redistribution_micro(inflow_micro, split_num, split_den)` | `src/lib.rs` |
+| Canonical default (100% redistribution) | `compute_redistribution_micro_default(inflow_micro)` | `src/lib.rs` |
 | USD → micro-USD boundary | `usd_to_micro(f64) -> i64` | `src/lib.rs` |
 | Adapter-id resolver | `adapter_id_for_outcome(&OutcomeRecord)` | `src/lib.rs` |
 | Sign + verify (EIP-191, low-`s`, hash chain) | `CanonicalAdjudicator::{attest, verify}` | `src/lib.rs` |
+| Recipient share struct | `RecipientShare { purpose, addresses, share_usd_micro, share_num, share_den, is_residual }` | `src/lib.rs` |
 | Policy struct | `DonutPolicy::canonical()` | `src/lib.rs` |
 | Registry loader | `AdapterRegistry::load_default()` / `load_from_path` | `src/lib.rs` |
 | Registry view (public JSON) | `AdapterRegistryView`, `AdapterRegistryEntry` | `src/lib.rs` |
@@ -234,13 +244,14 @@ The map is exhaustive. Every box in the diagram has a code home.
 | OutcomeRecord write on confirmed Solana fill | `LambdaController::append_solana_confirmed` | `crates/executor/src/lambda_controller.rs` |
 | MESSIAH key bootstrap (Keychain → secp256k1 signer) | `messiah::load_messiah_signer` | `crates/solver-main/src/messiah.rs` |
 | Solana key bootstrap | `keychain::load_solana_signer` | `crates/protocol-adapters-solana/src/keychain.rs` |
+| AttestationPump (background reconciler) | `attestation_pump::spawn_attestation_pump` | `crates/solver-main/src/attestation_pump.rs` |
 | Outcome log (SQLite, append-only) | `OutcomeLog`, `OutcomeRecord` | `crates/executor/src/outcome_log.rs` |
 
 ### Config
 
 | File | Purpose |
 |---|---|
-| `config/adapter_registry.json` | adapter_id → builder, reviewer set, optional per-adapter bps override |
+| `config/adapter_registry.json` | adapter_id → adapter_builder, adapter_reviewers, optional per-adapter redistribution-fraction override |
 | `config/chain_wiring.json` | chain ID → RPC URL + contract addresses |
 | `config/protocols_registry.json` | per-protocol metadata used by the genome decoder |
 
@@ -248,62 +259,69 @@ The map is exhaustive. Every box in the diagram has a code home.
 
 | File | What it covers |
 |---|---|
-| `crates/donut-adjudicator/src/lib.rs` (`#[cfg(test)]`) | Math, signature, hash chain, adapter_id mapping, low-`s` rejection, fail-closed routing |
+| `crates/donut-adjudicator/src/lib.rs` (`#[cfg(test)]`) | Math, signature, hash chain, adapter_id mapping, low-`s` rejection, fail-closed routing, residual-recipient invariant |
 | `crates/solver-sandbox/tests/solana_attestation_sandbox.rs` | All four Solana protocols routed through the adjudicator with the same fixture pattern |
 | `crates/solver-api/src/hosting.rs` (`#[cfg(test)]`) | SIWE nonce, EIP-55 casing, clock skew grace, persist round-trip, duplicate fill_id, bad chain link, spinner_id binding |
-| `tests/integration/test_user_journey.py` | End-to-end HTTP rig: onboarding, fund safety, active fills across all Solana protocols, 70/20/10 split, fail-closed, spinner_id binding regression |
+| `tests/integration/test_user_journey.py` | End-to-end HTTP rig: onboarding, fund safety, active fills across all Solana protocols, 70/20/10 redistribution, fail-closed, spinner_id binding regression |
 
 ---
 
-## 5. What enforces "uniform across all builders"
+## 5. What enforces "uniform across all adapters"
 
 Three layers, in increasing order of trust required:
 
-1. **Code layer.** The same `compute_split_micro` is called for every
-   attestation in every solver-main process. The 70 / 20 / 10 fractions
-   are `pub const` integer constants. The donut rate is per-adapter via
-   `AdapterRegistry::bps_for` — but it's pinned on each attestation and
+1. **Code layer.** The same `compute_redistribution_micro` is called for
+   every attestation in every solver-main process. The 70 / 20 / 10
+   share constants are `pub const` integer values. The per-adapter
+   redistribution fraction is per-adapter via `AdapterRegistry::bps_for`
+   — but it's pinned on each attestation (`split_num`, `split_den`) and
    re-verified by every reader. A Spinner cannot quietly change the
    policy on their own fills.
 
 2. **Attestation layer.** Every fill produces a signed `DonutAttestation`
-   that carries `donut_bps_num`, `donut_bps_den`, `creator_share_usd_micro`,
-   `reviewer_share_usd_micro`, `ecosystem_share_usd_micro`. The signature
-   recovers to the Spinner's EVM address. `verify()` re-derives the math
-   from `fee_usd_micro × bps` and rejects any deviation. The hash chain
-   stops a Spinner from silently re-writing history.
+   that carries `inflow_usd_micro`, `split_num`, `split_den`,
+   `donut_take_usd_micro`, and the full `recipients` map. The signature
+   recovers to the Spinner's EVM address. `verify()` re-derives the
+   math from `max(0, inflow_usd_micro) × split_num / split_den`, asserts
+   the recipients sum to that exactly, and asserts exactly one recipient
+   carries `is_residual: true`. The hash chain stops a Spinner from
+   silently re-writing history.
 
-3. **Public-audit layer.** `GET /api/donut/policy` publishes the canonical
-   constants. `GET /api/donut/registry` publishes the adapter → builder
-   map (with per-adapter bps where applicable). `GET /api/donut/ledger/:spinner_id`
-   publishes every attestation, signed and chained, for any auditor to
-   replay. The TSUL claim "uniform across all builders" is verifiable
-   without trusting the Spinner — any reader can re-compute the math from
-   `fee_usd_micro × bps × {70, 20, 10}` and confirm.
+3. **Public-audit layer.** `GET /api/donut/policy` publishes the
+   canonical constants. `GET /api/donut/registry` publishes the
+   adapter → builder map (with per-adapter override where applicable).
+   `GET /api/donut/ledger/:spinner_id` publishes every attestation,
+   signed and chained, for any auditor to replay. The claim
+   "uniform across all adapters" is verifiable without trusting the
+   Spinner — any reader can re-compute the math from
+   `inflow × split_num / split_den × {70, 20, 10}` and confirm.
 
-What this stack does NOT enforce: the *actual on-chain payout* of the
-70 % to the Builder. That requires the `BuildersRegistry` contract in
-the upstream Spinner OS to actually deploy on-chain and intercept the
-settlement leg. Today the attestation is the audit trail; the contract
-is the planned next step (see `LICENSE.md` and the TSUL pointer).
+### How the 70/20/10 fits the self-hosted model
+
+Every Spinner runs the binary on their own machine. The internal
+redistribution defined here is **uniform across all adapters this
+Spinner runs**. The upstream order contract / fee distributor handles
+the protocol-level split (the Spinner's adapter-owner inflow vs. the
+protocol's other downstream recipients) independently of this
+attestation — that split is not the Spinner's concern and not encoded
+in the donut math.
+
+A future Taifoon-hosted-box service (with a 2FA-decryption + keyless-
+signing project as a separate isolated provision layer) is researched
+but **not part of this repo** — today every operator self-hosts.
 
 ---
 
 ## 6. Open work
 
-What's NOT yet wired:
-
-- **AttestationPump** — the background task in `solver-main` that reads
-  `solver_outcomes` SQLite, signs attestations, POSTs to `/api/donut/attest`.
-  The plumbing for it (outcome log, adjudicator, route, registry loader)
-  is all in place; the loop binding them is not. See `crates/solver-main/src/main.rs`
-  for where to hook it.
-- **On-chain `BuildersRegistry`** — referenced in `LICENSE.md` and the
-  upstream `yawningmonsoon/spinner` repo (currently private). When that
-  contract publishes, the attestation flow stays — it becomes the
-  *off-chain reconciler* for the on-chain settlement.
-- **Dashboard `/policy` page** — reads `/api/donut/policy` + `/api/donut/registry`
-  and renders the adapter → builder table for visitors.
+- **On-chain settlement reconciler** — referenced in `LICENSE.md`. When
+  an on-chain settlement contract for the redistribution publishes, the
+  attestation flow stays — it becomes the *off-chain reconciler* for the
+  on-chain settlement.
+- **Per-platform RPC failover** in
+  `crates/protocol-adapters-solana/src/send.rs` — current code uses one
+  Solana RPC and retries on rate-limit; failover to a secondary endpoint
+  would harden Mayan-Solana fills.
 
 ---
 
@@ -313,7 +331,8 @@ What's NOT yet wired:
 |---|---|
 | Onboard as a Spinner | `solver.taifoon.dev/onboard`, then `SECURITY_ONBOARDING.md` |
 | Run a local dev rig | `python3 -m pytest tests/integration -v` (boots the test-server subprocess) |
-| Read the math | `crates/donut-adjudicator/src/lib.rs::compute_split_micro` |
+| Read the math | `crates/donut-adjudicator/src/lib.rs::compute_redistribution_micro` |
 | Add a new protocol adapter | `donut_adjudicator::default_adapter_id` + `config/adapter_registry.json` |
-| Audit a Spinner's claimed donut | `GET /api/donut/ledger/<spinner_id>` then re-verify with `CanonicalAdjudicator::verify` |
+| Audit a Spinner's claimed redistribution | `GET /api/donut/ledger/<spinner_id>` then re-verify with `CanonicalAdjudicator::verify` |
 | Verify the canonical policy | `GET /api/donut/policy` |
+| Deploy a Spinner as a containerised box | `deploy/README.md` |

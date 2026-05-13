@@ -3,7 +3,7 @@
  *
  * Server-rendered. Reads the same two endpoints every auditor reads:
  *
- *   GET /api/donut/policy    → canonical 49 bps × 70 / 20 / 10 constants
+ *   GET /api/donut/policy    → canonical 70 / 20 / 10 redistribution constants
  *   GET /api/donut/registry  → adapter → builder + reviewer map
  *
  * The page renders the three public-audit-layer artifacts described in
@@ -28,14 +28,14 @@ const SOLVER_API_URL =
   process.env.NEXT_PUBLIC_SOLVER_API_URL ??
   'http://127.0.0.1:8082'
 
-// Canonical fee-split shape published by /api/donut/policy.
+// Canonical inflow-redistribution shape published by /api/donut/policy.
 interface DonutPolicy {
-  donut_bps_num: number
-  donut_bps_den: number
-  creator_num: number
-  reviewer_num: number
-  ecosystem_num: number
+  split_num: number
   split_den: number
+  builder_num: number
+  reviewers_num: number
+  ecosystem_num: number
+  split_share_den: number
   micro_usd_per_usd: number
   applies_to: string
   adjudicator_version: string
@@ -69,15 +69,16 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`
 }
 
-// 49 / 10_000 → "49 bps". Computed defensively in case the server ever
-// publishes a different (numerator, denominator) pair: we always show
-// the math the canonical adjudicator does, not a hard-coded literal.
-function bpsLabel(num: number, den: number): string {
-  if (den === 0) return '— bps'
+// Render a (num, den) redistribution fraction as a human-readable label.
+// Default `1/1` renders as `100%`; per-adapter overrides render as the
+// resolved percentage or bps equivalent.
+function redistributionLabel(num: number, den: number): string {
+  if (den === 0) return '—'
+  const pct = (num / den) * 100
+  // Whole percent renders cleanly; otherwise show two decimals + bps.
+  if (Number.isInteger(pct)) return `${pct}%`
   const bps = (num / den) * 10_000
-  // Whole-number bps render without a decimal; fractional rates (rare
-  // — would require an adapter-specific override) keep two places.
-  return Number.isInteger(bps) ? `${bps} bps` : `${bps.toFixed(2)} bps`
+  return `${bps.toFixed(2)} bps`
 }
 
 // Fetch both endpoints in parallel. `cache: 'no-store'` keeps the page
@@ -139,11 +140,11 @@ export default async function PolicyPage() {
             <div>
               <Tag>The policy</Tag>
               <h1 className="tf-display tf-gradient-silver mt-4 text-[clamp(2rem,4vw,3rem)]">
-                TSUL Donut Policy.
+                Donut Policy.
               </h1>
               <p className="mt-3 text-[var(--text-secondary)] max-w-[620px] leading-relaxed">
-                The fee split applied uniformly across every provisioned
-                adapter. Reads straight from{' '}
+                The internal redistribution applied uniformly across every
+                provisioned adapter's inflow. Reads straight from{' '}
                 <code className="font-mono text-[var(--brand-blue)]">/api/donut/policy</code>{' '}
                 and{' '}
                 <code className="font-mono text-[var(--brand-blue)]">/api/donut/registry</code>{' '}
@@ -226,32 +227,32 @@ export default async function PolicyPage() {
               />
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-6 mt-2">
                 <StatTile
-                  label="Donut rate"
-                  value={bpsLabel(policy.donut_bps_num, policy.donut_bps_den)}
+                  label="Inflow redistributed"
+                  value={redistributionLabel(policy.split_num, policy.split_den)}
                   tone="blue"
                 />
                 <StatTile
-                  label="Creator share"
-                  value={`${Math.round((policy.creator_num / policy.split_den) * 100)}%`}
+                  label="adapter_builder"
+                  value={`${Math.round((policy.builder_num / policy.split_share_den) * 100)}%`}
                   tone="mint"
                 />
                 <StatTile
-                  label="Reviewer share"
-                  value={`${Math.round((policy.reviewer_num / policy.split_den) * 100)}%`}
+                  label="adapter_reviewers"
+                  value={`${Math.round((policy.reviewers_num / policy.split_share_den) * 100)}%`}
                   tone="violet"
                 />
                 <StatTile
-                  label="Ecosystem share"
-                  value={`${Math.round((policy.ecosystem_num / policy.split_den) * 100)}%`}
+                  label="adapter_ecosystem"
+                  value={`${Math.round((policy.ecosystem_num / policy.split_share_den) * 100)}%`}
                 />
               </div>
 
               {/* Raw constants strip — keeps the numerator/denominator
                   visible so auditors don't have to trust the % rounding. */}
               <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px] font-mono text-[var(--text-tertiary)]">
-                <ConstantPair label="bps_num" value={policy.donut_bps_num} />
-                <ConstantPair label="bps_den" value={policy.donut_bps_den} />
+                <ConstantPair label="split_num" value={policy.split_num} />
                 <ConstantPair label="split_den" value={policy.split_den} />
+                <ConstantPair label="split_share_den" value={policy.split_share_den} />
                 <ConstantPair
                   label="micro_usd_per_usd"
                   value={policy.micro_usd_per_usd.toLocaleString()}
@@ -261,17 +262,17 @@ export default async function PolicyPage() {
               <p className="mt-6 text-[12px] text-[var(--text-secondary)] leading-relaxed max-w-[760px]">
                 The{' '}
                 <span className="text-[var(--brand-blue)] font-mono">
-                  {bpsLabel(policy.donut_bps_num, policy.donut_bps_den)}
+                  {redistributionLabel(policy.split_num, policy.split_den)}
                 </span>{' '}
-                rate is a default. Individual adapters may declare a
-                different rate in their registry entry (visible in the table
-                below). The{' '}
+                redistribution fraction is the default. Individual adapters
+                may declare a per-adapter override in their registry entry
+                (visible in the table below). The{' '}
                 <span className="text-[var(--solana-mint)] font-mono">
-                  {Math.round((policy.creator_num / policy.split_den) * 100)} /{' '}
-                  {Math.round((policy.reviewer_num / policy.split_den) * 100)} /{' '}
-                  {Math.round((policy.ecosystem_num / policy.split_den) * 100)}
+                  {Math.round((policy.builder_num / policy.split_share_den) * 100)} /{' '}
+                  {Math.round((policy.reviewers_num / policy.split_share_den) * 100)} /{' '}
+                  {Math.round((policy.ecosystem_num / policy.split_share_den) * 100)}
                 </span>{' '}
-                split is uniform and not overridable. Applies to{' '}
+                internal split is uniform and not overridable. Applies to{' '}
                 <code className="font-mono text-[var(--text-primary)]">
                   {policy.applies_to}
                 </code>
@@ -291,8 +292,8 @@ export default async function PolicyPage() {
               />
               <AdapterTable
                 adapters={registry.adapters}
-                defaultBpsNum={policy.donut_bps_num}
-                defaultBpsDen={policy.donut_bps_den}
+                defaultBpsNum={policy.split_num}
+                defaultBpsDen={policy.split_den}
               />
             </Card>
           )}
@@ -301,7 +302,7 @@ export default async function PolicyPage() {
           {registry && (
             <Card padding="lg" className="mb-8">
               <CardHeader
-                title="Ecosystem treasury"
+                title="adapter_ecosystem treasury"
                 subtitle="Receives 10% of every donut. Also catches the 70% + 20% on fills routed through unregistered adapters (fail-closed)."
               />
               <div className="flex items-center gap-3 flex-wrap">
@@ -362,7 +363,7 @@ function ConstantPair({ label, value }: { label: string; value: number | string 
  *
  * We render the override column in mint when an adapter declares its own
  * rate so an auditor scanning the column can spot anything that diverges
- * from the canonical 49 bps default at a glance. Full addresses are
+ * from the canonical 1/1 (100%) default at a glance. Full addresses are
  * exposed via `title=` for copy-on-hover; the visible label is the
  * standard `0x1111…aaaa` truncation.
  */
@@ -452,7 +453,7 @@ function AdapterTable({
                         : `default ${defaultBpsNum}/${defaultBpsDen}`
                     }
                   >
-                    {bpsLabel(effectiveNum, effectiveDen)}
+                    {redistributionLabel(effectiveNum, effectiveDen)}
                     {hasOverride && (
                       <span className="ml-1.5 text-[9px] uppercase tracking-[0.18em]">
                         override

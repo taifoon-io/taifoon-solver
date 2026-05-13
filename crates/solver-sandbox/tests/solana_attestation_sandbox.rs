@@ -13,10 +13,10 @@
 //!   2. Resolve `adapter_id_for_outcome(&record)` and assert it matches
 //!      the expected Solana-specific id (no fall-through to "unknown-*").
 //!   3. Run `CanonicalAdjudicator::attest(...)` against an AdapterRegistry
-//!      seeded with all four Solana Builders.
-//!   4. Assert: the attestation's `creator_addr` is the expected Builder,
-//!      the 49 bps × 70/20/10 math sums to within 1e-9, and `verify()`
-//!      reproduces the signature.
+//!      seeded with all four Solana builders.
+//!   4. Assert: the attestation's adapter_builder recipient address is
+//!      the expected builder, the 70/20/10 redistribution math sums
+//!      exactly, and `verify()` reproduces the signature.
 //!
 //! Two additional tests cross-cut the per-protocol checks:
 //!
@@ -35,10 +35,13 @@
 use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use chrono::Utc;
+use alloy::primitives::Address as AlloyAddress;
 use donut_adjudicator::{
-    adapter_id_for_outcome, compute_split_micro_default, hash_for_chain, usd_to_micro,
+    adapter_id_for_outcome, compute_redistribution_micro_default, hash_for_chain, usd_to_micro,
     AdapterRegistry, CanonicalAdjudicator, DonutAttestation, FeeSplitAdjudicator,
-    DONUT_BPS_DEN, DONUT_BPS_NUM, SOLANA_DST_DEBRIDGE, SOLANA_DST_WORMHOLE, ZERO_HASH,
+    DEFAULT_INFLOW_REDISTRIBUTION_DEN, DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+    PURPOSE_ADAPTER_BUILDER, PURPOSE_ADAPTER_ECOSYSTEM, PURPOSE_ADAPTER_REVIEWERS,
+    SOLANA_DST_DEBRIDGE, SOLANA_DST_WORMHOLE, ZERO_HASH,
 };
 use executor::OutcomeRecord;
 
@@ -150,33 +153,59 @@ fn registry_with_all_solana_adapters() -> AdapterRegistry {
         )
 }
 
+fn share_for(att: &DonutAttestation, purpose: &str) -> i64 {
+    att.recipients
+        .get(purpose)
+        .map(|r| r.share_usd_micro)
+        .unwrap_or(0)
+}
+
+fn builder_addr_for(att: &DonutAttestation) -> AlloyAddress {
+    att.recipients
+        .get(PURPOSE_ADAPTER_BUILDER)
+        .and_then(|r| r.addresses.first().copied())
+        .unwrap_or(AlloyAddress::ZERO)
+}
+
+fn reviewer_addrs_for(att: &DonutAttestation) -> Vec<AlloyAddress> {
+    att.recipients
+        .get(PURPOSE_ADAPTER_REVIEWERS)
+        .map(|r| r.addresses.clone())
+        .unwrap_or_default()
+}
+
 /// Reusable post-attestation assertions. Every Solana protocol must
-/// satisfy the same invariants. The expected profit is taken as i64
+/// satisfy the same invariants. The expected inflow is taken as i64
 /// micro-USD now — call sites pass the same value they fed into the
 /// fixture's `profit_usd` field via `usd_to_micro`.
-fn assert_math_invariants(att: &DonutAttestation, expected_profit_usd_micro: i64) {
+fn assert_math_invariants(att: &DonutAttestation, expected_inflow_usd_micro: i64) {
     // Sandbox fixtures set `fee_usd = profit_usd` (see `solana_fill`),
-    // so the donut base equals the profit micro count. Use the canonical
-    // default rate — fixtures don't override.
-    let (expected_donut, expected_creator, expected_reviewer, expected_ecosystem, expected_keeps) =
-        compute_split_micro_default(expected_profit_usd_micro);
-    // Default bps is what the registry resolves to when no per-adapter
-    // override is registered.
-    assert_eq!(att.donut_bps_num, DONUT_BPS_NUM, "donut_bps_num mismatch");
-    assert_eq!(att.donut_bps_den, DONUT_BPS_DEN, "donut_bps_den mismatch");
+    // so the inflow base equals the profit micro count. Use the canonical
+    // default redistribution fraction — fixtures don't override.
+    let (expected_donut, expected_builder, expected_reviewers, expected_ecosystem) =
+        compute_redistribution_micro_default(expected_inflow_usd_micro);
+
     assert_eq!(
-        att.fee_usd_micro, expected_profit_usd_micro,
-        "fee_usd_micro mismatch (sandbox sets fee=profit)"
+        att.split_num, DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+        "split_num mismatch"
+    );
+    assert_eq!(
+        att.split_den, DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+        "split_den mismatch"
+    );
+    assert_eq!(
+        att.inflow_usd_micro, expected_inflow_usd_micro,
+        "inflow_usd_micro mismatch (sandbox sets fee=profit=inflow)"
     );
     assert_eq!(
         att.donut_take_usd_micro, expected_donut,
-        "donut_take_usd_micro: got {}, expected {} (profit_micro={})",
-        att.donut_take_usd_micro, expected_donut, expected_profit_usd_micro
+        "donut_take_usd_micro: got {}, expected {} (inflow={})",
+        att.donut_take_usd_micro, expected_donut, expected_inflow_usd_micro
     );
 
-    let sum = att.creator_share_usd_micro
-        + att.reviewer_share_usd_micro
-        + att.ecosystem_share_usd_micro;
+    let sum = share_for(att, PURPOSE_ADAPTER_BUILDER)
+        + share_for(att, PURPOSE_ADAPTER_REVIEWERS)
+        + share_for(att, PURPOSE_ADAPTER_ECOSYSTEM);
     assert_eq!(
         sum, att.donut_take_usd_micro,
         "shares {} don't sum to donut_take {}",
@@ -184,24 +213,19 @@ fn assert_math_invariants(att: &DonutAttestation, expected_profit_usd_micro: i64
     );
 
     assert_eq!(
-        att.creator_share_usd_micro, expected_creator,
-        "creator share off: {} vs {}",
-        att.creator_share_usd_micro, expected_creator
+        share_for(att, PURPOSE_ADAPTER_BUILDER),
+        expected_builder,
+        "builder share mismatch"
     );
     assert_eq!(
-        att.reviewer_share_usd_micro, expected_reviewer,
-        "reviewer share off: {} vs {}",
-        att.reviewer_share_usd_micro, expected_reviewer
+        share_for(att, PURPOSE_ADAPTER_REVIEWERS),
+        expected_reviewers,
+        "reviewers share mismatch"
     );
     assert_eq!(
-        att.ecosystem_share_usd_micro, expected_ecosystem,
-        "ecosystem share off: {} vs {}",
-        att.ecosystem_share_usd_micro, expected_ecosystem
-    );
-    assert_eq!(
-        att.spinner_keeps_usd_micro, expected_keeps,
-        "spinner_keeps off: {} vs {}",
-        att.spinner_keeps_usd_micro, expected_keeps
+        share_for(att, PURPOSE_ADAPTER_ECOSYSTEM),
+        expected_ecosystem,
+        "ecosystem share mismatch"
     );
 }
 
@@ -230,7 +254,7 @@ async fn mayan_swift_solana_source_routes_to_solana_builder() {
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
     assert_eq!(att.adapter_id, "mayan-solana-swift-v1");
-    assert_eq!(att.creator_addr, mayan_swift_solana_builder());
+    assert_eq!(builder_addr_for(&att), mayan_swift_solana_builder());
     assert_math_invariants(&att, usd_to_micro(0.42));
     adj.verify(&att).unwrap();
 }
@@ -254,7 +278,7 @@ async fn mayan_swift_solana_dest_routes_to_solana_builder() {
     assert_eq!(resolved, "mayan-solana-swift-v1");
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-    assert_eq!(att.creator_addr, mayan_swift_solana_builder());
+    assert_eq!(builder_addr_for(&att), mayan_swift_solana_builder());
     assert_math_invariants(&att, usd_to_micro(0.55));
     adj.verify(&att).unwrap();
 }
@@ -280,8 +304,8 @@ async fn mayan_flash_solana_routes_to_flash_builder() {
     assert_ne!(resolved, "mayan-solana-swift-v1");
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-    assert_eq!(att.creator_addr, mayan_flash_solana_builder());
-    assert_ne!(att.creator_addr, mayan_swift_solana_builder());
+    assert_eq!(builder_addr_for(&att), mayan_flash_solana_builder());
+    assert_ne!(builder_addr_for(&att), mayan_swift_solana_builder());
     assert_math_invariants(&att, usd_to_micro(0.75));
     adj.verify(&att).unwrap();
 }
@@ -307,7 +331,7 @@ async fn wormhole_ntt_solana_routes_to_ntt_builder() {
     assert_eq!(resolved, "wormhole-ntt-solana-v1");
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-    assert_eq!(att.creator_addr, wormhole_ntt_solana_builder());
+    assert_eq!(builder_addr_for(&att), wormhole_ntt_solana_builder());
     assert_math_invariants(&att, usd_to_micro(0.30));
     adj.verify(&att).unwrap();
 }
@@ -332,14 +356,14 @@ async fn debridge_dln_solana_routes_to_dln_solana_builder() {
     assert_eq!(resolved, "debridge-dln-solana-v1");
 
     let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
-    assert_eq!(att.creator_addr, debridge_dln_solana_builder());
+    assert_eq!(builder_addr_for(&att), debridge_dln_solana_builder());
     assert_math_invariants(&att, usd_to_micro(0.20));
     adj.verify(&att).unwrap();
 }
 
 /// Losing fill across every Solana protocol must produce zero donut and a
-/// negative `spinner_keeps_usd`. Verifies the attestation still signs and
-/// verifies — Spinners absorb the loss without being levied.
+/// negative `actual_profit_usd_micro`. Verifies the attestation still
+/// signs and verifies — Spinners absorb the loss without being levied.
 #[tokio::test]
 async fn losing_solana_fills_emit_zero_donut_per_protocol() {
     let adj = CanonicalAdjudicator;
@@ -363,14 +387,14 @@ async fn losing_solana_fills_emit_zero_donut_per_protocol() {
         );
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.donut_take_usd_micro, 0, "protocol={} donut should be 0 on loss", protocol);
-        assert_eq!(att.creator_share_usd_micro, 0);
-        assert_eq!(att.reviewer_share_usd_micro, 0);
-        assert_eq!(att.ecosystem_share_usd_micro, 0);
+        assert_eq!(share_for(&att, PURPOSE_ADAPTER_BUILDER), 0);
+        assert_eq!(share_for(&att, PURPOSE_ADAPTER_REVIEWERS), 0);
+        assert_eq!(share_for(&att, PURPOSE_ADAPTER_ECOSYSTEM), 0);
         // -0.50 USD = -500_000 micro-USD.
         assert_eq!(
-            att.spinner_keeps_usd_micro, -500_000,
-            "protocol={} spinner_keeps_usd_micro off: {}",
-            protocol, att.spinner_keeps_usd_micro
+            att.actual_profit_usd_micro, -500_000,
+            "protocol={} actual_profit_usd_micro off: {}",
+            protocol, att.actual_profit_usd_micro
         );
         adj.verify(&att).unwrap();
     }
@@ -495,7 +519,7 @@ async fn unregistered_solana_adapter_routes_to_ecosystem() {
     // adapter_id resolution still succeeds — it's the registry lookup
     // that fails-closed.
     assert_eq!(att.adapter_id, "mayan-solana-swift-v1");
-    assert_eq!(att.creator_addr, ecosystem_addr());
-    assert_eq!(att.reviewer_addrs, vec![ecosystem_addr()]);
+    assert_eq!(builder_addr_for(&att), ecosystem_addr());
+    assert_eq!(reviewer_addrs_for(&att), vec![ecosystem_addr()]);
     adj.verify(&att).unwrap();
 }

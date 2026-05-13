@@ -132,57 +132,69 @@ def sign_siwe(message: str, signer) -> str:
 
 ZERO_HASH = "0x" + "0" * 64
 
-# Back-compat float constants. Kept for tests that just want to express
-# the human-friendly fraction; not used in any signing path (we delegate
-# signing to the Rust binary which uses integer micro-USD math).
-DONUT_BPS = 0.0049
-CREATOR_FRAC = 0.70
-REVIEWER_FRAC = 0.20
-ECOSYSTEM_FRAC = 0.10
-
-# Integer micro-USD constants — mirror donut_adjudicator's MICRO_USD_PER_USD
-# and the bps numerator/denominator. Use these for byte-stable expected
-# math in Python tests.
+# Integer micro-USD constants — mirror donut_adjudicator's
+# MICRO_USD_PER_USD and the canonical inflow-redistribution defaults.
+# Use these for byte-stable expected math in Python tests.
 MICRO_USD_PER_USD = 1_000_000
-DONUT_BPS_NUM = 49
-DONUT_BPS_DEN = 10_000
-CREATOR_NUM = 70
-REVIEWER_NUM = 20
-ECOSYSTEM_NUM = 10
-SPLIT_DEN = 100
+DEFAULT_INFLOW_REDISTRIBUTION_NUM = 1
+DEFAULT_INFLOW_REDISTRIBUTION_DEN = 1
+DEFAULT_BUILDER_NUM = 70
+DEFAULT_REVIEWERS_NUM = 20
+DEFAULT_ECOSYSTEM_NUM = 10
+DEFAULT_SPLIT_DEN = 100
+
+# Stable recipient purpose tags (mirror the Rust constants).
+PURPOSE_ADAPTER_BUILDER = "adapter_builder"
+PURPOSE_ADAPTER_REVIEWERS = "adapter_reviewers"
+PURPOSE_ADAPTER_ECOSYSTEM = "adapter_ecosystem"
 
 
 def compute_split_micro(
-    fee_micro: int,
-    bps_num: int = DONUT_BPS_NUM,
-    bps_den: int = DONUT_BPS_DEN,
-) -> tuple[int, int, int, int, int]:
-    """Integer mirror of Rust's `compute_split_micro`. The donut base is
-    `fee_micro` (the SSE-decoded fee, not net profit). `bps_num` and
-    `bps_den` default to the canonical 49/10_000 — pass an override when
-    a per-adapter rate applies. Ecosystem absorbs the residual so the
-    three shares sum to donut_take exactly."""
-    positive = max(fee_micro, 0)
-    donut = positive * bps_num // bps_den
-    creator = donut * CREATOR_NUM // SPLIT_DEN
-    reviewer = donut * REVIEWER_NUM // SPLIT_DEN
-    ecosystem = donut - creator - reviewer
-    keeps = fee_micro - donut
-    return donut, creator, reviewer, ecosystem, keeps
+    inflow_micro: int,
+    split_num: int = DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+    split_den: int = DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+) -> tuple[int, int, int, int]:
+    """Integer mirror of Rust's `compute_redistribution_micro`. The
+    donut base is `inflow_micro` (the adapter-owner inflow from the
+    upstream order contract). `split_num` and `split_den` default to
+    `1/1` (100% redistribution) — pass an override when a per-adapter
+    fraction applies. Ecosystem absorbs the residual so the three
+    shares sum to donut_take exactly."""
+    positive = max(inflow_micro, 0)
+    donut = positive * split_num // split_den
+    builder = donut * DEFAULT_BUILDER_NUM // DEFAULT_SPLIT_DEN
+    reviewers = donut * DEFAULT_REVIEWERS_NUM // DEFAULT_SPLIT_DEN
+    ecosystem = donut - builder - reviewers
+    return donut, builder, reviewers, ecosystem
 
 
 def expected_split_micro(
-    fee_usd: float,
-    bps_num: int = DONUT_BPS_NUM,
-    bps_den: int = DONUT_BPS_DEN,
-) -> tuple[int, int, int, int, int]:
+    inflow_usd: float,
+    split_num: int = DEFAULT_INFLOW_REDISTRIBUTION_NUM,
+    split_den: int = DEFAULT_INFLOW_REDISTRIBUTION_DEN,
+) -> tuple[int, int, int, int]:
     """Caller-convenience wrapper: take a USD float (the same value the
     test feeds into `produce_attestation`'s `actual_profit_usd`, which
-    the testbin then mirrors into `fee_usd` for sandbox simplicity) and
-    return the expected `(donut, creator, reviewer, ecosystem, keeps)`
-    in micro-USD."""
-    fee_micro = round(fee_usd * MICRO_USD_PER_USD)
-    return compute_split_micro(fee_micro, bps_num, bps_den)
+    the testbin then mirrors into both `fee_usd` and the inflow for
+    sandbox simplicity) and return the expected
+    `(donut, builder, reviewers, ecosystem)` in micro-USD."""
+    inflow_micro = round(inflow_usd * MICRO_USD_PER_USD)
+    return compute_split_micro(inflow_micro, split_num, split_den)
+
+
+def builder_share(att: dict) -> int:
+    """Extract the `adapter_builder` recipient share from an attestation."""
+    return int(att["recipients"][PURPOSE_ADAPTER_BUILDER]["share_usd_micro"])
+
+
+def reviewers_share(att: dict) -> int:
+    """Extract the `adapter_reviewers` recipient share from an attestation."""
+    return int(att["recipients"][PURPOSE_ADAPTER_REVIEWERS]["share_usd_micro"])
+
+
+def ecosystem_share(att: dict) -> int:
+    """Extract the `adapter_ecosystem` recipient share from an attestation."""
+    return int(att["recipients"][PURPOSE_ADAPTER_ECOSYSTEM]["share_usd_micro"])
 
 
 def get_ledger_head(base_url: str, spinner_id: str) -> str:

@@ -5,7 +5,9 @@
 //!   - A unique `solver_id` (first 8 hex chars of their EVM address)
 //!   - An API token for their solver instance (auth for mutation endpoints)
 //!   - A signing_mode that determines key authority (session_key | remote_signer | self_hosted)
-//!   - TSUL fee routing: their address receives 70% of every donut touch via BuildersRegistry
+//!   - Donut redistribution routing: the donut attestation records how the
+//!     upstream adapter-owner inflow gets redistributed internally
+//!     (adapter_builder / adapter_reviewers / adapter_ecosystem).
 //!
 //! ## Key authority model
 //!
@@ -21,17 +23,19 @@
 //!    per fill (acceptable for 30-min deadline intents).
 //!
 //! 3. `self_hosted` — User runs their own solver binary. This registry entry is
-//!    purely for fleet-dashboard visibility and TSUL fee routing.
+//!    purely for fleet-dashboard visibility and donut accrual tracking.
 //!
-//! ## TSUL fee routing
+//! ## Inflow redistribution accounting
 //!
-//! Every fill calls `BuildersRegistry.recordRevenueTouch()` → 49 bps donut:
-//!   - 70% → participant's `evm_address` (TSUL rule #4)
-//!   - 20% → open-mamba reviewer set
-//!   - 10% → ecosystem treasury
+//! Every fill produces a signed donut attestation. The Spinner is the
+//! registered adapter owner with the upstream order contract; the
+//! adapter-owner inflow gets redistributed internally as:
+//!   - 70% → adapter_builder
+//!   - 20% → adapter_reviewers
+//!   - 10% → adapter_ecosystem
 //!
-//! This is enforced at the contract layer. The registry here tracks participants
-//! so the dashboard can display per-solver donut accrual.
+//! The registry here tracks participants so the dashboard can display
+//! per-solver donut accrual.
 
 use axum::{
     extract::{Path, State},
@@ -39,7 +43,8 @@ use axum::{
     http::StatusCode,
 };
 use donut_adjudicator::{
-    hash_for_chain, CanonicalAdjudicator, DonutAttestation, FeeSplitAdjudicator, ZERO_HASH,
+    hash_for_chain, CanonicalAdjudicator, DonutAttestation, FeeSplitAdjudicator,
+    PURPOSE_ADAPTER_BUILDER, ZERO_HASH,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -207,38 +212,39 @@ impl HostingRegistry {
                 donut_accrued_usd_micro INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS donut_attestations (
-                fill_id                    TEXT PRIMARY KEY,
-                spinner_id                 TEXT NOT NULL,
-                spinner_addr               TEXT NOT NULL,
-                adapter_id                 TEXT NOT NULL,
-                protocol                   TEXT NOT NULL,
-                dst_chain                  INTEGER NOT NULL,
-                fee_usd_micro              INTEGER NOT NULL DEFAULT 0,
-                actual_profit_usd_micro    INTEGER NOT NULL,
-                donut_bps_num              INTEGER NOT NULL DEFAULT 49,
-                donut_bps_den              INTEGER NOT NULL DEFAULT 10000,
-                donut_take_usd_micro       INTEGER NOT NULL,
-                creator_addr               TEXT NOT NULL,
-                creator_share_usd_micro    INTEGER NOT NULL,
-                reviewer_addrs_json        TEXT NOT NULL,
-                reviewer_share_usd_micro   INTEGER NOT NULL,
-                ecosystem_addr             TEXT NOT NULL,
-                ecosystem_share_usd_micro  INTEGER NOT NULL,
-                spinner_keeps_usd_micro    INTEGER NOT NULL,
-                ts                         TEXT NOT NULL,
-                prev_hash                  TEXT NOT NULL,
-                signature_hex              TEXT NOT NULL
+                fill_id                  TEXT PRIMARY KEY,
+                spinner_id               TEXT NOT NULL,
+                spinner_addr             TEXT NOT NULL,
+                adapter_id               TEXT NOT NULL,
+                protocol                 TEXT NOT NULL,
+                dst_chain                INTEGER NOT NULL,
+                fee_usd_micro            INTEGER NOT NULL DEFAULT 0,
+                actual_profit_usd_micro  INTEGER NOT NULL DEFAULT 0,
+                inflow_usd_micro         INTEGER NOT NULL DEFAULT 0,
+                split_num                INTEGER NOT NULL DEFAULT 1,
+                split_den                INTEGER NOT NULL DEFAULT 1,
+                donut_take_usd_micro     INTEGER NOT NULL DEFAULT 0,
+                recipients_json          TEXT NOT NULL,
+                ts                       TEXT NOT NULL,
+                prev_hash                TEXT NOT NULL,
+                signature_hex            TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_donut_spinner ON donut_attestations(spinner_id, ts);
         ")?;
 
-        // Idempotent migration for pre-fee-base dev databases. Each column
-        // is added independently with the appropriate default so the
-        // existing rows back-fill cleanly.
+        // Idempotent migrations: add the new schema columns to
+        // pre-existing dev databases. The previous schema's
+        // `creator_*` / `reviewer_*` / `ecosystem_*` columns may remain
+        // in the table but are no longer read or written — only the
+        // new columns participate in INSERT / SELECT.
         for col_sql in [
             "ALTER TABLE donut_attestations ADD COLUMN fee_usd_micro INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE donut_attestations ADD COLUMN donut_bps_num INTEGER NOT NULL DEFAULT 49",
-            "ALTER TABLE donut_attestations ADD COLUMN donut_bps_den INTEGER NOT NULL DEFAULT 10000",
+            "ALTER TABLE donut_attestations ADD COLUMN actual_profit_usd_micro INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE donut_attestations ADD COLUMN inflow_usd_micro INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE donut_attestations ADD COLUMN split_num INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE donut_attestations ADD COLUMN split_den INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE donut_attestations ADD COLUMN donut_take_usd_micro INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE donut_attestations ADD COLUMN recipients_json TEXT NOT NULL DEFAULT '{}'",
         ] {
             match conn.execute(col_sql, []) {
                 Ok(_) => {}
@@ -553,11 +559,12 @@ impl HostingRegistry {
     /// 2. `prev_hash` must equal the current ledger head for this Spinner —
     ///    or [`ZERO_HASH`] when the Spinner has never attested before.
     /// 3. The row is inserted; a duplicate `fill_id` returns [`PersistError::DuplicateFill`].
-    /// 4. `hosted_solvers.donut_accrued_usd_micro` is incremented by
-    ///    `att.creator_share_usd_micro` **only** if `att.creator_addr` matches the
-    ///    Spinner's registered `evm_address` — i.e. the Spinner is also the
-    ///    Builder of the adapter that produced the fill. Other Spinners do
-    ///    not get a counter bump for running someone else's adapter.
+    /// 4. `hosted_solvers.donut_accrued_usd_micro` is incremented by the
+    ///    `adapter_builder` recipient share **only** if the Spinner's
+    ///    registered `evm_address` is one of the addresses in that
+    ///    recipient — i.e. the Spinner is also the builder of the
+    ///    adapter that produced the fill. Other Spinners do not get a
+    ///    counter bump for running someone else's adapter.
     pub fn persist_attestation(&self, att: &DonutAttestation) -> Result<(), PersistError> {
         // 1) signature + math. `verify` recovers the address from the
         // signature and asserts it equals `att.spinner_addr`, binding the
@@ -598,17 +605,31 @@ impl HostingRegistry {
         }
 
         // 3) insert (PK collision on fill_id → DuplicateFill)
-        let reviewer_addrs_json = serde_json::to_string(&att.reviewer_addrs)
+        let recipients_json = serde_json::to_string(&att.recipients)
             .map_err(|e| PersistError::Internal(e.to_string()))?;
         let spinner_addr_hex = format!("{:#x}", att.spinner_addr);
-        let creator_addr_hex = format!("{:#x}", att.creator_addr);
-        let ecosystem_addr_hex = format!("{:#x}", att.ecosystem_addr);
         let ts_str = att.ts.to_rfc3339();
 
+        // Builder recipient — used both for the INSERT JSON payload and
+        // for deciding whether the Spinner is also the adapter_builder.
+        let builder_share_micro: i64 = att
+            .recipients
+            .get(PURPOSE_ADAPTER_BUILDER)
+            .map(|r| r.share_usd_micro)
+            .unwrap_or(0);
+        let builder_addrs: Vec<String> = att
+            .recipients
+            .get(PURPOSE_ADAPTER_BUILDER)
+            .map(|r| {
+                r.addresses
+                    .iter()
+                    .map(|a| format!("{:#x}", a).trim_start_matches("0x").to_ascii_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // INSERT + UPDATE wrapped in a single SQLite transaction so a
-        // crash between the two leaves the database in a consistent state
-        // (hackathon-audit HIGH severity). `db.transaction()` requires
-        // `&mut Connection` which we get via `MutexGuard::deref_mut`.
+        // crash between the two leaves the database in a consistent state.
         {
             let mut db = self.db.lock().unwrap();
             let tx = db
@@ -619,12 +640,10 @@ impl HostingRegistry {
                 "INSERT INTO donut_attestations (
                     fill_id, spinner_id, spinner_addr, adapter_id, protocol,
                     dst_chain, fee_usd_micro, actual_profit_usd_micro,
-                    donut_bps_num, donut_bps_den, donut_take_usd_micro,
-                    creator_addr, creator_share_usd_micro, reviewer_addrs_json,
-                    reviewer_share_usd_micro, ecosystem_addr,
-                    ecosystem_share_usd_micro, spinner_keeps_usd_micro,
+                    inflow_usd_micro, split_num, split_den,
+                    donut_take_usd_micro, recipients_json,
                     ts, prev_hash, signature_hex
-                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
                 params![
                     att.fill_id,
                     att.spinner_id,
@@ -634,26 +653,18 @@ impl HostingRegistry {
                     att.dst_chain as i64,
                     att.fee_usd_micro,
                     att.actual_profit_usd_micro,
-                    att.donut_bps_num,
-                    att.donut_bps_den,
+                    att.inflow_usd_micro,
+                    att.split_num,
+                    att.split_den,
                     att.donut_take_usd_micro,
-                    creator_addr_hex,
-                    att.creator_share_usd_micro,
-                    reviewer_addrs_json,
-                    att.reviewer_share_usd_micro,
-                    ecosystem_addr_hex,
-                    att.ecosystem_share_usd_micro,
-                    att.spinner_keeps_usd_micro,
+                    recipients_json,
                     ts_str,
                     att.prev_hash,
                     att.signature_hex,
                 ],
             );
             if let Err(e) = res {
-                // SQLite primary-key violation → duplicate fill.
                 let msg = e.to_string();
-                // Transaction will roll back when `tx` is dropped without
-                // commit. Explicitly drop here for clarity.
                 drop(tx);
                 if msg.contains("UNIQUE constraint failed")
                     || msg.contains("PRIMARY KEY constraint")
@@ -663,8 +674,10 @@ impl HostingRegistry {
                 return Err(PersistError::Internal(msg));
             }
 
-            // Bump `donut_accrued_usd` only when the Spinner == Builder.
-            // Compare both hex addresses lowercased without 0x.
+            // Bump `donut_accrued_usd_micro` only when the Spinner's
+            // registered evm_address is one of the addresses in the
+            // adapter_builder recipient — i.e. the Spinner is also the
+            // builder of the adapter that produced the fill.
             let solver_evm: Option<String> = tx
                 .query_row(
                     "SELECT evm_address FROM hosted_solvers WHERE solver_id = ?1",
@@ -674,13 +687,12 @@ impl HostingRegistry {
                 .ok();
             if let Some(evm) = solver_evm {
                 let evm_norm = evm.trim_start_matches("0x").to_ascii_lowercase();
-                let creator_norm = creator_addr_hex.trim_start_matches("0x").to_ascii_lowercase();
-                if evm_norm == creator_norm {
+                if builder_addrs.iter().any(|a| a == &evm_norm) {
                     tx.execute(
                         "UPDATE hosted_solvers
                          SET donut_accrued_usd_micro = donut_accrued_usd_micro + ?1
                          WHERE solver_id = ?2",
-                        params![att.creator_share_usd_micro, att.spinner_id],
+                        params![builder_share_micro, att.spinner_id],
                     )
                     .map_err(|e| PersistError::Internal(e.to_string()))?;
                 }
@@ -708,10 +720,8 @@ impl HostingRegistry {
         let mut stmt = db.prepare(
             "SELECT fill_id, spinner_id, spinner_addr, adapter_id, protocol,
                     dst_chain, fee_usd_micro, actual_profit_usd_micro,
-                    donut_bps_num, donut_bps_den, donut_take_usd_micro,
-                    creator_addr, creator_share_usd_micro, reviewer_addrs_json,
-                    reviewer_share_usd_micro, ecosystem_addr,
-                    ecosystem_share_usd_micro, spinner_keeps_usd_micro,
+                    inflow_usd_micro, split_num, split_den,
+                    donut_take_usd_micro, recipients_json,
                     ts, prev_hash, signature_hex
              FROM donut_attestations
              WHERE spinner_id = ?1
@@ -745,10 +755,8 @@ impl HostingRegistry {
         let mut stmt = db.prepare(
             "SELECT fill_id, spinner_id, spinner_addr, adapter_id, protocol,
                     dst_chain, fee_usd_micro, actual_profit_usd_micro,
-                    donut_bps_num, donut_bps_den, donut_take_usd_micro,
-                    creator_addr, creator_share_usd_micro, reviewer_addrs_json,
-                    reviewer_share_usd_micro, ecosystem_addr,
-                    ecosystem_share_usd_micro, spinner_keeps_usd_micro,
+                    inflow_usd_micro, split_num, split_den,
+                    donut_take_usd_micro, recipients_json,
                     ts, prev_hash, signature_hex
              FROM donut_attestations
              WHERE spinner_id = ?1
@@ -788,6 +796,8 @@ pub enum PersistError {
 /// Decode a `donut_attestations` row back into a [`DonutAttestation`].
 fn row_to_attestation(r: &rusqlite::Row<'_>) -> rusqlite::Result<DonutAttestation> {
     use alloy::primitives::Address;
+    use donut_adjudicator::RecipientShare;
+    use std::collections::BTreeMap;
     use std::str::FromStr;
 
     let parse_addr = |s: String| -> rusqlite::Result<Address> {
@@ -795,20 +805,27 @@ fn row_to_attestation(r: &rusqlite::Row<'_>) -> rusqlite::Result<DonutAttestatio
             rusqlite::Error::FromSqlConversionFailure(
                 0,
                 rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                )),
             )
         })
     };
-    let parse_addrs = |s: String| -> rusqlite::Result<Vec<Address>> {
-        serde_json::from_str::<Vec<Address>>(&s).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
-            )
-        })
-    };
-    let ts_str: String = r.get(18)?;
+    let parse_recipients =
+        |s: String| -> rusqlite::Result<BTreeMap<String, RecipientShare>> {
+            serde_json::from_str::<BTreeMap<String, RecipientShare>>(&s).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                )
+            })
+        };
+    let ts_str: String = r.get(13)?;
     let ts = chrono::DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(|_| chrono::Utc::now());
@@ -822,19 +839,14 @@ fn row_to_attestation(r: &rusqlite::Row<'_>) -> rusqlite::Result<DonutAttestatio
         dst_chain: r.get::<_, i64>(5)? as u64,
         fee_usd_micro: r.get(6)?,
         actual_profit_usd_micro: r.get(7)?,
-        donut_bps_num: r.get(8)?,
-        donut_bps_den: r.get(9)?,
-        donut_take_usd_micro: r.get(10)?,
-        creator_addr: parse_addr(r.get(11)?)?,
-        creator_share_usd_micro: r.get(12)?,
-        reviewer_addrs: parse_addrs(r.get(13)?)?,
-        reviewer_share_usd_micro: r.get(14)?,
-        ecosystem_addr: parse_addr(r.get(15)?)?,
-        ecosystem_share_usd_micro: r.get(16)?,
-        spinner_keeps_usd_micro: r.get(17)?,
+        inflow_usd_micro: r.get(8)?,
+        split_num: r.get(9)?,
+        split_den: r.get(10)?,
+        donut_take_usd_micro: r.get(11)?,
+        recipients: parse_recipients(r.get(12)?)?,
         ts,
-        prev_hash: r.get(19)?,
-        signature_hex: r.get(20)?,
+        prev_hash: r.get(14)?,
+        signature_hex: r.get(15)?,
     })
 }
 
@@ -1290,8 +1302,13 @@ mod tests {
         r.persist_attestation(&att).expect("persist ok");
 
         let updated = r.get_by_id(&spinner_id).unwrap().unwrap();
-        // Spinner == Builder → counter bumped by creator_share.
-        assert_eq!(updated.donut_accrued_usd_micro, att.creator_share_usd_micro);
+        // Spinner is the adapter_builder → counter bumped by builder share.
+        let builder_share = att
+            .recipients
+            .get(donut_adjudicator::PURPOSE_ADAPTER_BUILDER)
+            .map(|r| r.share_usd_micro)
+            .unwrap_or(0);
+        assert_eq!(updated.donut_accrued_usd_micro, builder_share);
 
         let ledger = r.ledger_for(&spinner_id).unwrap();
         assert_eq!(ledger.len(), 1);

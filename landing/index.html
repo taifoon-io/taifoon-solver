@@ -670,7 +670,7 @@
       <div class="strip-cell">
         <div class="strip-l">SOLVERS</div>
         <div class="strip-v">142</div>
-        <div class="strip-t">stake floor 250 TFN</div>
+        <div class="strip-t">operator-owned keys</div>
       </div>
       <div class="strip-cell">
         <div class="strip-l">REVERT RATE</div>
@@ -712,8 +712,8 @@
     <div class="tf-tag" style="margin-bottom: 18px;">[ THE COCKPIT ]</div>
     <h2 class="h2 tf-display tf-gradient-solana">Run a solver pod.<br/>Earn the spin.</h2>
     <p class="lede">
-      One Cargo workspace, one Anchor program, and a Next.js cockpit. Bring 250 TFN
-      stake, point your wallet at the bridge mempools you trust, and start filling.
+      One Cargo workspace, one Anchor program, and a Next.js cockpit. Bring
+      your own wallet, point it at the bridge mempools you trust, and start filling.
     </p>
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr; gap: 24px; margin-top: 36px;">
@@ -730,12 +730,13 @@
         </div>
       </div>
       <div class="card accent mint">
-        <div class="card-h"><div class="tf-tag mint" style="margin: 0;">[ STAKE ]</div></div>
+        <div class="card-h"><div class="tf-tag mint" style="margin: 0;">[ CUSTODY ]</div></div>
         <div class="card-b">
-          <div class="tf-stat-prefix">stake floor</div>
-          <div class="tf-stat-value" style="color: var(--solana-mint)">250 TFN</div>
+          <div class="tf-stat-prefix">your key, your fills</div>
+          <div class="tf-stat-value" style="color: var(--solana-mint)">non-custodial</div>
           <p style="color:var(--text-secondary);font-size:13px;margin:10px 0 0;line-height:1.5;">
-            Slashable bond. Failed fills past deadline lose 5% per occurrence.
+            Keys never leave your machine — Keychain on macOS, scoped session
+            key on Safe, or remote-signer webhook. Pick your mode.
           </p>
         </div>
       </div>

@@ -1,0 +1,129 @@
+name: CI
+
+# Public-repo CI for hackathon submission. Three jobs run in parallel on
+# every push and PR to main:
+#
+#   1. rust        — builds the workspace + runs the donut-attestation
+#                    test surface (donut-adjudicator + solver-api +
+#                    solver-sandbox). Tests run against in-memory
+#                    SQLite and synthetic outcome records — no live
+#                    services required.
+#   2. dashboard   — typechecks + builds the Next.js dashboard.
+#   3. leak-check  — fast grep that fails the build if any upstream-
+#                    source terminology has crept into committed files.
+#                    Keeps the public repo's narrative consistent.
+#
+# Heavy integration tests (the Python rig under tests/integration/) are
+# intentionally NOT in CI — they boot the solver-api-testbin subprocess
+# and pytest, which doubles CI runtime. Run them locally before pushing
+# anything sensitive.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs when a newer commit lands on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── 1. Rust workspace ─────────────────────────────────────────────────
+  rust:
+    name: Rust — build + donut attestation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev clang libclang-dev cmake
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target dir
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Bound the cache size — the workspace pulls in alloy + tokio +
+          # rusqlite + a lot of transitive deps; default cache fills the
+          # 5GB action quota fast.
+          shared-key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo build (donut + executor + solver-api + sandbox + main)
+        run: |
+          cargo build \
+            -p donut-adjudicator \
+            -p executor \
+            -p solver-api \
+            -p solver-sandbox \
+            -p solver-main \
+           
+      - name: cargo test — donut-adjudicator
+        run: cargo test -p donut-adjudicator
+      - name: cargo test — solver-api (hosting + persist + SIWE)
+        run: cargo test -p solver-api
+      - name: cargo test — solver-sandbox (Solana attestation rig)
+        run: cargo test -p solver-sandbox --test solana_attestation_sandbox
+  # ─── 2. Dashboard (Next.js) ────────────────────────────────────────────
+  dashboard:
+    name: Dashboard — typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: npm ci
+        run: npm ci --legacy-peer-deps
+
+      - name: npm run build
+        run: npm run build
+        env:
+          # Stub during build — real value is set in the deploy env.
+          NEXT_PUBLIC_SOLVER_API_URL: https://solver.taifoon.dev
+          NEXT_PUBLIC_WC_PROJECT_ID: ''
+
+  # ─── 3. Leak-check (fast) ──────────────────────────────────────────────
+  # Fails the build if any upstream-source-specific terminology slips
+  # into committed files. The taifoon-solver repo deliberately keeps its
+  # framing generic ("upstream order contract", "adapter-owner inflow",
+  # "internal redistribution") — reintroducing the upstream's specific
+  # contract/token names would be a leak. Kept narrow to public-facing
+  # surfaces: docs, configs, dashboard, deploy, landing, the donut crate.
+  leak-check:
+    name: Leak-check — upstream terms must stay out of committed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: grep for forbidden upstream terms
+        shell: bash
+        run: |
+          PATTERN='BuildersRegistry|SurgeFeeManager|SurgeRouter|YAWNING|FOONSpinnerRewards|dev_treasury|yawning_stakers|user_rebate|ArcExecutor|LiquidityWellCompact|\b49 bps\b|\b40 / 30 / 20 / 10\b'
+          DIRS='crates docs skills deploy config landing dashboard/app/policy'
+          echo "scanning: $DIRS"
+          HITS=$(grep -rnE --include='*.rs' --include='*.ts' --include='*.tsx' \
+                          --include='*.md' --include='*.json' --include='*.html' \
+                          --include='*.toml' --include='*.yml' \
+                          "$PATTERN" $DIRS 2>/dev/null || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::Upstream-source terms leaked into the public repo:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "✅ no upstream terms in committed surfaces"

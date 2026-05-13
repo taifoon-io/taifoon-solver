@@ -28,16 +28,22 @@ import requests
 
 from helpers import (
     build_siwe_message,
+    builder_share,
+    ecosystem_share,
     expected_adapter_id,
     expected_split_micro,
     get_ledger_head,
     make_signer,
     make_signer_b,
     produce_attestation,
+    reviewers_share,
     sign_siwe,
     spinner_id_from_addr,
     PRIV_A,
     PRIV_B,
+    PURPOSE_ADAPTER_BUILDER,
+    PURPOSE_ADAPTER_ECOSYSTEM,
+    PURPOSE_ADAPTER_REVIEWERS,
     SOLANA_DST_DEBRIDGE,
     SOLANA_DST_WORMHOLE,
     ZERO_HASH,
@@ -277,7 +283,7 @@ def test_spinner_who_is_also_the_builder_accrues_donut(server, auth_headers):
     assert r.status_code == 200
     solver_id = r.json()["solver_id"]
 
-    # Single fill where the Spinner IS the Builder.
+    # Single fill where the Spinner IS the adapter_builder.
     profit = 1.00
     env = produce_attestation(
         priv_key_hex=PRIV_A,
@@ -287,7 +293,7 @@ def test_spinner_who_is_also_the_builder_accrues_donut(server, auth_headers):
         src_chain=SOLANA_DST_WORMHOLE,
         dst_chain=1,
         actual_profit_usd=profit,
-        creator_addr=signer.address.lower(),  # ← Spinner is Builder
+        creator_addr=signer.address.lower(),  # ← Spinner is the adapter_builder
         reviewer_addrs=REVIEWER_ADDRS,
         ecosystem_addr=ECOSYSTEM_ADDR,
         server_url=server.base_url,
@@ -300,21 +306,22 @@ def test_spinner_who_is_also_the_builder_accrues_donut(server, auth_headers):
     )
     assert r.status_code == 200, r.text
 
-    # donut_accrued should equal the creator's share, in micro-USD.
-    _, expected_creator, _, _, _ = expected_split_micro(profit)
+    # donut_accrued should equal the adapter_builder share, in micro-USD.
+    _, expected_builder, _, _ = expected_split_micro(profit)
     r = requests.get(f"{server.base_url}/api/hosting/solvers/{solver_id}")
     accrued = r.json()["donut_accrued_usd_micro"]
-    assert accrued == expected_creator, f"accrued={accrued}, expected={expected_creator}"
+    assert accrued == expected_builder, f"accrued={accrued}, expected={expected_builder}"
 
 
-# ── 4. Is the TSUL 70 / 20 / 10 split wired together end-to-end? ─────────────
+# ── 4. Is the 70 / 20 / 10 redistribution wired together end-to-end? ─────────
 
-def test_tsul_70_20_10_split_is_correct(server, auth_headers):
-    """For a synthetic $100 profit fill the attestation must say (in micro-USD):
-       - donut_take_usd_micro      = 490_000      (49 bps of $100 = $0.49)
-       - creator_share_usd_micro   = 343_000      (70% of donut)
-       - reviewer_share_usd_micro  =  98_000      (20%)
-       - ecosystem_share_usd_micro =  49_000      (10%)
+def test_70_20_10_redistribution_is_correct(server, auth_headers):
+    """For a synthetic $100 inflow fill the attestation must say (in micro-USD):
+       - inflow_usd_micro      = 100_000_000   ($100)
+       - donut_take_usd_micro  = 100_000_000   (1/1 of inflow = 100%)
+       - adapter_builder share =  70_000_000   (70% of donut)
+       - adapter_reviewers     =  20_000_000   (20%)
+       - adapter_ecosystem     =  10_000_000   (10%)
        - shares sum to donut_take exactly (integer math).
     And the same shape must round-trip from POST → GET ledger byte-stably."""
     signer = make_signer()
@@ -343,17 +350,16 @@ def test_tsul_70_20_10_split_is_correct(server, auth_headers):
     att = env["attestation"]
 
     # Math checks — what the SIGNER computed.
-    assert att["donut_take_usd_micro"] == 490_000, att["donut_take_usd_micro"]
-    assert att["creator_share_usd_micro"] == 343_000, att["creator_share_usd_micro"]
-    assert att["reviewer_share_usd_micro"] == 98_000, att["reviewer_share_usd_micro"]
-    assert att["ecosystem_share_usd_micro"] == 49_000, att["ecosystem_share_usd_micro"]
-    share_sum = (
-        att["creator_share_usd_micro"]
-        + att["reviewer_share_usd_micro"]
-        + att["ecosystem_share_usd_micro"]
-    )
+    assert att["inflow_usd_micro"] == 100_000_000, att["inflow_usd_micro"]
+    assert att["donut_take_usd_micro"] == 100_000_000, att["donut_take_usd_micro"]
+    assert builder_share(att) == 70_000_000
+    assert reviewers_share(att) == 20_000_000
+    assert ecosystem_share(att) == 10_000_000
+    share_sum = builder_share(att) + reviewers_share(att) + ecosystem_share(att)
     assert share_sum == att["donut_take_usd_micro"]
-    assert att["spinner_keeps_usd_micro"] == 100 * MICRO_USD_PER_USD - 490_000
+    # actual_profit_usd_micro carries the gross profit value the executor
+    # observed — independent of the inflow redistribution math.
+    assert att["actual_profit_usd_micro"] == 100 * MICRO_USD_PER_USD
 
     # POST it and confirm the served ledger has the same numbers.
     r = requests.post(
@@ -366,20 +372,31 @@ def test_tsul_70_20_10_split_is_correct(server, auth_headers):
     r = requests.get(f"{server.base_url}/api/donut/ledger/{solver_id}")
     assert r.status_code == 200
     served = r.json()["attestations"][0]
+    # Top-level scalar fields round-trip.
     for key in (
+        "inflow_usd_micro",
         "donut_take_usd_micro",
-        "creator_share_usd_micro",
-        "reviewer_share_usd_micro",
-        "ecosystem_share_usd_micro",
-        "spinner_keeps_usd_micro",
+        "split_num",
+        "split_den",
+        "fee_usd_micro",
+        "actual_profit_usd_micro",
     ):
         assert served[key] == att[key], f"{key} drift: {served[key]} vs {att[key]}"
+    # And so do the per-recipient shares.
+    for purpose in (
+        PURPOSE_ADAPTER_BUILDER,
+        PURPOSE_ADAPTER_REVIEWERS,
+        PURPOSE_ADAPTER_ECOSYSTEM,
+    ):
+        a = att["recipients"][purpose]["share_usd_micro"]
+        b = served["recipients"][purpose]["share_usd_micro"]
+        assert a == b, f"{purpose} share drift: {a} vs {b}"
 
 
-def test_tsul_split_is_correct_for_every_solana_protocol(server, auth_headers):
+def test_split_is_correct_for_every_solana_protocol(server, auth_headers):
     """Same 70/20/10 invariant must hold for every Solana protocol path
     we route — including the Solana-source-EVM-dst direction that pre-patch
-    mis-routed Mayan to the EVM Builder."""
+    mis-routed Mayan to the EVM builder."""
     signer = make_signer()
     requests.post(
         f"{server.base_url}/api/hosting/provision",
@@ -415,11 +432,11 @@ def test_tsul_split_is_correct_for_every_solana_protocol(server, auth_headers):
             f"protocol={protocol} resolved {att['adapter_id']}, expected {want_adapter}"
         )
         # 70/20/10 integer micro-USD math.
-        e_donut, e_creator, e_reviewer, e_ecosystem, _ = expected_split_micro(profit)
+        e_donut, e_builder, e_reviewers, e_ecosystem = expected_split_micro(profit)
         assert att["donut_take_usd_micro"] == e_donut
-        assert att["creator_share_usd_micro"] == e_creator
-        assert att["reviewer_share_usd_micro"] == e_reviewer
-        assert att["ecosystem_share_usd_micro"] == e_ecosystem
+        assert builder_share(att) == e_builder
+        assert reviewers_share(att) == e_reviewers
+        assert ecosystem_share(att) == e_ecosystem
 
         r = requests.post(
             f"{server.base_url}/api/donut/attest",
