@@ -144,6 +144,9 @@ fn sign_from_stdin() -> anyhow::Result<()> {
         claim_tx_hash: None,
         claim_fee_usd: None,
         fee_usd: Some(spec.actual_profit_usd),
+        venue: None,
+        is_native_book: None,
+        book_market_id: None,
     };
 
     // Build a registry that maps the resolved adapter_id → the supplied

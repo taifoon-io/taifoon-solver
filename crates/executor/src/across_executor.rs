@@ -167,6 +167,9 @@ impl AcrossExecutor {
                 claim_tx_hash: None,
                 claim_fee_usd: None,
                 fee_usd: None,
+                venue: None,
+                is_native_book: None,
+                book_market_id: None,
             })?;
             return Ok(None);
         }
@@ -198,6 +201,9 @@ impl AcrossExecutor {
                 claim_tx_hash: None,
                 claim_fee_usd: None,
                 fee_usd: None,
+                venue: None,
+                is_native_book: None,
+                book_market_id: None,
             })?;
             return Ok(None);
         }
@@ -254,6 +260,9 @@ impl AcrossExecutor {
                 claim_tx_hash: None,
                 claim_fee_usd: None,
                 fee_usd: None,
+                venue: None,
+                is_native_book: None,
+                book_market_id: None,
             })?;
             return Ok(None);
         }
@@ -319,6 +328,9 @@ impl AcrossExecutor {
             claim_tx_hash: None,
             claim_fee_usd: None,
             fee_usd: None,
+            venue: None,
+            is_native_book: None,
+            book_market_id: None,
         })?;
 
         // A reverted fill must propagate as Err so lambda_controller does NOT

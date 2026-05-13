@@ -998,6 +998,9 @@ mod tests {
             claim_tx_hash: None,
             claim_fee_usd: None,
             fee_usd: None,
+            venue: None,
+            is_native_book: None,
+            book_market_id: None,
         }
     }
 
@@ -1313,6 +1316,9 @@ mod tests {
             claim_tx_hash: None,
             claim_fee_usd: None,
             fee_usd: None,
+            venue: None,
+            is_native_book: None,
+            book_market_id: None,
         };
         assert_eq!(adapter_id_for_outcome(&rec), "mayan-solana-swift-v1");
     }
@@ -1341,6 +1347,9 @@ mod tests {
             claim_tx_hash: None,
             claim_fee_usd: None,
             fee_usd: None,
+            venue: None,
+            is_native_book: None,
+            book_market_id: None,
         };
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "wormhole-ntt-solana-v1");
@@ -1456,6 +1465,9 @@ mod tests {
             claim_tx_hash: None,
             claim_fee_usd: None,
             fee_usd: None,
+            venue: None,
+            is_native_book: None,
+            book_market_id: None,
         };
         let att = adj.attest(&fill, &reg, &signer, ZERO_HASH).await.unwrap();
         assert_eq!(att.adapter_id, "mayan-solana-swift-v1");

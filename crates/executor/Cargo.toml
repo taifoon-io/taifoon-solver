@@ -23,3 +23,7 @@ rusqlite.workspace = true
 hex.workspace = true
 async-trait = "0.1"
 base64 = "0.22"
+
+[dev-dependencies]
+# Used in outcome_log + router unit tests that need on-disk fixtures.
+tempfile = "3"

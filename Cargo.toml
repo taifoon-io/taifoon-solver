@@ -16,6 +16,7 @@ members = [
     "crates/solver-registry",
     "crates/solver-sandbox",
     "crates/donut-adjudicator",
+    "crates/spinner-signer",
 ]
 
 [workspace.package]
@@ -42,7 +43,7 @@ serde_json = "1.0"
 alloy = { version = "0.8", features = ["full"] }
 
 # Error handling
-anyhow = "1.0"
+anyhow = { version = "1.0", features = ["std"] }
 thiserror = "1.0"
 
 # Logging

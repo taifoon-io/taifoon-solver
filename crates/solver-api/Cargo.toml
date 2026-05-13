@@ -44,3 +44,5 @@ hex = "0.4"
 siwe = { workspace = true }
 # Random bytes for SIWE nonces.
 rand = "0.8"
+# Async-trait for the HandBackend trait (powers /api/hand/*).
+async-trait = { workspace = true }

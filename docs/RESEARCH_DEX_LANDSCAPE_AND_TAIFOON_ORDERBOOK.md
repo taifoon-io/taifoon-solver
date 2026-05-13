@@ -85,21 +85,21 @@ References: [CoW Protocol Solvers docs](https://docs.cow.fi/cow-protocol/concept
 
 You want to fill orders and earn rebates + share of the fee donut. The integration path:
 
-1. **Read the Hand interface.** Taifoon's forthcoming trading SDK exposes a uniform `Hand` trait so a single client can quote and trade against centralized exchanges, on-chain DEXs, and Taifoon-operated venues without per-venue code. The trait shape mirrors `gmosx/kraken-sdk-rust`, extended with Drift-style JIT and UniswapX-style Dutch primitives. Public API surface, types, and an example client will be published with the SDK.
-2. **Pick a venue.** You can already trade against Drift v2 today using `drift-labs/drift-rs`. When Taifoon-operated venues come online, they expose the same trait — code does not change.
-3. **Authenticate via SIWE.** `solver-api` (the Taifoon back-end at `api.taifoon.dev`) accepts SIWE (EIP-4361) for solver / agent provisioning. Sandbox keys are issued through `/api/hosting/provision`.
+1. **Read the Hand interface.** Taifoon's trading SDK exposes a uniform `Hand` trait so a single client can quote and trade against centralized exchanges and on-chain DEXs without per-venue code. The trait shape mirrors `gmosx/kraken-sdk-rust`, extended with Drift-style JIT and UniswapX-style Dutch primitives. Operators can plug in additional venues out-of-tree by implementing the same trait.
+2. **Pick a venue.** You can already trade against Drift v2 today using `drift-labs/drift-rs`, against Kraken using `gmosx/kraken-sdk-rust`, and against Spinner's cross-chain settlement surface via `api.taifoon.dev`. Any future venue plugs into the same trait — code does not change.
+3. **Authenticate via SIWE.** `solver-api` (the Taifoon back-end at `api.taifoon.dev`) accepts SIWE (EIP-4361) for solver / agent provisioning. Sandbox keys are issued through `/api/hosting/provision`. The matching solver-side HTTP surface is at `/api/hand/*` — see `taifoon-solver/crates/solver-api/src/hand.rs`.
 4. **Subscribe to the signals layer.** `taifoon.io/docs/oracle` and `/docs/v5-proof-api` document the real-time gRPC and SSE feeds that drive most institutional-grade strategies on Taifoon: gas oracle, finality oracle, sniper signals, cross-chain inclusion proofs.
-5. **Earn from the donut.** Every fill routed through a Taifoon-operated venue contributes to the 70 / 20 / 10 split (builder + reviewer + ecosystem). See `taifoon.io/builders` and the Builders Programme docs.
+5. **Earn from the donut.** Every fill attributable to a Taifoon-managed path contributes to the 70 / 20 / 10 split (builder + reviewer + ecosystem). See `taifoon.io/builders` and the Builders Programme docs.
 
 ### 4.2 If you are a token issuer or an L1/L2
 
-You want listing on Taifoon-operated venues so trading agents and market makers can discover and quote your asset.
+You want exposure on Taifoon's discovery and routing surfaces so trading agents and market makers can discover and quote your asset.
 
 1. **Submit a `ListingProposal`** to `solver-api`. Required: mint or ERC-20 address, metadata, liquidity-commitment, market-making bounty (USDC).
 2. **Pass reviewer-agent attestation.** Two independent reviewer agents sign verdicts. Reuses the existing `donut-adjudicator` review loop that already governs adapter merges.
-3. **Post a slashable bond.** Protects fillers and agents against rug-pulls and undisclosed transfer behaviour. The bond is held by a registry contract; slashed proceeds flow to affected fillers, reviewers, and the ecosystem treasury.
+3. **Post a slashable bond.** Protects fillers and agents against rug-pulls and undisclosed transfer behaviour. The bond is held by a registry; slashed proceeds flow to affected fillers, reviewers, and the ecosystem treasury.
 4. **Seed liquidity.** Either you, or a Taifoon-blessed market maker via the Hand SDK.
-5. **Live on the order book.** Trading agents in the builders programme can now route orders to your market.
+5. **Live on the routing surface.** Trading agents in the builders programme can now route orders to your market through Taifoon-managed paths.
 
 For L1s and rollups wanting their tokens or their chain itself to be a first-class trading surface on Taifoon, **ICP-05 (Chains & Rollups)** is the right path — see `taifoon.io/for/rollups`.
 
@@ -138,13 +138,13 @@ ICP-03 — see `taifoon.io/for/infrastructure`. You contribute headers or comput
                                              author)             pool)              spinners)
 ```
 
-Every fill on a Taifoon-operated venue, every adapter-routed cross-chain intent, every reviewed listing — same split, same registry, same SuperRoot-anchored attestation trail.
+Every adapter-routed cross-chain intent, every reviewed listing, every Taifoon-attributable fill — same split, same registry, same SuperRoot-anchored attestation trail.
 
 ---
 
 ## 6. What to do next
 
-- **Trade today:** point your existing client at Drift v2 or Kraken — these will be supported by the Taifoon trading SDK at launch, with the same `Hand` trait we'll use for our own venues.
+- **Trade today:** point your existing client at Drift v2 or Kraken — both are supported by the Taifoon trading SDK at launch, through the same `Hand` trait that any Taifoon-integrated venue uses.
 - **List today:** open a thread in `#integrations` at `t.me/taifoon_network` and we will start the listing-proposal flow with you.
 - **Build today:** read `taifoon.io/builders` and submit at `taifoon.io/os/submit-job`.
 - **Stay in the loop:** the Taifoon Builders channel at `t.me/taifoon_network/9` is the most current source of integration news.

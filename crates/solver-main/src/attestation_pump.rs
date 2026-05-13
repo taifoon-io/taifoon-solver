@@ -76,6 +76,7 @@ struct HeadResponse {
     #[serde(default)]
     prev_hash: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     count: Option<u64>,
 }
 
@@ -430,6 +431,9 @@ mod tests {
             claim_tx_hash: None,
             claim_fee_usd: None,
             fee_usd: Some(0.50),
+            venue: None,
+            is_native_book: None,
+            book_market_id: None,
         }
     }
 

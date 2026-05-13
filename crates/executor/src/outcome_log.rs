@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 
@@ -71,6 +72,34 @@ pub struct OutcomeRecord {
     /// `max(0, actual_profit_usd)` as a conservative substitute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fee_usd: Option<f64>,
+
+    // ── Venue attribution (introduced with `taifoon-trade` Hand routing) ────
+    //
+    // These three fields tell us WHERE a fill landed, independently of which
+    // PROTOCOL the source intent came from. For legacy adapter-routed fills
+    // they stay NULL (the `protocol` column carries the venue implicitly).
+    // For Hand-routed fills the executor populates them at write time so the
+    // dashboard can `GROUP BY venue` alongside `GROUP BY protocol`.
+
+    /// Stable venue identifier — matches `trade-core::Venue` display string
+    /// (e.g. "kraken", "drift-perps", "binance", "spinner", or an
+    /// operator-supplied `custom:...` id). NULL for legacy adapter fills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub venue: Option<String>,
+
+    /// True if the fill landed on a venue this operator runs themselves
+    /// (as opposed to an external venue like Kraken or Drift). The
+    /// distinction matters for the donut split — internal-book fills
+    /// carry the full donut, external fills only carry the routing share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_native_book: Option<bool>,
+
+    /// Market identifier as the venue itself uses it
+    /// (e.g. "SOL-PERP" for Drift, "XBT/USD" for Kraken, "BTC/USDC" for an
+    /// internal market). NULL when the fill is cross-chain rather than
+    /// book-resident.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_market_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -108,11 +137,15 @@ impl OutcomeLog {
                 actual_profit_usd        REAL,
                 skip_reason              TEXT,
                 error                    TEXT,
-                solver_id                TEXT
+                solver_id                TEXT,
+                venue                    TEXT,
+                is_native_book           INTEGER,
+                book_market_id           TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_outcomes_intent   ON solver_outcomes(intent_id);
             CREATE INDEX IF NOT EXISTS idx_outcomes_ts       ON solver_outcomes(ts);
-            CREATE INDEX IF NOT EXISTS idx_outcomes_solver   ON solver_outcomes(solver_id);",
+            CREATE INDEX IF NOT EXISTS idx_outcomes_solver   ON solver_outcomes(solver_id);
+            CREATE INDEX IF NOT EXISTS idx_outcomes_venue    ON solver_outcomes(venue);",
         )?;
         // Backfill columns added in later schema versions. SQLite errors if column
         // already exists — those are intentionally ignored. Each ALTER is run
@@ -125,9 +158,22 @@ impl OutcomeLog {
             "ALTER TABLE solver_outcomes ADD COLUMN claim_tx_hash  TEXT",
             "ALTER TABLE solver_outcomes ADD COLUMN claim_fee_usd  REAL",
             "ALTER TABLE solver_outcomes ADD COLUMN fee_usd        REAL",
+            // Venue attribution columns (added with taifoon-trade Hand routing).
+            // SQLite has no native BOOLEAN — `is_native_book` stores 0/1 as INTEGER.
+            "ALTER TABLE solver_outcomes ADD COLUMN venue          TEXT",
+            "ALTER TABLE solver_outcomes ADD COLUMN is_native_book INTEGER",
+            "ALTER TABLE solver_outcomes ADD COLUMN book_market_id TEXT",
         ] {
             let _ = conn.execute(stmt, []);
         }
+        // The venue index is created here because the column may not exist on
+        // pre-migration DBs at the time the CREATE TABLE block runs above
+        // (CREATE INDEX IF NOT EXISTS is fine even if the column predates the
+        // index — re-running is a no-op).
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outcomes_venue ON solver_outcomes(venue)",
+            [],
+        );
 
         let mamba_url = match mamba_url {
             Some(url) if !url.is_empty() => {
@@ -168,8 +214,9 @@ impl OutcomeLog {
                     (ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                      predicted_gas, gas_used, effective_gas_price_wei,
                      predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
-                     claim_tx_hash, claim_fee_usd)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     claim_tx_hash, claim_fee_usd, fee_usd,
+                     venue, is_native_book, book_market_id)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 params![
                     rec.ts.to_rfc3339(),
                     rec.intent_id,
@@ -188,6 +235,10 @@ impl OutcomeLog {
                     rec.solver_id,
                     rec.claim_tx_hash,
                     rec.claim_fee_usd,
+                    rec.fee_usd,
+                    rec.venue,
+                    rec.is_native_book.map(|b| if b { 1_i64 } else { 0_i64 }),
+                    rec.book_market_id,
                 ],
             )?;
         }
@@ -238,7 +289,8 @@ impl OutcomeLog {
             "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                     predicted_gas, gas_used, effective_gas_price_wei,
                     predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
-                    claim_tx_hash, claim_fee_usd, fee_usd
+                    claim_tx_hash, claim_fee_usd, fee_usd,
+                    venue, is_native_book, book_market_id
              FROM solver_outcomes
              WHERE solver_id = ?1
              ORDER BY ts DESC
@@ -247,7 +299,8 @@ impl OutcomeLog {
             "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                     predicted_gas, gas_used, effective_gas_price_wei,
                     predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
-                    claim_tx_hash, claim_fee_usd, fee_usd
+                    claim_tx_hash, claim_fee_usd, fee_usd,
+                    venue, is_native_book, book_market_id
              FROM solver_outcomes
              ORDER BY ts DESC
              LIMIT ?1"
@@ -277,6 +330,9 @@ impl OutcomeLog {
                 claim_tx_hash: r.get(15)?,
                 claim_fee_usd: r.get(16)?,
                 fee_usd: r.get(17)?,
+                venue: r.get(18)?,
+                is_native_book: r.get::<_, Option<i64>>(19)?.map(|v| v != 0),
+                book_market_id: r.get(20)?,
             })
         };
 
@@ -418,13 +474,17 @@ impl OutcomeLog {
                 claim_tx_hash: r.get(15)?,
                 claim_fee_usd: r.get(16)?,
                 fee_usd: r.get(17)?,
+                venue: r.get(18)?,
+                is_native_book: r.get::<_, Option<i64>>(19)?.map(|v| v != 0),
+                book_market_id: r.get(20)?,
             })
         };
 
         let base_select = "SELECT ts, intent_id, protocol, src_chain, dst_chain, decision, tx_hash,
                     predicted_gas, gas_used, effective_gas_price_wei,
                     predicted_profit_usd, actual_profit_usd, skip_reason, error, solver_id,
-                    claim_tx_hash, claim_fee_usd, fee_usd
+                    claim_tx_hash, claim_fee_usd, fee_usd,
+                    venue, is_native_book, book_market_id
              FROM solver_outcomes
              WHERE decision IN ('executed','execute','confirmed')
                AND tx_hash IS NOT NULL";
@@ -508,6 +568,155 @@ impl OutcomeLog {
             last_24h_count,
             by_protocol,
         })
+    }
+
+    /// Per-venue P&L aggregation. Same shape as `pnl_summary()` but the
+    /// breakdown is keyed by the `venue` column (Hand-routed fills) rather
+    /// than `protocol`. Rows with NULL `venue` (legacy adapter-routed fills)
+    /// are bucketed under the literal key `"legacy"` so the dashboard can
+    /// surface them alongside the new venue-attributed counts.
+    pub fn pnl_by_venue(&self) -> Result<HashMap<String, ProtocolPnl>> {
+        let conn = self.inner.sqlite.lock().unwrap();
+        let mut by_venue = HashMap::<String, ProtocolPnl>::new();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(venue, 'legacy') AS v,
+                    COUNT(*)                  AS fills,
+                    COALESCE(SUM(actual_profit_usd), 0.0) AS realized,
+                    COALESCE(AVG(actual_profit_usd), 0.0) AS avg_profit
+             FROM solver_outcomes
+             WHERE actual_profit_usd IS NOT NULL
+             GROUP BY v",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, f64>(2)?,
+                r.get::<_, f64>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (venue, fills, realized, avg) = row?;
+            by_venue.insert(
+                venue,
+                ProtocolPnl {
+                    fills,
+                    realized_usd: realized,
+                    avg_profit_usd: avg,
+                },
+            );
+        }
+        Ok(by_venue)
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+//
+// These cover the venue-attribution columns end-to-end:
+//   1. fresh DB round-trips a record with venue/is_native_book/book_market_id
+//   2. pnl_by_venue() groups correctly, NULLs bucket as "legacy"
+//   3. schema migration is idempotent on a pre-existing legacy DB
+//   4. legacy rows (no venue) read back as `venue: None` after the migration
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(intent_id: &str, profit: f64, venue: Option<&str>, native: Option<bool>) -> OutcomeRecord {
+        OutcomeRecord {
+            ts: Utc::now(),
+            intent_id: intent_id.into(),
+            protocol: "across".into(),
+            src_chain: 1,
+            dst_chain: 8453,
+            decision: "executed".into(),
+            tx_hash: Some("0xdead".into()),
+            predicted_gas: Some(200_000),
+            gas_used: Some(195_000),
+            effective_gas_price_wei: Some("3000000000".into()),
+            predicted_profit_usd: Some(profit),
+            actual_profit_usd: Some(profit),
+            skip_reason: None,
+            error: None,
+            solver_id: Some("solver-a".into()),
+            claim_tx_hash: None,
+            claim_fee_usd: None,
+            fee_usd: Some(profit + 0.05),
+            venue: venue.map(|s| s.into()),
+            is_native_book: native,
+            book_market_id: venue.map(|_| "ETH/USDC".into()),
+        }
+    }
+
+    #[test]
+    fn round_trip_venue_columns() {
+        let log = OutcomeLog::open(":memory:", None).expect("open");
+        log.append(rec("i1", 1.23, Some("kraken"), Some(false))).unwrap();
+        log.append(rec("i2", 4.56, Some("internal-sol"), Some(true))).unwrap();
+        log.append(rec("i3", 7.89, None, None)).unwrap();
+        let rows = log.recent(10).unwrap();
+        assert_eq!(rows.len(), 3);
+        // Rows are returned newest-first, but we don't care about order — assert by intent_id.
+        let i1 = rows.iter().find(|r| r.intent_id == "i1").unwrap();
+        assert_eq!(i1.venue.as_deref(), Some("kraken"));
+        assert_eq!(i1.is_native_book, Some(false));
+        assert_eq!(i1.book_market_id.as_deref(), Some("ETH/USDC"));
+        let i2 = rows.iter().find(|r| r.intent_id == "i2").unwrap();
+        assert_eq!(i2.venue.as_deref(), Some("internal-sol"));
+        assert_eq!(i2.is_native_book, Some(true));
+        let i3 = rows.iter().find(|r| r.intent_id == "i3").unwrap();
+        assert!(i3.venue.is_none());
+        assert!(i3.is_native_book.is_none());
+        assert!(i3.book_market_id.is_none());
+    }
+
+    #[test]
+    fn pnl_by_venue_groups_and_buckets_legacy() {
+        let log = OutcomeLog::open(":memory:", None).expect("open");
+        log.append(rec("a", 1.00, Some("kraken"), Some(false))).unwrap();
+        log.append(rec("b", 2.00, Some("kraken"), Some(false))).unwrap();
+        log.append(rec("c", 3.00, Some("drift-perps"), Some(false))).unwrap();
+        log.append(rec("d", 4.00, None, None)).unwrap(); // legacy
+        let by_venue = log.pnl_by_venue().unwrap();
+        assert_eq!(by_venue.get("kraken").unwrap().fills, 2);
+        assert!((by_venue.get("kraken").unwrap().realized_usd - 3.00).abs() < 1e-9);
+        assert_eq!(by_venue.get("drift-perps").unwrap().fills, 1);
+        assert_eq!(by_venue.get("legacy").unwrap().fills, 1);
+        assert!((by_venue.get("legacy").unwrap().realized_usd - 4.00).abs() < 1e-9);
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("legacy.sqlite");
+        let path_str = path.to_str().unwrap();
+
+        // First open creates the schema fresh — equivalent to a brand-new DB.
+        {
+            let log = OutcomeLog::open(path_str, None).unwrap();
+            log.append(rec("legacy-1", 0.50, None, None)).unwrap();
+        }
+        // Re-open the same file. The CREATE TABLE IF NOT EXISTS + ALTER TABLE
+        // statements must all be no-ops — opening again must not raise.
+        let log = OutcomeLog::open(path_str, None).unwrap();
+        // And the legacy row must still parse cleanly with NULL venue columns.
+        let rows = log.recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].intent_id, "legacy-1");
+        assert!(rows[0].venue.is_none());
+        assert!(rows[0].is_native_book.is_none());
+    }
+
+    #[test]
+    fn pnl_summary_still_works_alongside_venue_columns() {
+        let log = OutcomeLog::open(":memory:", None).expect("open");
+        log.append(rec("x", 10.0, Some("kraken"), Some(false))).unwrap();
+        log.append(rec("y", 20.0, None, None)).unwrap();
+        let s = log.pnl_summary().unwrap();
+        assert_eq!(s.fills_total, 2);
+        assert!((s.realized_usd_total - 30.0).abs() < 1e-9);
+        // By-protocol should still see them under `across` (the protocol field).
+        assert_eq!(s.by_protocol.get("across").unwrap().fills, 2);
     }
 }
 

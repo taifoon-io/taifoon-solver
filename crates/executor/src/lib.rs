@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use genome_client::Intent;
 use profit_calc::ProfitResult;
 use protocol_adapters::AdapterFactory;
+use std::sync::Arc;
 use tracing::info;
 
 pub mod across_executor;
@@ -12,6 +13,7 @@ pub mod lifi_meta_router;
 pub mod mayan_evm_estimate;
 pub mod mayan_solana_estimate;
 pub mod outcome_log;
+pub mod router;
 pub mod skip_rules;
 pub mod spinner_solver;
 pub mod wormhole;
@@ -39,6 +41,7 @@ pub use mayan_solana_estimate::{
     MayanSolanaEstimateAdapter, DEFAULT_SOLANA_RPC, FALLBACK_SOLANA_PAYER_PUBKEY,
 };
 pub use outcome_log::{OutcomeLog, OutcomeRecord, PnlSummary, ProtocolPnl};
+pub use router::{AdapterRouter, FillRouter};
 pub use skip_rules::{RulePredicate, SkipRule, SkipRules};
 pub use spinner_solver::{SpinnerSolverClient, TestRunResult};
 
@@ -59,12 +62,19 @@ pub enum LiquiditySource {
     FlashLoan,   // Priority 2: No capital lockup
 }
 
-/// Intent executor with multi-source liquidity
+/// Intent executor.
+///
+/// All fill routing flows through `router`. The default constructor
+/// installs an [`AdapterRouter`] so legacy installs behave identically to
+/// the pre-router code path. solver-main can call [`Executor::with_router`]
+/// at boot to swap in a Hand-aware router (typically a thin shim around
+/// `trader::Trader` from the out-of-tree `taifoon-trade` workspace) — at
+/// which point the per-protocol adapter dispatch in `protocol-adapters`
+/// is bypassed in favour of unified Hand routing.
 pub struct Executor {
     simulation_mode: bool,
     min_profit_usd: f64,
-    adapter_factory: AdapterFactory,
-    spinner_api_url: String,
+    router: Arc<dyn FillRouter>,
 }
 
 impl Executor {
@@ -81,25 +91,49 @@ impl Executor {
             .parse()
             .unwrap_or(0.10);
 
-        // Initialize protocol adapter factory
+        // Resolve the Spinner API URL the default `AdapterRouter` needs.
+        // Same env-var precedence as before the router refactor.
         let spinner_api_url = std::env::var("WARMBED_API_URL")
             .or_else(|_| std::env::var("SPINNER_API_URL"))
             .unwrap_or_else(|_| "https://api.taifoon.dev".to_string());
 
-        let adapter_factory = AdapterFactory::new(&spinner_api_url);
+        // Diagnostic only — the AdapterFactory is also held internally by
+        // `AdapterRouter`, but constructing it here lets us log the list
+        // of supported protocols at boot like we always have.
+        let factory_for_logging = AdapterFactory::new(&spinner_api_url);
 
         info!("Executor initialized:");
         info!("   SIMULATION_MODE: {}", simulation_mode);
         info!("   MIN_PROFIT_USD: ${}", min_profit_usd);
         info!("   SPINNER_API: {}", spinner_api_url);
-        info!("   SUPPORTED_PROTOCOLS: {:?}", adapter_factory.supported_protocols());
+        info!(
+            "   SUPPORTED_PROTOCOLS: {:?}",
+            factory_for_logging.supported_protocols()
+        );
+
+        let router: Arc<dyn FillRouter> = Arc::new(AdapterRouter::new(spinner_api_url));
+        info!("   ROUTER: {}", router.description());
 
         Ok(Self {
             simulation_mode,
             min_profit_usd,
-            adapter_factory,
-            spinner_api_url,
+            router,
         })
+    }
+
+    /// Swap the active `FillRouter`. solver-main (or any operator) calls
+    /// this at boot when they want to bypass the legacy adapter dispatch
+    /// — e.g. to install a Hand-aware router backed by `trader::Trader`.
+    pub fn with_router(mut self, router: Arc<dyn FillRouter>) -> Self {
+        info!("Executor router swapped: {}", router.description());
+        self.router = router;
+        self
+    }
+
+    /// Borrow the currently-installed router. Mostly for diagnostics +
+    /// tests that want to assert which strategy is in use.
+    pub fn router(&self) -> &Arc<dyn FillRouter> {
+        &self.router
     }
 
     /// Execute an intent fill with liquidity waterfall
@@ -160,36 +194,18 @@ impl Executor {
         Ok(false)
     }
 
-    /// Execute with own funds (Priority 1) - USING PROTOCOL ADAPTERS
+    /// Execute with own funds (Priority 1) — delegates to the installed
+    /// [`FillRouter`]. The default router ([`AdapterRouter`]) preserves
+    /// the legacy adapter-factory dispatch verbatim; a Hand-aware router
+    /// installed via [`Executor::with_router`] takes over here.
     async fn execute_with_own_funds(
         &self,
         intent: &Intent,
         profit: &ProfitResult,
     ) -> Result<ExecutionResult> {
-        // Get protocol-specific adapter
-        let adapter = self.adapter_factory.get_adapter(intent)?;
-
-        info!("📦 Using protocol adapter: {}", adapter.protocol_name());
-
-        // Fetch V5 proof bundle from Spinner
-        info!("🔐 Fetching V5 proof bundle from Spinner...");
-        let proof = adapter.estimate_gas(intent, &self.spinner_api_url).await?;
-        info!("✅ Gas estimate: {} units @ {:.2} gwei = ${:.2}",
-            proof.gas_units, proof.gas_price_gwei, proof.total_usd);
-
-        if self.simulation_mode {
-            info!("✅ [SIMULATION] Would execute protocol fill via {}", adapter.protocol_name());
-            return Ok(ExecutionResult {
-                intent_id: intent.id.clone(),
-                fill_tx: format!("0xsim_{}_{}", adapter.protocol_name(), intent.id),
-                claim_tx: None,
-                gas_used: proof.gas_units,
-                actual_profit_usd: profit.net_profit_usd,
-            });
-        }
-
-        // TODO: Implement actual protocol-based execution
-        Err(anyhow!("Live protocol execution not yet implemented - use SIMULATION_MODE=true"))
+        self.router
+            .route_and_execute(intent, profit, self.simulation_mode)
+            .await
     }
 
     /// Execute with flash loan (Priority 2)

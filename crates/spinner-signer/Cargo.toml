@@ -1,0 +1,48 @@
+[package]
+name = "spinner-signer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "spinner_signer"
+path = "src/lib.rs"
+
+[features]
+default = ["evm", "solana"]
+evm = ["alloy"]
+solana = ["bs58", "ed25519-dalek", "base64"]
+
+[dependencies]
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { workspace = true }
+
+# EVM (Safe + Zodiac Roles Module) — uses the same alloy as the rest of
+# the workspace.
+alloy = { workspace = true, optional = true }
+
+# Solana (Squads V4 spending limits) — we intentionally do NOT pull
+# `solana-sdk` / `solana-client` here, mirroring the convention set in
+# `protocol-adapters-solana` (see that crate's Cargo.toml docstring).
+# Those crates pull ~1000 transitive deps and balloon first-build time.
+# We need only:
+#   - bs58 to decode Pubkeys from their canonical string form
+#   - ed25519-dalek for hot-key signing
+#   - sha2 for the Anchor instruction discriminator
+#   - base64 to wire serialized transactions over JSON-RPC
+# All of those are already pinned in the workspace.
+bs58 = { version = "0.5", optional = true }
+ed25519-dalek = { version = "2", features = ["rand_core"], optional = true }
+base64 = { version = "0.22", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

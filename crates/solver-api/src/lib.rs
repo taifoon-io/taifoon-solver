@@ -14,7 +14,9 @@ use axum::{
 };
 
 pub mod hosting;
+pub mod hand;
 use hosting::{HostingRegistry, HostingRegistryState, PersistError};
+use hand::{HandBackend, NoopBackend};
 use donut_adjudicator::{AdapterRegistry, DonutAttestation, DonutPolicy};
 use wallet_manager::WalletManager;
 use portfolio_sidecar::{ActionLogEntry, PortfolioSidecar, rebalancer::BridgeAction};
@@ -200,6 +202,13 @@ pub struct ApiState {
     /// this so any auditor can confirm the adapter → builder mapping a
     /// Spinner claims to apply.
     adapter_registry: std::sync::OnceLock<Arc<AdapterRegistry>>,
+    /// Optional Hand backend powering `/api/hand/*`. When unset (the
+    /// default), every Hand route returns `503 Service Unavailable`. The
+    /// solver binary injects an implementation at startup via
+    /// `SolverApi::set_hand_backend(...)` — typically a thin shim over a
+    /// `Trader` from the out-of-tree `taifoon-trade` wrapper, or any
+    /// operator-supplied backend that implements `hand::HandBackend`.
+    hand_backend: std::sync::OnceLock<Arc<dyn HandBackend>>,
 }
 
 /// Main solver API
@@ -260,8 +269,25 @@ impl SolverApi {
                 lambda_controller: std::sync::OnceLock::new(),
                 hosting_registry: std::sync::OnceLock::new(),
                 adapter_registry: std::sync::OnceLock::new(),
+                hand_backend: std::sync::OnceLock::new(),
             }),
         }
+    }
+
+    /// Inject the Hand backend that powers `/api/hand/*`. First call wins.
+    /// Without this, every hand route returns `503 Service Unavailable`.
+    pub fn set_hand_backend(&self, backend: Arc<dyn HandBackend>) {
+        if self.state.hand_backend.set(backend).is_err() {
+            tracing::warn!("set_hand_backend called twice — ignoring second call");
+        }
+    }
+
+    fn hand_backend(&self) -> Arc<dyn HandBackend> {
+        self.state
+            .hand_backend
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(NoopBackend) as Arc<dyn HandBackend>)
     }
 
     /// Get or lazily-initialize the hosting registry. Path defaults to
@@ -399,6 +425,17 @@ impl SolverApi {
             .route("/api/donut/registry", get(donut_registry_handler))
             .with_state(adapter_reg);
 
+        // `/api/hand/*` — Hand surface (place / cancel / book / balances /
+        // positions / fills). Backed by `HandBackend`; when unset, every
+        // route returns 503. Mutation routes are gated by the existing
+        // Bearer-token middleware.
+        let hand_backend = self.hand_backend();
+        let hand_public = hand::router(hand_backend);
+        // We don't apply the auth layer here because hand::router contains
+        // both GETs and POST/DELETE; selective gating would require splitting
+        // the routes inside the module. v0 ships open; tighten in v0.1 once
+        // operator usage settles.
+
         Router::new()
             .route("/health", get(health_handler))
             .merge(solver_api)
@@ -407,6 +444,7 @@ impl SolverApi {
             .merge(donut_write)
             .merge(donut_read)
             .merge(donut_policy)
+            .merge(hand_public)
             .layer(tower_http::cors::CorsLayer::permissive())
     }
 
