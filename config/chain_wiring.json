@@ -363,8 +363,8 @@
     "_chain": "Blast",
     "rpc_url": "https://rpc.blast.io",
     "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "No Across SpokePool — Squid/LiFi/LZ/Relay/Meson/Hyperlane/Synapse/Socket/deBridge supported"
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool V3 confirmed (7507b). Also Squid/LiFi/LZ/Relay/Meson/Hyperlane/Synapse/Socket/deBridge"
   },
   "84532": {
     "_chain": "Base Sepolia",
