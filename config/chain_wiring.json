@@ -254,8 +254,8 @@
     "_chain": "Superseed",
     "rpc_url": "https://mainnet.superseed.xyz",
     "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "No Across SpokePool — Relay/Hyperlane supported"
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool confirmed (225b). Also Relay/Hyperlane"
   },
   "7560": {
     "_chain": "Cyber",
