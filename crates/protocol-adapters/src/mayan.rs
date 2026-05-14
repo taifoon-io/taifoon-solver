@@ -7,6 +7,11 @@
 //! 4. Settlement: Mayan protocol releases escrowed input tokens
 //!
 //! ## Reward: Auction model (3 bps protocol fee), solver keeps (input - output - 0.03%)
+//!
+//! ## Addresses (mainnet, verified 2026-05-14)
+//! Forwarder (all EVM): 0xd78d199f8c402e7b5cc2abe278df0412400a3bae
+//! ABI: fulfillOrder(uint256, bytes, OrderParams, ExtraParams, UnlockParams, PermitParams)
+//! OrderParams has 14 fields — payloadType uint8 is the 14th (missing from old adapters)
 
 use super::*;
 use alloy::primitives::Address;
@@ -25,14 +30,22 @@ impl Clone for MayanAdapter {
     }
 }
 
+/// Mayan Swift Forwarder — single address on all EVM chains.
+/// Correct ABI: 6-param fulfillOrder with 14-field OrderParams (includes payloadType).
+/// Hot path is now handled by executor::mayan_evm_estimate::MayanEvmEstimator which
+/// uses this address directly. This adapter preserves the legacy ProtocolAdapter
+/// interface for backward compat with AdapterFactory.
+pub const MAYAN_FORWARDER: &str = "0xd78d199f8c402e7b5cc2abe278df0412400a3bae";
+
 impl MayanAdapter {
     pub fn new(spinner_client: SpinnerClient) -> Self {
+        let forwarder: Address = MAYAN_FORWARDER.parse().unwrap();
         let mut mayan_addresses = std::collections::HashMap::new();
-        let addr: Address = "0x337685fdab40d39bd02028545a4ffa7d287cc3e2".parse().unwrap();
-        mayan_addresses.insert(1, addr); // Ethereum
-        mayan_addresses.insert(10, addr); // Optimism
-        mayan_addresses.insert(42161, addr); // Arbitrum
-        mayan_addresses.insert(8453, addr); // Base
+        // Single Forwarder address on all EVM chains (verified 2026-05-14)
+        mayan_addresses.insert(1u64, forwarder);   // Ethereum
+        mayan_addresses.insert(10u64, forwarder);  // Optimism
+        mayan_addresses.insert(42161u64, forwarder); // Arbitrum
+        mayan_addresses.insert(8453u64, forwarder);  // Base
         Self { spinner_client, mayan_addresses }
     }
 }
@@ -57,9 +70,12 @@ impl ProtocolAdapter for MayanAdapter {
     async fn build_fill_tx(&self, intent: &Intent, _proof: &V5ProofBlob) -> Result<FillTransaction> {
         let mayan = self.mayan_addresses.get(&intent.dst_chain)
             .ok_or_else(|| anyhow!("No Mayan on chain {}", intent.dst_chain))?;
+        // Hot-path calldata is built by executor::mayan_evm_estimate::MayanEvmEstimator.
+        // This legacy adapter returns the correct target address; calldata is assembled
+        // upstream using the full 6-param fulfillOrder ABI with 14-field OrderParams.
         Ok(FillTransaction {
             to: mayan.to_string(),
-            data: format!("0x{}", hex::encode(b"fulfill()")), // Placeholder calldata
+            data: "0x".to_string(), // filled by MayanEvmEstimator
             value: None,
             chain_id: intent.dst_chain,
             estimated_gas: None,
