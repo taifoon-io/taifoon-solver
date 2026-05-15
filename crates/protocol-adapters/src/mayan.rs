@@ -45,7 +45,13 @@ impl MayanAdapter {
         mayan_addresses.insert(1u64, forwarder);   // Ethereum
         mayan_addresses.insert(10u64, forwarder);  // Optimism
         mayan_addresses.insert(42161u64, forwarder); // Arbitrum
-        mayan_addresses.insert(8453u64, forwarder);  // Base
+        mayan_addresses.insert(8453u64, forwarder);   // Base
+        mayan_addresses.insert(137u64, forwarder);   // Polygon
+        mayan_addresses.insert(56u64, forwarder);    // BSC
+        mayan_addresses.insert(43114u64, forwarder); // Avalanche
+        mayan_addresses.insert(130u64, forwarder);   // Unichain
+        mayan_addresses.insert(999u64, forwarder);   // HyperEVM
+        mayan_addresses.insert(59144u64, forwarder); // Linea
         Self { spinner_client, mayan_addresses }
     }
 }
