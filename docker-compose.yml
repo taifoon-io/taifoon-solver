@@ -8,6 +8,16 @@ services:
     container_name: taifoon-solver
     restart: unless-stopped
     network_mode: host
+    # The solver filesystem is read-only; outcomes DB is written via the named volume.
+    # /tmp is writable via tmpfs so sqlite can create temp files.
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - solver-outcomes:/home/solver/outcomes
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
     environment:
       - GENOME_SSE_URL=http://127.0.0.1:30081/api/genome/subscribe/sse
       - WARMBED_API_URL=https://api.taifoon.dev
@@ -17,10 +27,20 @@ services:
       - CHAIN_WIRING_FILE=/home/solver/config/chain_wiring.json
       - CHAIN_WIRING_PATH=/home/solver/config/chain_wiring.json
       - SOLVER_ADDRESS=${SOLVER_ADDRESS:-0x0000000000000000000000000000000000000000}
+      # Port exposed by the solver's internal API.
+      # Solver API port — must match SOLVER_API_INTERNAL_URL in the dashboard env above.
+      # Default when running outside Docker is 8082; here we use 8099 to avoid conflict.
       - API_PORT=8099
-      # Dummy key initializes the Lambda controller in dry-run mode (no real broadcasts).
-      # Replace with a funded key to enable live fills.
-      - SOLVER_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001
+      # Route wallet + outcomes SQLite to the named volume (writable under read_only:true).
+      - WALLET_DB_PATH=/home/solver/outcomes/wallet.sqlite
+      - OUTCOME_DB_PATH=/home/solver/outcomes/outcomes.sqlite
+      # SOLVER_PRIVATE_KEY is required — do NOT commit a value here.
+      # Supply it at runtime via one of:
+      #   docker-compose run -e SOLVER_PRIVATE_KEY="$SOLVER_PRIVATE_KEY" solver
+      #   or a .env file excluded from git (add .env to .gitignore)
+      #   or a secrets manager (Vault, AWS SM, GitHub Actions secrets).
+      # See SECURITY_ONBOARDING.md §2 for full guidance.
+      # - SOLVER_PRIVATE_KEY=   # required — set in environment, not here
       # Override deBridge poller RPCs (optional — falls back to bundled Infura keys).
       # Recommended for production to avoid shared rate limits.
       # - DEBRIDGE_RPC_42161=https://arbitrum-mainnet.infura.io/v3/YOUR_KEY
@@ -47,15 +67,25 @@ services:
       dockerfile: Dockerfile.dashboard
     container_name: taifoon-dashboard
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # host network mode so server-side Next.js routes can reach the solver on 127.0.0.1:8099.
+    # nginx on the host proxies port 3000 to serve solver.taifoon.dev.
+    network_mode: host
     depends_on:
       - solver
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_SOLVER_API_URL=
+      # Internal URL for server-side Next.js API routes to proxy solver endpoints.
+      - SOLVER_API_INTERNAL_URL=http://127.0.0.1:8099
+      - PORT=3000
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  solver-outcomes:

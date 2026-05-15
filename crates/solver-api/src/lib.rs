@@ -1204,7 +1204,7 @@ async fn outcomes_handler(
     // Fetch a larger window when a decision filter is active so we don't
     // accidentally return fewer records than `limit` after filtering.
     let fetch_limit = if decision_filter.is_some() {
-        (limit * 20).clamp(1, 500)
+        (limit * 20).clamp(1, 5000)
     } else {
         limit
     };

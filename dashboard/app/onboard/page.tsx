@@ -50,6 +50,11 @@ function isValidEvm(addr: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(addr.trim())
 }
 
+function isValidSolana(addr: string): boolean {
+  // Base58 pubkey: 32-44 chars, alphanumeric excluding 0, O, I, l
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr.trim())
+}
+
 export default function OnboardPage() {
   const router = useRouter()
   const [step, setStep] = useState(0)
@@ -74,6 +79,7 @@ export default function OnboardPage() {
   const evmAddress = connectedAddress ?? ''
   const [siwe, setSiwe] = useState<SiweArtifacts | null>(null)
   const [welcomeBack, setWelcomeBack] = useState<{ solver_id: string } | null>(null)
+  const [solanaAddressError, setSolanaAddressError] = useState<string | null>(null)
 
   // Step 3 — provisioning
   const [provisioning, setProvisioning] = useState(false)
@@ -163,8 +169,9 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
     if (step === 0) return !!name && !!email
     if (step === 1) return chains.size > 0 && protocols.size > 0
     // Step 2: wallet must be connected AND the SIWE signature captured so
-    // the server can flip `siwe_verified=1` on the row.
-    if (step === 2) return isValidEvm(evmAddress) && !!siwe
+    // the server can flip `siwe_verified=1` on the row. If a Solana address
+    // is entered it must be valid before allowing advance.
+    if (step === 2) return isValidEvm(evmAddress) && !!siwe && (!solanaAddress || isValidSolana(solanaAddress))
     return true
   })()
 
@@ -411,12 +418,22 @@ export OUTCOME_DB_PATH=./outcomes/${name || 'my-solver'}_live.sqlite
                   >
                     <input
                       value={solanaAddress}
-                      onChange={(e) => setSolanaAddress(e.target.value)}
+                      onChange={(e) => {
+                        setSolanaAddress(e.target.value)
+                        setSolanaAddressError(null)
+                      }}
+                      onBlur={() => {
+                        if (solanaAddress && !isValidSolana(solanaAddress))
+                          setSolanaAddressError('Must be a valid base58 Solana address (32–44 chars, no 0/O/I/l)')
+                      }}
                       placeholder="Base58 pubkey…"
                       spellCheck={false}
                       autoComplete="off"
                       className="w-full bg-[var(--bg-raised)] border border-[var(--border-default)] rounded-[var(--r-md)] px-4 h-11 text-sm font-mono focus:border-[var(--brand-cyan)] outline-none"
                     />
+                    {solanaAddressError && (
+                      <p className="mt-1 text-[11px] text-[var(--danger)]">{solanaAddressError}</p>
+                    )}
                   </Field>
 
                   {/* Mode-specific fields */}

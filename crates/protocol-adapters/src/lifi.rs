@@ -126,8 +126,31 @@ impl LiFiAdapter {
         lifi_diamond_addresses.insert(43114, diamond);   // Avalanche
         lifi_diamond_addresses.insert(59144, diamond);   // Linea
         lifi_diamond_addresses.insert(100, diamond);     // Gnosis
-        lifi_diamond_addresses.insert(324, diamond);     // zkSync Era
-        lifi_diamond_addresses.insert(534352, diamond);  // Scroll
+        lifi_diamond_addresses.insert(324, diamond);         // zkSync Era
+        lifi_diamond_addresses.insert(534352, diamond);      // Scroll
+        lifi_diamond_addresses.insert(81457, diamond);       // Blast
+        lifi_diamond_addresses.insert(1101, diamond);        // Polygon zkEVM
+        lifi_diamond_addresses.insert(5000, diamond);        // Mantle
+        lifi_diamond_addresses.insert(250, diamond);         // Fantom
+        lifi_diamond_addresses.insert(13371, diamond);       // Immutable zkEVM
+        lifi_diamond_addresses.insert(1666600000, diamond);  // Harmony
+        lifi_diamond_addresses.insert(25, diamond);          // Cronos
+        lifi_diamond_addresses.insert(1313161554, diamond);  // Aurora
+        lifi_diamond_addresses.insert(480, diamond);         // World Chain
+        lifi_diamond_addresses.insert(42220, diamond);       // Celo
+        lifi_diamond_addresses.insert(252, diamond);         // Fraxtal
+        lifi_diamond_addresses.insert(30, diamond);          // Rootstock
+        lifi_diamond_addresses.insert(1284, diamond);        // Moonbeam
+        lifi_diamond_addresses.insert(1285, diamond);        // Moonriver
+        lifi_diamond_addresses.insert(1135, diamond);        // Lisk
+        lifi_diamond_addresses.insert(196, diamond);         // X Layer
+        lifi_diamond_addresses.insert(34443, diamond);       // Mode
+        lifi_diamond_addresses.insert(204, diamond);         // opBNB
+        lifi_diamond_addresses.insert(1329, diamond);        // Sei
+        lifi_diamond_addresses.insert(42170, diamond);       // Arbitrum Nova
+        lifi_diamond_addresses.insert(288, diamond);         // Boba
+        lifi_diamond_addresses.insert(1625, diamond);        // Gravity
+        lifi_diamond_addresses.insert(146, diamond);         // Sonic
 
         Self {
             spinner_client,

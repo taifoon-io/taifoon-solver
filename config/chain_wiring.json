@@ -1,6 +1,7 @@
 {
-  "_comment": "Chain wiring for Taifoon solver — operator=0x0 means direct SpokePool.fillV3Relay (no Taifoon proof). All mainnet Across chains set to direct-fill while spinner proof-bundle endpoint is unavailable. across_adapter = Across V3 SpokePool canonical address.",
-  "_updated": "2026-04-29",
+  "_comment": "Chain wiring for Taifoon solver — covers all 53 EVM chains tracked in taifoon-arc catalogue. operator=0x0 = direct-fill (no Taifoon proof). across_adapter=0x0 = no Across SpokePool on this chain.",
+  "_updated": "2026-05-14",
+  "_across_spokes": "Verified via eth_getCode. New ABI (bytes32 depositId, selector 0xdeff4b24): Base/Arb/OP/Scroll/Ink/zkSync/Mode/Unichain/Lisk/Soneium/WorldChain/Zora. Legacy (address depositId, selector 0x7bfcc68f): ETH/Linea. Gnosis/Celo/Mode share 0x09aea4b.../0x3baD7AD... pattern.",
   "1": {
     "_chain": "Ethereum",
     "rpc_url": "https://ethereum.publicnode.com",
@@ -13,29 +14,74 @@
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x6f26Bf09B1C792e3228e5467807a900A503c0281"
   },
+  "30": {
+    "_chain": "Rootstock",
+    "rpc_url": "https://public-node.rsk.co",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/LiFi/Relay/LZ supported"
+  },
+  "56": {
+    "_chain": "BNB Chain",
+    "rpc_url": "https://bsc-dataseed.binance.org/",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — deBridge/LiFi/Relay/LZ/Socket/Synapse/Meson/Hyperlane supported"
+  },
+  "100": {
+    "_chain": "Gnosis",
+    "rpc_url": "https://rpc.gnosischain.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool confirmed. Also deBridge/LZ/Socket/Meson/LiFi/Relay/Axelar/Hop"
+  },
+  "130": {
+    "_chain": "Unichain",
+    "rpc_url": "https://unichain.publicnode.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool confirmed. Also Relay/Meson/Hyperlane"
+  },
   "137": {
     "_chain": "Polygon",
     "rpc_url": "https://polygon-bor-rpc.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096"
   },
-  "8453": {
-    "_chain": "Base",
-    "rpc_url": "https://mainnet.base.org",
+  "196": {
+    "_chain": "X Layer",
+    "rpc_url": "https://rpc.xlayer.tech",
     "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64"
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/LiFi/LZ supported"
   },
-  "42161": {
-    "_chain": "Arbitrum",
-    "rpc_url": "https://arb1.arbitrum.io/rpc",
+  "204": {
+    "_chain": "opBNB",
+    "rpc_url": "https://opbnb.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A"
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — LiFi/LZ/Hyperlane supported"
   },
-  "59144": {
-    "_chain": "Linea",
-    "rpc_url": "https://rpc.linea.build",
+  "250": {
+    "_chain": "Fantom",
+    "rpc_url": "https://fantom.publicnode.com",
     "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75"
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — LZ/Meson/Squid/Socket supported"
+  },
+  "252": {
+    "_chain": "Fraxtal",
+    "rpc_url": "https://rpc.frax.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Meson/LiFi/LZ/Squid supported"
+  },
+  "288": {
+    "_chain": "Boba",
+    "rpc_url": "https://mainnet.boba.network",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — LiFi/Relay/Synapse/LZ/Hyperlane supported"
   },
   "324": {
     "_chain": "zkSync Era",
@@ -43,30 +89,295 @@
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0xe0B015E54d54fc84a6cB9B666099c46adE9335FF"
   },
-  "56": {
-    "_chain": "BNB Chain",
-    "rpc_url": "https://bsc-dataseed.binance.org/",
+  "360": {
+    "_chain": "Shape",
+    "rpc_url": "https://mainnet-rpc.shape.network",
     "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x0000000000000000000000000000000000000000"
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Hyperlane supported"
+  },
+  "480": {
+    "_chain": "World Chain",
+    "rpc_url": "https://worldchain-mainnet.g.alchemy.com/public",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool confirmed. Also Relay/Meson/LiFi"
+  },
+  "592": {
+    "_chain": "Astar",
+    "rpc_url": "https://evm.astar.network",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — LZ/Hyperlane supported"
+  },
+  "698": {
+    "_chain": "Matchain",
+    "rpc_url": "https://rpc.matchain.io",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Hyperlane supported"
+  },
+  "999": {
+    "_chain": "HyperEVM",
+    "rpc_url": "https://rpc.hyperliquid.xyz/evm",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x35e63ea3eb0fb7a3bc543c71fb66412e1f6b0e04",
+    "_note": "LiFi src chain — SpokePool confirmed at 0x35e63ea3; wired for V3FundsDeposited enrichment"
+  },
+  "1088": {
+    "_chain": "Metis",
+    "rpc_url": "https://andromeda.metis.io/?owner=1088",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — deBridge/Meson/Synapse/Relay/LZ supported"
+  },
+  "1101": {
+    "_chain": "Polygon zkEVM",
+    "rpc_url": "https://zkevm-rpc.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — LiFi/Meson/Synapse/LZ/Hyperlane/Socket supported"
+  },
+  "1116": {
+    "_chain": "Core DAO",
+    "rpc_url": "https://rpc.coredao.org",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/LZ/Hyperlane supported"
+  },
+  "1135": {
+    "_chain": "Lisk",
+    "rpc_url": "https://rpc.api.lisk.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x9552a0a6624A23B848060AE5901659CDDa1f83f8",
+    "_note": "Across SpokePool confirmed. Also Meson/Relay/LZ"
+  },
+  "1284": {
+    "_chain": "Moonbeam",
+    "rpc_url": "https://rpc.api.moonbeam.network",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/LiFi/LZ/Hyperlane/Synapse/Router Nitro/Squid supported"
+  },
+  "1285": {
+    "_chain": "Moonriver",
+    "rpc_url": "https://rpc.api.moonriver.moonbeam.network",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/LiFi/LZ/Synapse supported"
+  },
+  "1329": {
+    "_chain": "Sei",
+    "rpc_url": "https://evm-rpc.sei-apis.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — deBridge/LiFi/LZ/Relay/Meson supported"
   },
   "1399811149": {
     "_chain": "Solana",
     "rpc_url": "https://api.mainnet-beta.solana.com",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "Solana uses this chain_id as a sentinel; rpc_url is the Solana JSON-RPC endpoint"
+    "_note": "Solana sentinel chain_id; rpc_url is Solana JSON-RPC endpoint"
+  },
+  "1625": {
+    "_chain": "Gravity",
+    "rpc_url": "https://rpc.gravity.xyz",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/LZ/Hyperlane/LiFi supported"
+  },
+  "1750": {
+    "_chain": "Metal L2",
+    "rpc_url": "https://rpc.metall2.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Hyperlane supported"
+  },
+  "1868": {
+    "_chain": "Soneium",
+    "rpc_url": "https://rpc.soneium.org",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool confirmed. Also Relay/Meson/LZ"
+  },
+  "1923": {
+    "_chain": "Swellchain",
+    "rpc_url": "https://swell-mainnet.alt.technology",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Hyperlane supported"
+  },
+  "2020": {
+    "_chain": "Ronin",
+    "rpc_url": "https://api.roninchain.com/rpc",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Hyperlane supported"
+  },
+  "2222": {
+    "_chain": "Kava",
+    "rpc_url": "https://evm.kava.io",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/LZ/Squid/Router Nitro/Axelar supported"
+  },
+  "2702128": {
+    "_chain": "Katana",
+    "rpc_url": "https://rpc.katana.network",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Hyperlane supported"
+  },
+  "2741": {
+    "_chain": "Abstract",
+    "rpc_url": "https://api.mainnet.abs.xyz",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/LZ supported"
+  },
+  "4200": {
+    "_chain": "Merlin",
+    "rpc_url": "https://rpc.merlinchain.io",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/LZ supported"
+  },
+  "5000": {
+    "_chain": "Mantle",
+    "rpc_url": "https://rpc.mantle.xyz",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — deBridge/LiFi/LZ/Relay/Squid/Socket/Meson/Axelar/Hyperlane supported"
+  },
+  "5330": {
+    "_chain": "Superseed",
+    "rpc_url": "https://mainnet.superseed.xyz",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool confirmed (225b). Also Relay/Hyperlane"
+  },
+  "7560": {
+    "_chain": "Cyber",
+    "rpc_url": "https://cyber.alt.technology",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/LZ/Hyperlane supported"
+  },
+  "7777777": {
+    "_chain": "Zora",
+    "rpc_url": "https://rpc.zora.energy",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool confirmed. Also Relay/LZ"
+  },
+  "8453": {
+    "_chain": "Base",
+    "rpc_url": "https://mainnet.base.org",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64"
+  },
+  "8822": {
+    "_chain": "IOTA EVM",
+    "rpc_url": "https://json-rpc.evm.iotaledger.net",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — LZ/Hyperlane supported"
+  },
+  "33139": {
+    "_chain": "ApeChain",
+    "rpc_url": "https://rpc.apechain.com/http",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Hyperlane/LZ supported"
+  },
+  "34443": {
+    "_chain": "Mode",
+    "rpc_url": "https://mainnet.mode.network",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96",
+    "_note": "Across SpokePool confirmed. Also LZ/Meson/LiFi/Relay/Socket"
   },
   "36927": {
-    "_chain": "Taifoon Devnet — operator path test only",
+    "_chain": "Taifoon Devnet",
     "rpc_url": "https://rpc.taifoon.dev",
     "operator": "0x4000F8820522AC96C4221b299876e3e53bCc8525",
     "across_adapter": "0x0000000000000000000000000000000000000000"
+  },
+  "42161": {
+    "_chain": "Arbitrum",
+    "rpc_url": "https://arb1.arbitrum.io/rpc",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A"
+  },
+  "42170": {
+    "_chain": "Arbitrum Nova",
+    "rpc_url": "https://nova.arbitrum.io/rpc",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — LZ/LiFi/Relay/Meson supported"
+  },
+  "42220": {
+    "_chain": "Celo",
+    "rpc_url": "https://forno.celo.org",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96",
+    "_note": "Across SpokePool confirmed. Also deBridge/LiFi/LZ/Relay/Meson/Squid/Socket/Axelar/Hyperlane/Synapse"
+  },
+  "43114": {
+    "_chain": "Avalanche",
+    "rpc_url": "https://api.avax.network/ext/bc/C/rpc",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — deBridge/LiFi/LZ/Relay/Meson/Squid/Socket/Axelar/Hyperlane/Synapse/Router Nitro supported"
+  },
+  "57073": {
+    "_chain": "Ink",
+    "rpc_url": "https://rpc-gel.inkonchain.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0xeF684C38F94F48775959ECf2012D7E864ffb9dd4",
+    "_note": "Across SpokePool confirmed. Also Relay/Meson"
+  },
+  "59144": {
+    "_chain": "Linea",
+    "rpc_url": "https://rpc.linea.build",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x7e63a5f1a8F0B4D0934B2f2327DAEd3f6bb2Ee75",
+    "_note": "Across SpokePool confirmed (legacy depositId). Also deBridge/LZ/Relay/Meson/Axelar/Hyperlane/Socket"
+  },
+  "60808": {
+    "_chain": "BOB",
+    "rpc_url": "https://rpc.gobob.xyz",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Meson/Relay/LZ supported"
+  },
+  "80094": {
+    "_chain": "Berachain",
+    "rpc_url": "https://rpc.berachain.com",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — deBridge/Meson/Socket/Axelar supported"
+  },
+  "81457": {
+    "_chain": "Blast",
+    "rpc_url": "https://rpc.blast.io",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64",
+    "_note": "Across SpokePool V3 confirmed (7507b). Also Squid/LiFi/LZ/Relay/Meson/Hyperlane/Synapse/Socket/deBridge"
   },
   "84532": {
     "_chain": "Base Sepolia",
     "rpc_url": "https://sepolia.base.org",
     "operator": "0x4000F8820522AC96C4221b299876e3e53bCc8525",
     "across_adapter": "0x82B564983aE7274c86695917BBf8C99ECb6F0F8F"
+  },
+  "167000": {
+    "_chain": "Taiko",
+    "rpc_url": "https://rpc.mainnet.taiko.xyz",
+    "operator": "0x0000000000000000000000000000000000000000",
+    "across_adapter": "0x0000000000000000000000000000000000000000",
+    "_note": "No Across SpokePool — Relay/Meson/LZ/Hyperlane supported"
   },
   "421614": {
     "_chain": "Arbitrum Sepolia",
@@ -78,60 +389,14 @@
     "_chain": "Scroll",
     "rpc_url": "https://rpc.scroll.io",
     "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96"
+    "across_adapter": "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96",
+    "_note": "Across SpokePool confirmed. Also deBridge/LiFi/LZ/Relay/Meson/Squid/Socket/Synapse"
   },
-  "57073": {
-    "_chain": "Ink",
-    "rpc_url": "https://rpc-gel.inkonchain.com",
-    "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0xeF684C38F94F48775959ECf2012D7E864ffb9dd4"
-  },
-  "34443": {
-    "_chain": "Mode",
-    "rpc_url": "https://mainnet.mode.network",
-    "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96"
-  },
-  "43114": {
-    "_chain": "Avalanche",
-    "rpc_url": "https://api.avax.network/ext/bc/C/rpc",
+  "660279": {
+    "_chain": "Xai",
+    "rpc_url": "https://xai-chain.net/rpc",
     "operator": "0x0000000000000000000000000000000000000000",
     "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "No Across SpokePool on Avalanche — deBridge DLN only"
-  },
-  "100": {
-    "_chain": "Gnosis",
-    "rpc_url": "https://rpc.gnosischain.com",
-    "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "deBridge DLN supported; Across not deployed on Gnosis"
-  },
-  "999": {
-    "_chain": "HyperEVM",
-    "rpc_url": "https://rpc.hyperliquid.xyz/evm",
-    "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x35e63ea3eb0fb7a3bc543c71fb66412e1f6b0e04",
-    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment only; SpokePool confirmed at 0x35e63ea3"
-  },
-  "1868": {
-    "_chain": "Taiko",
-    "rpc_url": "https://rpc.mainnet.taiko.xyz",
-    "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment; confirm SpokePool addr before enabling as fill dst"
-  },
-  "81457": {
-    "_chain": "Blast",
-    "rpc_url": "https://rpc.blast.io",
-    "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment; Across SpokePool not confirmed on Blast"
-  },
-  "1135": {
-    "_chain": "Lisk",
-    "rpc_url": "https://rpc.api.lisk.com",
-    "operator": "0x0000000000000000000000000000000000000000",
-    "across_adapter": "0x0000000000000000000000000000000000000000",
-    "_note": "LiFi src chain — wired for V3FundsDeposited enrichment; Across SpokePool not confirmed on Lisk"
+    "_note": "No Across SpokePool — Relay/LZ supported"
   }
 }

@@ -104,11 +104,18 @@ function IntentRow({ intent }: { intent: Intent }) {
   const isSkip = intent.stage === 'skipped' || intent.stage === 'failed' || intent.stage === 'reverted'
 
   const amtNum = parseFloat(intent.amount) || 0
-  // Raw amounts come in token-native units. Heuristic: >=1e15 → 18-dec (ETH/WETH),
-  // >=1e4 → 6-dec (USDC/USDT). Cap display at 9999999 to hide absurd Wormhole notionals.
+  // Raw amounts come in token-native units.
+  // >=1e15 → 18 decimals (ETH/WETH), >=1e4 && <1e15 → 6 decimals (USDC/USDT),
+  // <1e4 → assume already human-readable (display as-is).
   const decimals = amtNum >= 1e15 ? 18 : amtNum >= 1e4 ? 6 : 0
   const amtHuman = decimals > 0 ? amtNum / Math.pow(10, decimals) : amtNum
-  const amtDisplay = amtHuman > 9_999_999 ? '>9.9M' : amtHuman < 0.001 && amtHuman > 0 ? '<0.01' : amtHuman.toFixed(2)
+  const tokenSuffix = intent.token ? ` ${intent.token.slice(0, 6)}` : ''
+  const amtDisplay =
+    amtHuman > 9_999_999
+      ? '>9.9M' + tokenSuffix
+      : amtHuman < 0.001 && amtHuman > 0
+        ? '<0.01' + tokenSuffix
+        : amtHuman.toFixed(2) + tokenSuffix
 
   return (
     <div
@@ -154,13 +161,11 @@ function IntentRow({ intent }: { intent: Intent }) {
   )
 }
 
-const KNOWN_PROTOCOLS = ['across_v3', 'debridge_dln', 'mayan_swift', 'lifi', 'orbiter_finance']
+const ACTIVE_PROTOCOLS = ['across_v3', 'debridge_dln', 'mayan_swift']
 const PROTO_NAMES: Record<string, string> = {
   across_v3: 'Across V3',
   debridge_dln: 'deBridge DLN',
   mayan_swift: 'Mayan Swift',
-  lifi: 'LiFi',
-  orbiter_finance: 'Orbiter',
 }
 
 function ProtocolPanel({ protocols }: { protocols: Record<string, ProtoStats> }) {
@@ -176,9 +181,9 @@ function ProtocolPanel({ protocols }: { protocols: Record<string, ProtoStats> })
 
   return (
     <Card padding="md">
-      <CardHeader title="5 Protocols" />
+      <CardHeader title="Protocols" />
       <div className="space-y-3">
-        {KNOWN_PROTOCOLS.map((key) => {
+        {ACTIVE_PROTOCOLS.map((key) => {
           const stat = Object.entries(protocols).find(([k]) => k.includes(key.split('_')[0]))
           const data = stat?.[1]
           const color = protocolColor(key)
@@ -202,7 +207,7 @@ function ProtocolPanel({ protocols }: { protocols: Record<string, ProtoStats> })
                   {data.skipped > 0 && <span className="text-[var(--text-tertiary)]">{data.skipped} skip</span>}
                 </div>
               ) : (
-                <span className="text-[10px] text-[var(--text-tertiary)] font-mono">waiting…</span>
+                <span className="text-[10px] text-[var(--text-tertiary)] font-mono">monitoring…</span>
               )}
             </div>
           )
@@ -343,7 +348,17 @@ function OpenOrdersPanel() {
           <div className="text-[var(--text-tertiary)] text-xs text-center py-6">Loading…</div>
         )}
         {!loading && orders.length === 0 && (
-          <div className="text-[var(--success)] text-xs text-center py-6">✅ No open orders</div>
+          <div className="py-5 px-1 space-y-3">
+            <div className="text-[10px] tracking-[0.2em] uppercase text-[var(--text-tertiary)]">No open orders</div>
+            <p className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed">
+              Open orders are fills where solver capital is actively committed on-chain.
+              A position appears here from calldata build through destination-chain confirmation.
+              States tracked: <span className="text-[var(--warning)]">CALLDATA_BUILD</span> (capital
+              reserved), <span className="text-[var(--brand-blue)]">BROADCAST</span> (tx sent
+              to mempool), <span className="text-[var(--brand-blue)]">PENDING_CONFIRMATION</span> (awaiting
+              receipt), <span className="text-[var(--danger)]">REVERTED</span> (fill failed — capital released).
+            </p>
+          </div>
         )}
         {[...orders].sort((a, b) => {
           const ap = WE_ARE_FILLING.has(a.state) ? 0 : a.state === 'REVERTED' ? 1 : 2
@@ -468,9 +483,9 @@ export default function SolverMonitorPage({ params }: PageProps) {
               <Badge tone={connected ? 'mint' : 'neutral'} dot pulse={connected}>
                 {connected ? 'LIVE' : 'CONNECTING'}
               </Badge>
-              <Badge tone="info">5 PROTOCOLS</Badge>
+              <Badge tone="info">3 PROTOCOLS</Badge>
               {meta && meta.donut_accrued_usd > 0 && (
-                <Badge tone="mint">TSUL ${meta.donut_accrued_usd.toFixed(4)}</Badge>
+                <Badge tone="mint">+${meta.donut_accrued_usd.toFixed(2)} REWARDS</Badge>
               )}
             </div>
             <div className="flex items-center gap-4">
@@ -490,7 +505,7 @@ export default function SolverMonitorPage({ params }: PageProps) {
         <div className="max-w-[1400px] mx-auto grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-x-8 gap-y-4 px-6 py-6 border-b border-[var(--border-subtle)]">
           <StatTile label="INTENTS" value={stats?.total_intents ?? intents.length} />
           <StatTile label="DRY RUNS" value={dryRuns} tone="warning" />
-          <StatTile label="CONFIRMED" value={confirmed} tone="mint" />
+          <StatTile label="CONFIRMED" value={confirmed} tone="mint" unit="session" />
           <StatTile label="SKIPPED" value={skipped} />
           <StatTile label="FILLS" value={pnl?.fills_total ?? stats?.executed_fills ?? 0} tone="mint" />
           <StatTile label="FAILED" value={stats?.failed_fills ?? 0} tone="danger" />

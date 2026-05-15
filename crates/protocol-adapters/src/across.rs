@@ -144,6 +144,62 @@ impl AcrossAdapter {
             34443, // Mode
             "0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96".parse().unwrap(),
         );
+        spoke_pool_addresses.insert(
+            81457, // Blast
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            130, // Unichain
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            480, // World Chain
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            1135, // Lisk
+            "0x9552a0a6624A23B848060AE5901659CDDa1f83f8".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            1868, // Soneium
+            "0x9552a0a6624A23B848060AE5901659CDDa1f83f8".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            100, // Gnosis
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            42220, // Celo
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            7777777, // Zora
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            5330, // Superseed
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            1116, // Core DAO
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            288, // Boba
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            196, // X Layer
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            4326, // MegaETH
+            "0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64".parse().unwrap(),
+        );
+        spoke_pool_addresses.insert(
+            43114, // Avalanche
+            "0x1dF5bEd1f57662d0bf5d2D6986b2E5EB20B5D050".parse().unwrap(),
+        );
 
         Self {
             spinner_client,

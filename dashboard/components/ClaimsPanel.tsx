@@ -81,6 +81,117 @@ function authHeaders(): HeadersInit {
     : {}
 }
 
+// ── deBridge claim lifecycle guide (shown when no claims are in flight) ───────
+
+const CLAIM_STEPS: Array<{ label: string; detail: string; contract?: string }> = [
+  {
+    label: 'ORDER DETECTED',
+    detail: 'DlnSource.OrderCreated event arrives from the genome SSE feed. The solver decodes the order ID and token amounts from the on-chain log.',
+    contract: 'DlnSource · 0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
+  },
+  {
+    label: 'PROFITABILITY CHECK',
+    detail: 'profit-calc runs: take amount − give amount − estimated gas cost on the destination chain. Orders below MIN_PROFIT_USD are skipped immediately.',
+  },
+  {
+    label: 'CALLDATA BUILD',
+    detail: 'fulfillOrder() calldata is encoded for DlnDestination on the destination chain. Solver capital is reserved in the wallet DB under wallet_state = CALLDATA_BUILD.',
+    contract: 'DlnDestination · 0xE7351Fd770A37282b91D153Ee690B63579D6dd7f',
+  },
+  {
+    label: 'FILL TX BROADCAST',
+    detail: 'fulfillOrder() sent to the destination chain. Wallet transitions to BROADCAST. The solver waits for receipt confirmation (≤ 90s window).',
+  },
+  {
+    label: 'FILL CONFIRMED',
+    detail: 'Receipt arrives. Wallet moves to CONFIRMED. outcome_log records the fill tx hash and actual profit. This row appears in Live P&L.',
+  },
+  {
+    label: 'CLAIM UNLOCK',
+    detail: 'lambda_claim_debridge fires claimUnlock() on DlnSource (source chain). This releases the order\'s locked give tokens to the solver. Wallet moves to CLAIM_PENDING.',
+    contract: 'DlnSource · 0xeF4fB24aD0916217251F553c0596F8Edc630EB66',
+  },
+  {
+    label: 'CLAIMED',
+    detail: 'claimUnlock() receipt confirmed. claim_tx_hash and claim_fee_usd written to the outcome row. Wallet state = CLAIMED. Capital is now fully recovered on the source chain.',
+  },
+]
+
+function ClaimsLifecycleGuide() {
+  return (
+    <div className="py-6 space-y-5">
+      <div>
+        <div className="text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)] mb-1">
+          No claims in flight
+        </div>
+        <p className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed max-w-[600px]">
+          deBridge DLN fills require a two-phase commit across chains. The solver fills the
+          order on the destination chain, then calls <span className="text-[var(--brand-blue)]">claimUnlock()</span> on
+          the source chain to recover capital. This panel tracks every open position in that second phase.
+        </p>
+      </div>
+
+      <div>
+        <div className="text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)] mb-3">
+          Claim lifecycle
+        </div>
+        <div className="space-y-0">
+          {CLAIM_STEPS.map((step, i) => {
+            const isTerminal = i === CLAIM_STEPS.length - 1
+            const isClaim = step.label.includes('CLAIM')
+            const color = isTerminal
+              ? 'var(--success)'
+              : isClaim
+                ? 'var(--brand-blue)'
+                : 'var(--text-tertiary)'
+            return (
+              <div key={step.label} className="flex gap-3 pb-4">
+                <div className="flex flex-col items-center shrink-0 pt-0.5">
+                  <div
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{ background: color }}
+                  />
+                  {i < CLAIM_STEPS.length - 1 && (
+                    <div className="w-px flex-1 mt-1" style={{ background: 'var(--border-subtle)' }} />
+                  )}
+                </div>
+                <div className="pb-1 min-w-0">
+                  <div className="font-mono text-[10px] tracking-[0.16em] mb-0.5" style={{ color }}>
+                    {step.label}
+                  </div>
+                  <div className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                    {step.detail}
+                  </div>
+                  {step.contract && (
+                    <div className="font-mono text-[10px] text-[var(--text-tertiary)] mt-0.5 tracking-[0.04em]">
+                      {step.contract}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="border-t border-[var(--border-subtle)] pt-4">
+        <div className="text-[10px] tracking-[0.24em] uppercase text-[var(--text-tertiary)] mb-2">
+          LiFi enrichment
+        </div>
+        <p className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed max-w-[600px]">
+          LiFi intents arrive via the genome feed with a Diamond proxy tx hash, not the
+          underlying deposit tx. The solver calls the{' '}
+          <span className="text-[var(--brand-blue)]">li.quest /v1/status</span> API to resolve
+          the actual bridge slug (Across, deBridge, or Mayan) and the real deposit tx hash.
+          Unresolved intents enter an 8-retry backoff window before being dropped.
+          LiFi Diamond routes to DlnDestination for deBridge orders — the claim lifecycle above
+          applies to those fills identically.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function ClaimsPanel() {
   const [data, setData] = useState<ClaimsResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -250,11 +361,8 @@ export default function ClaimsPanel() {
             )}
             {!loading && claims.length === 0 && !error && (
               <tr>
-                <td
-                  colSpan={7}
-                  className="px-3 py-6 text-center text-[var(--success)]"
-                >
-                  ✅ No deBridge claims in flight
+                <td colSpan={7} className="px-4 py-0">
+                  <ClaimsLifecycleGuide />
                 </td>
               </tr>
             )}

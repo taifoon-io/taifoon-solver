@@ -281,12 +281,15 @@ async fn fetch_rpc_gas_price_gwei(chain_id: u64) -> Option<f64> {
     Some(wei as f64 / 1_000_000_000.0)
 }
 
+/// Canonical gas buffer: 35% headroom matches arc GasOracle (TSUL Rule: one buffer).
+const GAS_BUFFER: f64 = 1.35;
+
 /// Compute the optimal maxFeePerGas (wei) for a chain.
 ///
-/// Strategy (mirrors the partner guardian + Python filler):
+/// Strategy (mirrors the Razor GasOracle in arc-core):
 ///   1. Try Razor API for live gas price.
 ///   2. Clamp result against per-chain min/max from `GAS_PRICE_RANGES`.
-///   3. Apply 1.2× safety buffer.
+///   3. Apply 1.35× safety buffer (canonical — arc GasOracle uses same factor).
 ///   4. If Razor unavailable, try `eth_gasPrice` RPC as secondary fallback.
 ///   5. If both fail, use chain `typical` as static floor.
 ///
@@ -295,9 +298,9 @@ pub async fn optimal_gas_price_wei(chain_id: u64, warmbed_base: &str) -> (u128, 
     let range = gas_price_range_for_chain(chain_id);
 
     let gwei = if let Some(live) = fetch_razor_gas_price_gwei(chain_id, warmbed_base).await {
-        // Clamp against known-sane range, then apply 1.2× buffer.
+        // Clamp against known-sane range, then apply canonical 1.35× buffer.
         let clamped = live.max(range.min_gwei).min(range.max_gwei);
-        clamped * 1.2
+        clamped * GAS_BUFFER
     } else if let Some(rpc_price) = fetch_rpc_gas_price_gwei(chain_id).await {
         // Razor unavailable — use live eth_gasPrice from the node, clamped and buffered.
         let clamped = rpc_price.max(range.min_gwei).min(range.max_gwei);
@@ -305,7 +308,7 @@ pub async fn optimal_gas_price_wei(chain_id: u64, warmbed_base: &str) -> (u128, 
             target: "estimate",
             "gas: Razor unavailable for chain={}, using eth_gasPrice={:.4} gwei", chain_id, rpc_price
         );
-        clamped * 1.2
+        clamped * GAS_BUFFER
     } else {
         // Both Razor and RPC failed — use chain typical as static floor.
         warn!(
@@ -313,7 +316,7 @@ pub async fn optimal_gas_price_wei(chain_id: u64, warmbed_base: &str) -> (u128, 
             "gas: both Razor and eth_gasPrice failed for chain={}, using typical={} gwei",
             chain_id, range.typical_gwei
         );
-        range.typical_gwei * 1.2
+        range.typical_gwei * GAS_BUFFER
     };
 
     let max_fee_wei = (gwei * 1_000_000_000.0) as u128;

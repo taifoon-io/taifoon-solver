@@ -128,6 +128,16 @@ impl DeBridgeAdapter {
         dln_addresses.insert(57073, dln_dst);   // Ink
         dln_addresses.insert(34443, dln_dst);   // Mode
         dln_addresses.insert(100, dln_dst);     // Gnosis
+        dln_addresses.insert(5000, dln_dst);    // Mantle
+        dln_addresses.insert(1329, dln_dst);    // Sei
+        dln_addresses.insert(80094, dln_dst);   // Berachain
+        dln_addresses.insert(1088, dln_dst);    // Metis
+        dln_addresses.insert(999, dln_dst);     // HyperEVM
+        dln_addresses.insert(60808, dln_dst);   // Kava
+        dln_addresses.insert(4158, dln_dst);    // Bitlayer
+        dln_addresses.insert(250, dln_dst);     // Fantom
+        dln_addresses.insert(25, dln_dst);      // Cronos
+        dln_addresses.insert(146, dln_dst);     // Sonic
 
         Self {
             spinner_client,
