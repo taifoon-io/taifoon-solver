@@ -1,0 +1,10 @@
+# Fixture hands.toml for the P6 boot smoke test (crates/solver-main/tests/hand_smoke.sh).
+# Declares a single internal venue so /api/hand/status reports registered > 0
+# (non-503) without needing the gitignored ../trade/crates/trader crate.
+
+default_venue = "internal"
+
+[[venue]]
+venue = "internal"
+capabilities = 255
+connected = true

@@ -12,6 +12,7 @@ use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
 use solver_main::attestation_pump;
+use solver_main::hand_backend::{HandVenueConfig, TraderHandBackend};
 use solver_main::lifi_resolver::{resolve_lifi_bridge, LifiBridgeResult};
 use solver_main::messiah;
 use std::collections::{HashMap, HashSet};
@@ -149,6 +150,41 @@ async fn main() -> Result<()> {
     // path is the dev/local fallback so a fresh checkout doesn't lock its
     // own dashboard out by default.
     ensure_solver_api_token();
+
+    // ── Hand backend (P6) ─────────────────────────────────────────────────────
+    // Wire a concrete HandBackend into SolverApi so /api/hand/* stops
+    // returning 503. Uses the same OnceLock injection pattern as the
+    // outcome-log / wallet-manager handles below, so it can run after
+    // solver_api.router() is built. Config source is HANDS_CONFIG_PATH
+    // (default ./config/hands.toml); if absent, fall back to a single
+    // "internal" venue so a fresh checkout still answers status non-503.
+    {
+        let hands_config_path = std::env::var("HANDS_CONFIG_PATH")
+            .unwrap_or_else(|_| "./config/hands.toml".to_string());
+        let backend = match TraderHandBackend::from_config(&hands_config_path) {
+            Ok(b) => {
+                info!(
+                    "🤝 Hand backend: {} venue(s) from {}",
+                    b.registered(),
+                    hands_config_path
+                );
+                b
+            }
+            Err(e) => {
+                warn!(
+                    "🤝 Hand config {} unavailable ({}); defaulting to single 'internal' venue",
+                    hands_config_path, e
+                );
+                TraderHandBackend::new(vec![HandVenueConfig {
+                    venue: "internal".to_string(),
+                    capabilities: 0,
+                    connected: false,
+                }])
+                .with_default("internal")
+            }
+        };
+        solver_api.set_hand_backend(Arc::new(backend));
+    }
 
     // ── Solver event API (SSE for dashboard) ──────────────────────────────────
     let api_router = solver_api.router();
