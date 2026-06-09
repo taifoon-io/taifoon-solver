@@ -36,3 +36,16 @@ alloy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
+async-trait.workspace = true
+toml = "0.8"
+
+[features]
+# Default build is config-only: TraderHandBackend answers /api/hand/* from a
+# hands.toml without needing the gitignored internal `trader` crate, so
+# `cargo build -p solver-main` works on a fresh checkout.
+default = []
+# Enable when the internal venue's `trader` crate is checked out at
+# ../trade/crates/trader. Add the path dep alongside flipping this on:
+#   trader = { path = "../../../trade/crates/trader", optional = true }
+# and reference it from this feature (trader-backend = ["dep:trader"]).
+trader-backend = []
