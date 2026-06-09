@@ -13,6 +13,7 @@ use solver_api::{
 };
 use solver_main::attestation_pump;
 use solver_main::hand_backend::{HandVenueConfig, TraderHandBackend};
+use solver_main::hand_relay;
 use solver_main::lifi_resolver::{resolve_lifi_bridge, LifiBridgeResult};
 use solver_main::messiah;
 use std::collections::{HashMap, HashSet};
@@ -183,7 +184,38 @@ async fn main() -> Result<()> {
                 .with_default("internal")
             }
         };
-        solver_api.set_hand_backend(Arc::new(backend));
+        // Share one Arc between the API surface and the P7 relay so the
+        // explorer sees exactly the hand state the /api/hand/* routes serve.
+        let hand_backend: Arc<dyn solver_api::hand::HandBackend> = Arc::new(backend);
+        solver_api.set_hand_backend(hand_backend.clone());
+
+        // ── Spinner hand-state relay (P7) ─────────────────────────────────────
+        // Forward solver-main hand state to the spinner explorer on a timer so
+        // the explorer can surface which venues this solver fronts + their
+        // connectivity. Best-effort, fail-open (mirrors attestation_pump):
+        // explorer downtime never affects the solver. Opt out with
+        // HAND_RELAY_DISABLE=1. solver_id is the messiah signer address when
+        // available (purely for explorer keying — relay runs without it too).
+        if std::env::var("HAND_RELAY_DISABLE").ok().as_deref() == Some("1") {
+            info!("🤝 hand_relay disabled (HAND_RELAY_DISABLE=1)");
+        } else {
+            let solver_id = messiah::load_messiah_signer()
+                .ok()
+                .map(|s| format!("{:?}", s.address()));
+            let relay_interval = std::env::var("HAND_RELAY_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(30);
+            hand_relay::spawn_hand_relay(
+                hand_backend,
+                hand_relay::HandRelayConfig {
+                    spinner_base_url: spinner_base.clone(),
+                    solver_id,
+                    poll_interval: std::time::Duration::from_secs(relay_interval),
+                },
+            );
+            info!("🤝 hand_relay spawned → {} (every {}s)", spinner_base, relay_interval);
+        }
     }
 
     // ── Solver event API (SSE for dashboard) ──────────────────────────────────
