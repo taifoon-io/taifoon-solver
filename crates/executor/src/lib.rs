@@ -12,6 +12,7 @@ pub mod lambda_controller;
 pub mod lifi_meta_router;
 pub mod mayan_evm_estimate;
 pub mod mayan_solana_estimate;
+pub mod operator_calldata;
 pub mod outcome_log;
 pub mod router;
 pub mod skip_rules;

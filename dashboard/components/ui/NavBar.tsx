@@ -10,6 +10,7 @@ const links: { href: string; label: string; volt?: boolean }[] = [
   { href: '/portal', label: 'PORTAL' },
   { href: '/watch', label: 'MY WALLET' },
   { href: '/analytics', label: 'ANALYTICS' },
+  { href: '/arc', label: 'ARC', volt: true },
   { href: '/builders/bounties', label: 'ROUTES', volt: true },
   { href: '/onboard', label: 'ONBOARD' },
   { href: '/policy', label: 'POLICY' },

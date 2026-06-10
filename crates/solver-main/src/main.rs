@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
     let dry_run = std::env::var("DRY_RUN")
         .or_else(|_| std::env::var("SIMULATION_MODE"))
         .map(|v| v != "false" && v != "0")
-        .unwrap_or(true);
+        .unwrap_or(false);
     let outcome_db_path = std::env::var("OUTCOME_DB_PATH")
         .unwrap_or_else(|_| "/tmp/taifoon_solver_outcomes.sqlite".to_string());
     let mamba_lake_url = std::env::var("MAMBA_LAKE_URL").ok();
@@ -135,7 +135,11 @@ async fn main() -> Result<()> {
     if min_input_usd > 0.0 || max_input_usd < max_notional_usd_global {
         info!("💵 Input range: ${:.2}–${:.2}", min_input_usd, max_input_usd);
     }
-    info!("🧪 DRY_RUN: {}", dry_run);
+    if dry_run {
+        warn!("🧪 DRY_RUN mode active — fills are simulated, NOT broadcast to chain (set DRY_RUN=false to enable live fills)");
+    } else {
+        info!("🔴 LIVE mode — fills will be broadcast to chain");
+    }
     let api_port: u16 = std::env::var("API_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -184,9 +188,20 @@ async fn main() -> Result<()> {
                 .with_default("internal")
             }
         };
+        // ── algotrada-brain live mode (P8) ────────────────────────────────────
+        // Off by default. When ALGOTRADA_LIVE is truthy AND BRAIN_LIVE_MODE_URL
+        // is set, wrap the static config backend so /api/hand/status (and the P7
+        // relay snapshot the explorer sees) reflects the brain's live venue/
+        // connectivity state — fail-open to the config backend if the brain is
+        // unreachable. The brain's own live-mode gate landed in brain 18b70e8d;
+        // this is the solver-main side that consumes those live signals via the
+        // HandBackend relay. See crates/solver-main/src/hand_live.rs.
+        let static_backend: Arc<dyn solver_api::hand::HandBackend> = Arc::new(backend);
+        let hand_backend: Arc<dyn solver_api::hand::HandBackend> =
+            solver_main::hand_live::maybe_live_backend(static_backend.clone())
+                .unwrap_or(static_backend);
         // Share one Arc between the API surface and the P7 relay so the
         // explorer sees exactly the hand state the /api/hand/* routes serve.
-        let hand_backend: Arc<dyn solver_api::hand::HandBackend> = Arc::new(backend);
         solver_api.set_hand_backend(hand_backend.clone());
 
         // ── Spinner hand-state relay (P7) ─────────────────────────────────────
