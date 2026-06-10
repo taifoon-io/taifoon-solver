@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use executor::{
-    build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
-    LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
+    build_lambda_controller_from_env, parse_dry_run_env, Executor, LambdaClaimOutcome,
+    LambdaExecuteOutcome, LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
 use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, DlnSolanaSourcePoller, GenomeClient, Intent};
 use portfolio_sidecar::PortfolioSidecar;
@@ -89,10 +89,10 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_MIN_PROFIT_USD);
-    let dry_run = std::env::var("DRY_RUN")
-        .or_else(|_| std::env::var("SIMULATION_MODE"))
-        .map(|v| v != "false" && v != "0")
-        .unwrap_or(false);
+    // DRY_RUN is REQUIRED-EXPLICIT (decision 60a19039): unset defaults to LIVE
+    // (false) — never a silent dry-run in prod — and a garbled value hard-fails
+    // at boot rather than quietly resolving to a no-op.
+    let dry_run = parse_dry_run_env()?;
     let outcome_db_path = std::env::var("OUTCOME_DB_PATH")
         .unwrap_or_else(|_| "/tmp/taifoon_solver_outcomes.sqlite".to_string());
     let mamba_lake_url = std::env::var("MAMBA_LAKE_URL").ok();
