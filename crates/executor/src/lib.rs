@@ -78,14 +78,43 @@ pub struct Executor {
     router: Arc<dyn FillRouter>,
 }
 
+/// Parse the `DRY_RUN` / `SIMULATION_MODE` flag with **explicit, fail-safe**
+/// semantics so the portal economy can never *silently* no-op in production.
+///
+/// Rules (decision `60a19039`, portal-2026):
+/// * `DRY_RUN` takes precedence over the legacy `SIMULATION_MODE` alias.
+/// * A clear truthy value (`true`/`1`/`yes`/`on`) → dry-run (simulate, no broadcast).
+/// * A clear falsy value (`false`/`0`/`no`/`off`) → live fills.
+/// * **Unset → live (`false`)** — never a silent dry-run. The default is FALSE,
+///   so a forgotten env var fails *open to production*, not to a no-op.
+/// * **Set but unrecognised** (e.g. a typo like `flase`) → **hard error**. We
+///   refuse to start rather than guess; an ambiguous value must never quietly
+///   resolve to dry-run (the old `.parse().unwrap_or(true)` did exactly that).
+///
+/// Case- and whitespace-insensitive.
+pub fn parse_dry_run_env() -> Result<bool> {
+    let raw = std::env::var("DRY_RUN").or_else(|_| std::env::var("SIMULATION_MODE"));
+    match raw {
+        // Unset → live. Default is FALSE; prod can never accidentally dry-run.
+        Err(_) => Ok(false),
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(true),
+            "false" | "0" | "no" | "off" => Ok(false),
+            other => Err(anyhow!(
+                "DRY_RUN/SIMULATION_MODE is set to an unrecognised value {other:?} — \
+                 refusing to start. Set it explicitly to a clear true/false \
+                 (true|1|yes|on  or  false|0|no|off) so the solver can never silently dry-run."
+            )),
+        },
+    }
+}
+
 impl Executor {
     pub fn new() -> Result<Self> {
-        // Load configuration from environment
-        let simulation_mode = std::env::var("SIMULATION_MODE")
-            .or_else(|_| std::env::var("DRY_RUN"))
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
+        // Load configuration from environment.
+        // DRY_RUN is REQUIRED-EXPLICIT: unset defaults to live (false), and a
+        // garbled value hard-fails — never a silent dry-run in prod (decision 60a19039).
+        let simulation_mode = parse_dry_run_env()?;
 
         let min_profit_usd = std::env::var("MIN_PROFIT_USD")
             .unwrap_or_else(|_| "0.10".to_string())
@@ -235,5 +264,88 @@ impl Executor {
 impl Default for Executor {
     fn default() -> Self {
         Self::new().expect("Failed to initialize executor")
+    }
+}
+
+#[cfg(test)]
+mod dry_run_env_tests {
+    use super::parse_dry_run_env;
+
+    // Process env is global shared state. We run every case inside ONE test,
+    // sequentially, saving/restoring both vars so the suite stays hermetic and
+    // independent of test-runner thread scheduling (no serial_test dep needed).
+    fn with_env(dry_run: Option<&str>, sim: Option<&str>, f: impl FnOnce()) {
+        let prev_dry = std::env::var("DRY_RUN").ok();
+        let prev_sim = std::env::var("SIMULATION_MODE").ok();
+        match dry_run {
+            Some(v) => std::env::set_var("DRY_RUN", v),
+            None => std::env::remove_var("DRY_RUN"),
+        }
+        match sim {
+            Some(v) => std::env::set_var("SIMULATION_MODE", v),
+            None => std::env::remove_var("SIMULATION_MODE"),
+        }
+        f();
+        match prev_dry {
+            Some(v) => std::env::set_var("DRY_RUN", v),
+            None => std::env::remove_var("DRY_RUN"),
+        }
+        match prev_sim {
+            Some(v) => std::env::set_var("SIMULATION_MODE", v),
+            None => std::env::remove_var("SIMULATION_MODE"),
+        }
+    }
+
+    #[test]
+    fn dry_run_is_explicit_no_silent_dry_run() {
+        // THE core regression guard for decision 60a19039:
+        // unset must NOT default to dry-run. It defaults to live (false).
+        with_env(None, None, || {
+            assert_eq!(
+                parse_dry_run_env().unwrap(),
+                false,
+                "unset DRY_RUN must default to LIVE (false), never silently dry-run"
+            );
+        });
+
+        // Clear truthy values → dry-run.
+        for v in ["true", "1", "yes", "on", "TRUE", " On ", "Yes"] {
+            with_env(Some(v), None, || {
+                assert_eq!(parse_dry_run_env().unwrap(), true, "{v:?} should be dry-run");
+            });
+        }
+
+        // Clear falsy values → live.
+        for v in ["false", "0", "no", "off", "FALSE", " Off ", "No"] {
+            with_env(Some(v), None, || {
+                assert_eq!(parse_dry_run_env().unwrap(), false, "{v:?} should be live");
+            });
+        }
+
+        // Garbled value → hard error (refuse to start), NOT a silent dry-run.
+        for v in ["flase", "maybe", "tru", "2", "", "dry"] {
+            with_env(Some(v), None, || {
+                assert!(
+                    parse_dry_run_env().is_err(),
+                    "{v:?} is unrecognised and must hard-fail, not resolve to dry-run"
+                );
+            });
+        }
+
+        // DRY_RUN takes precedence over the legacy SIMULATION_MODE alias.
+        with_env(Some("false"), Some("true"), || {
+            assert_eq!(
+                parse_dry_run_env().unwrap(),
+                false,
+                "DRY_RUN=false must win over SIMULATION_MODE=true"
+            );
+        });
+        // SIMULATION_MODE used only when DRY_RUN is unset.
+        with_env(None, Some("true"), || {
+            assert_eq!(parse_dry_run_env().unwrap(), true);
+        });
+        with_env(None, Some("garbage"), || {
+            assert!(parse_dry_run_env().is_err());
+        });
     }
 }
