@@ -30,10 +30,12 @@ use genome_client::Intent;
 use serde::{Deserialize, Serialize};
 
 pub mod across;
+pub mod cctp;
 pub mod debridge;
 pub mod lifi;
 pub mod mayan;
 pub mod orbiter;
+pub mod relay;
 pub mod stargate;
 
 // ── Protocol Adapter Trait ────────────────────────────────────────────────────
@@ -332,18 +334,74 @@ impl AdapterFactory {
             )));
         }
 
+        if protocol_lower.contains("stargate") {
+            return Ok(Box::new(stargate::StargateAdapter::new(
+                self.spinner_client.clone()
+            )));
+        }
+
+        // CCTP check before "relay" to avoid matching "circle_bridge_relay"
+        if protocol_lower.contains("cctp")
+            || protocol_lower.contains("circle_bridge")
+            || protocol_lower.contains("circle_transfer")
+        {
+            return Ok(Box::new(cctp::CctpAdapter::new(
+                self.spinner_client.clone()
+            )));
+        }
+
+        // "relay" last — must not shadow "debridge" (DLN uses "dln_relay" in some slugs)
+        if protocol_lower.contains("relay") && !protocol_lower.contains("debridge") {
+            return Ok(Box::new(relay::RelayAdapter::new(
+                self.spinner_client.clone()
+            )));
+        }
+
         Err(anyhow!("No adapter found for protocol: {}", intent.protocol))
     }
 
     /// List all supported protocols
     pub fn supported_protocols(&self) -> Vec<&'static str> {
-        vec!["across", "across_v3", "debridge", "dln", "lifi", "li.fi", "mayan", "mayan_finance", "mayan_swift", "orbiter_finance", "orbiter"]
+        vec![
+            "across", "across_v3",
+            "debridge", "dln",
+            "lifi", "li.fi",
+            "mayan", "mayan_finance", "mayan_swift",
+            "orbiter_finance", "orbiter",
+            "stargate", "stargate_v2",
+            "relay",
+            "cctp", "circle_bridge", "circle_transfer",
+        ]
+    }
+
+    /// Return all adapters that claim they can handle `intent` (for best-quote selection).
+    pub fn get_all_adapters(&self, intent: &Intent) -> Vec<Box<dyn ProtocolAdapter>> {
+        let mut adapters: Vec<Box<dyn ProtocolAdapter>> = Vec::new();
+        let candidates: Vec<Box<dyn ProtocolAdapter>> = vec![
+            Box::new(across::AcrossAdapter::new(self.spinner_client.clone())),
+            Box::new(debridge::DeBridgeAdapter::new(self.spinner_client.clone())),
+            Box::new(mayan::MayanAdapter::new(self.spinner_client.clone())),
+            Box::new(lifi::LiFiAdapter::new(self.spinner_client.clone())),
+            Box::new(orbiter::OrbiterAdapter::new(self.spinner_client.clone())),
+            Box::new(stargate::StargateAdapter::new(self.spinner_client.clone())),
+            Box::new(cctp::CctpAdapter::new(self.spinner_client.clone())),
+            Box::new(relay::RelayAdapter::new(self.spinner_client.clone())),
+        ];
+        for adapter in candidates {
+            if adapter.can_handle(intent) {
+                adapters.push(adapter);
+            }
+        }
+        adapters
     }
 }
 
 // Re-export common types
 pub use across::AcrossAdapter;
+pub use cctp::CctpAdapter;
 pub use debridge::DeBridgeAdapter;
 pub use lifi::LiFiAdapter;
 pub use mayan::MayanAdapter;
 pub use orbiter::OrbiterAdapter;
+pub use relay::RelayAdapter;
+pub use stargate::StargateAdapter;
