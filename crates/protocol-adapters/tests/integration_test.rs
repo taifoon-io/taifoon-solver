@@ -351,3 +351,227 @@ async fn test_multi_chain_support() {
 
     println!("\n✅ Multi-chain support test PASSED\n");
 }
+
+// ── New adapter tests (Stargate / Relay / CCTP / best-quote selection) ────────
+
+fn create_test_proof_local() -> V5ProofBlob {
+    V5ProofBlob {
+        l1_superroot: L1SuperRoot {
+            hash: "0x1234567890abcdef".to_string(),
+            timestamp: 1234567890,
+            chains_included: vec![1, 42161],
+        },
+        l2_chain_header: L2ChainHeader {
+            chain_id: 1, block_number: 1_000_000,
+            block_hash: "0xblock".to_string(), parent_hash: "0xparent".to_string(),
+            state_root: "0xstate".to_string(), timestamp: 1234567890,
+        },
+        l3_superroot_proof: vec![], l4_block_proof: vec![],
+        l5_chain_event: L5ChainEvent {
+            tx_hash: "0xtx".to_string(), tx_index: 0, log_index: Some(0),
+            encoded_tx: "0x".to_string(), encoded_receipt: "0x".to_string(),
+        },
+        l6_finality: L6FinalityCommitment {
+            finality_type: "ETH_POS_CHECKPOINT".to_string(), commitment_data: "{}".to_string(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn test_stargate_adapter_full_lifecycle() {
+    println!("\n🔷 Testing Stargate V2 Full Lifecycle\n");
+
+    let spinner_client = SpinnerClient::new("https://api.taifoon.dev");
+    let adapter = StargateAdapter::new(spinner_client);
+    let intent = create_test_intent("stargate_v2", 1, 42161);
+    let proof = create_test_proof_local();
+
+    assert!(adapter.can_handle(&intent));
+    assert_eq!(adapter.protocol_name(), "stargate_v2");
+    println!("   ✅ Stargate adapter handles stargate_v2 intent");
+
+    let fill_tx = adapter.build_fill_tx(&intent, &proof).await.unwrap();
+    assert_eq!(fill_tx.chain_id, 1); // src chain (Stargate sends from source)
+    assert!(fill_tx.data.starts_with("0x"));
+    assert!(fill_tx.data.len() > 10);
+    println!("   ✅ Fill tx built: to={}, chain={}", fill_tx.to, fill_tx.chain_id);
+
+    let result = adapter.execute_fill(&intent, fill_tx, true).await.unwrap();
+    assert!(result.simulated);
+    assert!(result.success);
+    println!("   ✅ Simulated fill succeeded: {}", result.tx_hash);
+
+    let fill_result = FillResult { tx_hash: result.tx_hash, gas_used: result.gas_used, block_number: 0, success: true, simulated: true };
+    let claim = adapter.claim_funds(&intent, &fill_result).await.unwrap();
+    assert!(!claim.claimed_amount.is_empty());
+    println!("   ✅ Claim (auto-delivery): amount={}", claim.claimed_amount);
+
+    println!("\n✅ Stargate V2 lifecycle PASSED\n");
+}
+
+#[tokio::test]
+async fn test_relay_adapter_full_lifecycle() {
+    println!("\n🔶 Testing Relay Protocol Full Lifecycle\n");
+
+    let spinner_client = SpinnerClient::new("https://api.taifoon.dev");
+    let adapter = RelayAdapter::new(spinner_client);
+    let intent = create_test_intent("relay", 1, 42161);
+    let proof = create_test_proof_local();
+
+    assert!(adapter.can_handle(&intent));
+    assert_eq!(adapter.protocol_name(), "relay");
+    println!("   ✅ Relay adapter handles relay intent");
+
+    let fill_tx = adapter.build_fill_tx(&intent, &proof).await.unwrap();
+    assert_eq!(fill_tx.chain_id, 42161); // dst chain (Relay fills on destination)
+    assert!(fill_tx.data.starts_with("0x"));
+    println!("   ✅ Fill tx built: to={}, chain={}", fill_tx.to, fill_tx.chain_id);
+
+    let result = adapter.execute_fill(&intent, fill_tx, true).await.unwrap();
+    assert!(result.simulated);
+    assert!(result.success);
+    println!("   ✅ Simulated fill succeeded: {}", result.tx_hash);
+
+    let fill_result = FillResult { tx_hash: result.tx_hash, gas_used: result.gas_used, block_number: 0, success: true, simulated: true };
+    let claim = adapter.claim_funds(&intent, &fill_result).await.unwrap();
+    assert_eq!(claim.claimed_amount, intent.amount);
+    println!("   ✅ Claim (auto-settle): amount={}", claim.claimed_amount);
+
+    println!("\n✅ Relay Protocol lifecycle PASSED\n");
+}
+
+#[tokio::test]
+async fn test_cctp_adapter_full_lifecycle() {
+    println!("\n🟢 Testing CCTP Full Lifecycle\n");
+
+    let spinner_client = SpinnerClient::new("https://api.taifoon.dev");
+    let adapter = CctpAdapter::new(spinner_client);
+    let intent = create_test_intent("cctp", 1, 42161);
+    let proof = create_test_proof_local();
+
+    assert!(adapter.can_handle(&intent));
+    assert_eq!(adapter.protocol_name(), "cctp");
+    println!("   ✅ CCTP adapter handles cctp intent");
+
+    let fill_tx = adapter.build_fill_tx(&intent, &proof).await.unwrap();
+    assert_eq!(fill_tx.chain_id, 42161); // dst chain (receiveMessage on destination)
+    assert!(fill_tx.data.starts_with("0x"));
+    assert_eq!(fill_tx.value.as_deref(), Some("0x0"));
+    println!("   ✅ Fill tx built: to={}, chain={}", fill_tx.to, fill_tx.chain_id);
+
+    let result = adapter.execute_fill(&intent, fill_tx, true).await.unwrap();
+    assert!(result.simulated);
+    assert!(result.success);
+    println!("   ✅ Simulated fill succeeded: {}", result.tx_hash);
+
+    let fill_result = FillResult { tx_hash: result.tx_hash, gas_used: result.gas_used, block_number: 0, success: true, simulated: true };
+    let claim = adapter.claim_funds(&intent, &fill_result).await.unwrap();
+    assert_eq!(claim.claimed_amount, intent.amount);
+    println!("   ✅ Claim (mint): amount={}", claim.claimed_amount);
+
+    println!("\n✅ CCTP lifecycle PASSED\n");
+}
+
+#[tokio::test]
+async fn test_factory_routes_new_adapters() {
+    println!("\n🏭 Testing Factory Routes New Adapters\n");
+
+    let factory = AdapterFactory::new("https://api.taifoon.dev");
+
+    let cases = vec![
+        ("stargate_v2", "stargate_v2"),
+        ("stargate",    "stargate_v2"),
+        ("STARGATE",    "stargate_v2"),
+        ("relay",       "relay"),
+        ("Relay",       "relay"),
+        ("cctp",        "cctp"),
+        ("CCTP",        "cctp"),
+        ("circle_bridge", "cctp"),
+    ];
+
+    for (input, expected_name) in &cases {
+        let intent = create_test_intent(input, 1, 42161);
+        let adapter = factory.get_adapter(&intent).expect(&format!("should route {}", input));
+        assert_eq!(adapter.protocol_name(), *expected_name,
+            "protocol '{}' should map to '{}'", input, expected_name);
+        println!("   ✅ {} → {}", input, adapter.protocol_name());
+    }
+
+    let supported = factory.supported_protocols();
+    assert!(supported.contains(&"stargate_v2"));
+    assert!(supported.contains(&"relay"));
+    assert!(supported.contains(&"cctp"));
+    println!("   ✅ All new protocols in supported list");
+
+    println!("\n✅ Factory routing for new adapters PASSED\n");
+}
+
+#[tokio::test]
+async fn test_best_quote_selection_includes_new_adapters() {
+    println!("\n🏆 Testing Best-Quote Selection Includes New Adapters\n");
+
+    // Use get_all_adapters() to verify Stargate/Relay/CCTP are considered in the pool.
+    let factory = AdapterFactory::new("https://api.taifoon.dev");
+    let proof = create_test_proof_local();
+
+    // Scenario A: a "stargate_v2" intent — only StargateAdapter handles it
+    let stargate_intent = create_test_intent("stargate_v2", 1, 42161);
+    let sg_adapters = factory.get_all_adapters(&stargate_intent);
+    assert!(!sg_adapters.is_empty(), "at least one adapter should handle stargate_v2");
+    let sg_names: Vec<_> = sg_adapters.iter().map(|a| a.protocol_name()).collect();
+    assert!(sg_names.contains(&"stargate_v2"),
+        "StargateAdapter must be in the quote pool for stargate_v2 intent; got: {:?}", sg_names);
+    println!("   ✅ Stargate-intent quote pool: {:?}", sg_names);
+
+    // Scenario B: a "relay" intent — only RelayAdapter handles it
+    let relay_intent = create_test_intent("relay", 1, 42161);
+    let rl_adapters = factory.get_all_adapters(&relay_intent);
+    let rl_names: Vec<_> = rl_adapters.iter().map(|a| a.protocol_name()).collect();
+    assert!(rl_names.contains(&"relay"),
+        "RelayAdapter must be in the quote pool; got: {:?}", rl_names);
+    println!("   ✅ Relay-intent quote pool: {:?}", rl_names);
+
+    // Scenario C: a "cctp" intent — only CctpAdapter handles it
+    let cctp_intent = create_test_intent("cctp", 1, 42161);
+    let cc_adapters = factory.get_all_adapters(&cctp_intent);
+    let cc_names: Vec<_> = cc_adapters.iter().map(|a| a.protocol_name()).collect();
+    assert!(cc_names.contains(&"cctp"),
+        "CctpAdapter must be in the quote pool; got: {:?}", cc_names);
+    println!("   ✅ CCTP-intent quote pool: {:?}", cc_names);
+
+    // Scenario D: simulate best-quote selection — Stargate wins when its fill_tx is
+    // the only successfully-built tx for a stargate intent.
+    let sg_winner: Option<String> = {
+        let adapters = factory.get_all_adapters(&stargate_intent);
+        let mut best: Option<String> = None;
+        for adapter in &adapters {
+            if let Ok(_tx) = adapter.build_fill_tx(&stargate_intent, &proof).await {
+                best = Some(adapter.protocol_name().to_string());
+                break;
+            }
+        }
+        best
+    };
+    assert!(sg_winner.is_some(), "At least one adapter must produce a valid quote");
+    assert_eq!(sg_winner.as_deref(), Some("stargate_v2"),
+        "For a stargate intent, StargateAdapter should win best-quote selection");
+    println!("   ✅ Best-quote winner for stargate_v2 intent: {}", sg_winner.unwrap());
+
+    // Scenario E: CCTP wins for a cctp-tagged intent (first valid fill_tx)
+    let cctp_winner: Option<String> = {
+        let adapters = factory.get_all_adapters(&cctp_intent);
+        let mut best: Option<String> = None;
+        for adapter in &adapters {
+            if let Ok(_tx) = adapter.build_fill_tx(&cctp_intent, &proof).await {
+                best = Some(adapter.protocol_name().to_string());
+                break;
+            }
+        }
+        best
+    };
+    assert_eq!(cctp_winner.as_deref(), Some("cctp"),
+        "CCTP adapter should win best-quote for a cctp intent");
+    println!("   ✅ Best-quote winner for cctp intent: {}", cctp_winner.unwrap());
+
+    println!("\n✅ Best-quote selection test PASSED — all new adapters included in quote pool\n");
+}
