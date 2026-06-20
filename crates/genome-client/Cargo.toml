@@ -22,3 +22,11 @@ tokio-tungstenite = { workspace = true }
 [[test]]
 name = "fixtures_parse"
 path = "../../tests/fixtures_parse.rs"
+
+[[test]]
+name = "genome_sse_integration"
+path = "tests/genome_sse_integration.rs"
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true
