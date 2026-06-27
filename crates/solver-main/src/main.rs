@@ -4,7 +4,7 @@ use executor::{
     build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
     LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
-use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, DlnSolanaSourcePoller, GenomeClient, Intent};
+use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, DlnSolanaSourcePoller, GenomeClient, HardenedConsumer, Intent};
 use portfolio_sidecar::PortfolioSidecar;
 use profit_calc::ProfitCalculator;
 use protocol_adapters::AdapterFactory;
@@ -469,7 +469,10 @@ async fn main() -> Result<()> {
     // EVM-destination Swift orders. The SSE stream emits null-field events and is
     // kept only for block/gas signals — all fillable intents come from the pollers.
     let genome_client = GenomeClient::new(&genome_sse_url);
-    let (intent_tx, mut intent_rx) = mpsc::channel(100);
+    // Pollers feed into a raw inner channel; HardenedConsumer wraps the SSE path
+    // with dedup, bounded-buffer, and metrics. Pollers bypass hardening (they
+    // handle their own dedup internally) but share the same outbound channel.
+    let (intent_tx, mut intent_rx) = mpsc::channel(256);
     let debridge_poller = DeBridgePoller::default_mainnet();
     let solver_evm_addr = lambda_controller.as_ref()
         .map(|c| format!("{:?}", c.signer.address()).to_lowercase());
@@ -485,16 +488,38 @@ async fn main() -> Result<()> {
         info!("🌊 DLN Solana source poller enabled");
     }
 
-    let _genome_handle = tokio::spawn(async move {
-        if let Err(e) = genome_client
-            .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
-            .await
-        {
-            error!("Genome stream error: {}", e);
-        }
+    // SSE path: HardenedConsumer provides reconnect+dedup+bounded-buffer.
+    let hardened = HardenedConsumer::new_default(genome_client);
+    let genome_metrics = std::sync::Arc::clone(&hardened.metrics);
+    // Build a separate channel for the hardened SSE consumer so the pollers
+    // can still use intent_tx directly (they manage their own replay-safety).
+    let (sse_intent_tx, sse_intent_rx) = mpsc::channel::<Intent>(256);
+    // Drain sse_intent_rx into intent_tx so the main loop sees all intents.
+    {
+        let fwd_tx = intent_tx.clone();
+        let mut sse_rx = sse_intent_rx;
+        tokio::spawn(async move {
+            while let Some(i) = sse_rx.recv().await {
+                if fwd_tx.send(i).await.is_err() { break; }
+            }
+        });
+    }
+    tokio::spawn(async move { hardened.run(sse_intent_tx).await });
+
+    // Pollers (Across + deBridge) feed directly into intent_tx.
+    let _poller_handle = tokio::spawn(async move {
+        let across_p = across_poller;
+        let across_tx = intent_tx.clone();
+        let deb_tx = intent_tx.clone();
+        let debridge_p = debridge_poller;
+        tokio::join!(
+            across_p.run(across_tx),
+            debridge_p.run(deb_tx),
+        );
     });
-    info!("✅ Genome SSE + deBridge on-chain + Across + Mayan pollers started");
+    info!("✅ Genome SSE (hardened) + deBridge on-chain + Across + Mayan pollers started");
     info!("⏳ Waiting for intents...");
+    let _ = genome_metrics; // retained for future log/metric export
 
     // Dedup: track intent IDs we've already dispatched in this session.
     // The genome stream emits deposit + placed + executed for the same
