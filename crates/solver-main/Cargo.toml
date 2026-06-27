@@ -39,6 +39,17 @@ reqwest.workspace = true
 async-trait.workspace = true
 toml = "0.8"
 
+[[test]]
+name = "genome_sse_to_quote"
+path = "tests/genome_sse_to_quote.rs"
+
+[dev-dependencies]
+axum.workspace = true
+genome-client = { path = "../genome-client" }
+protocol-adapters = { path = "../protocol-adapters" }
+tokio.workspace = true
+futures.workspace = true
+
 [features]
 # Default build is config-only: TraderHandBackend answers /api/hand/* from a
 # hands.toml without needing the gitignored internal `trader` crate, so
