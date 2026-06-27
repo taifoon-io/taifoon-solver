@@ -6,6 +6,9 @@ use tracing::{error, info, warn};
 pub mod dln_solana_poller;
 pub use dln_solana_poller::{DlnSolanaSourcePoller, DLN_SOLANA_PROGRAM_ID};
 
+pub mod hardened_consumer;
+pub use hardened_consumer::{ConsumerMetrics, HardenedConsumer};
+
 /// Genome event from DA API SSE stream.
 ///
 /// Legacy field names (`token`, `amount`, `timestamp`, `ref`) are honored via
