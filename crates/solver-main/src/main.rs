@@ -749,6 +749,12 @@ async fn main() -> Result<()> {
         let is_debridge = proto_lower.contains("debridge") || proto_lower.contains("dln");
         let is_lifi = proto_lower.contains("lifi") || proto_lower.contains("li.fi");
         let is_mayan = proto_lower.contains("mayan");
+        // New adapter protocols handled by AdapterFactory quote path (not lambda controller).
+        let is_new_adapter_proto = proto_lower.contains("stargate")
+            || proto_lower.contains("cctp")
+            || proto_lower.contains("circle_bridge")
+            || proto_lower.contains("circle_transfer")
+            || (proto_lower.contains("relay") && !proto_lower.contains("debridge") && !proto_lower.contains("dln"));
         let filter_match = protocol_filter == "all"
             || protocol_filter.split(',').any(|f| proto_lower.contains(f.trim()));
 
@@ -965,6 +971,7 @@ async fn main() -> Result<()> {
         let routable = is_across
             || is_debridge
             || is_mayan
+            || is_new_adapter_proto
             || (is_lifi && (effective_is_across || effective_is_debridge || effective_is_mayan));
 
         if filter_match && routable {
@@ -997,6 +1004,73 @@ async fn main() -> Result<()> {
                 info!("⏭️  {} skip (zero input amount): {}", intent_ref.protocol, intent_ref.id);
                 continue;
             }
+            // ── New adapter quote path (Stargate / Relay / CCTP) ─────────────────
+            // These protocols are not handled by lambda_controller. Route through
+            // AdapterFactory.build_fill_tx → execute_fill(dry_run). DRY_RUN is always
+            // respected: execute_fill(true) simulates without broadcasting.
+            if is_new_adapter_proto {
+                let intent_for_quote = intent_ref.to_owned();
+                let factory_for_quote = AdapterFactory::new(
+                    std::env::var("WARMBED_API_URL").unwrap_or_else(|_| "https://api.taifoon.dev".into())
+                );
+                let api_for_quote = solver_api.clone();
+                let dry_run_quote = dry_run;
+                let proto_tag = intent_for_quote.protocol.clone();
+                tokio::spawn(async move {
+                    match factory_for_quote.get_adapter(&intent_for_quote) {
+                        Ok(adapter) => {
+                            // Build a stub proof — real proof fetch is left to a future lambda path.
+                            let stub_proof = protocol_adapters::V5ProofBlob {
+                                l1_superroot: protocol_adapters::L1SuperRoot {
+                                    hash: "0x0".into(), timestamp: 0, chains_included: vec![],
+                                },
+                                l2_chain_header: protocol_adapters::L2ChainHeader {
+                                    chain_id: intent_for_quote.src_chain, block_number: 0,
+                                    block_hash: "0x0".into(), parent_hash: "0x0".into(),
+                                    state_root: "0x0".into(), timestamp: 0,
+                                },
+                                l3_superroot_proof: vec![],
+                                l4_block_proof: vec![],
+                                l5_chain_event: protocol_adapters::L5ChainEvent {
+                                    tx_hash: intent_for_quote.tx_hash.clone(),
+                                    tx_index: 0, log_index: None,
+                                    encoded_tx: "0x".into(), encoded_receipt: "0x".into(),
+                                },
+                                l6_finality: protocol_adapters::L6FinalityCommitment {
+                                    finality_type: "DEPTH_BASED".into(),
+                                    commitment_data: "{}".into(),
+                                },
+                            };
+                            match adapter.build_fill_tx(&intent_for_quote, &stub_proof).await {
+                                Ok(fill_tx) => {
+                                    info!("📋 {} quote: chain={} calldata_len={}",
+                                        proto_tag, fill_tx.chain_id, fill_tx.data.len() / 2);
+                                    match adapter.execute_fill(&intent_for_quote, fill_tx, dry_run_quote).await {
+                                        Ok(result) => {
+                                            if result.simulated {
+                                                info!("🧪 {} dry-run quote accepted: sim_tx={}", proto_tag, result.tx_hash);
+                                            } else {
+                                                info!("🎉 {} fill confirmed: {}", proto_tag, result.tx_hash);
+                                            }
+                                            api_for_quote.emit_event(SolverEvent::IntentSolved(SolvedData {
+                                                id: intent_for_quote.id.clone(),
+                                                tx_hash: result.tx_hash,
+                                                actual_profit_usd: 0.0,
+                                                gas_used: result.gas_used,
+                                            }));
+                                        }
+                                        Err(e) => error!("❌ {} execute_fill: {}", proto_tag, e),
+                                    }
+                                }
+                                Err(e) => info!("⏭️  {} quote failed ({}): {}", proto_tag, e, intent_for_quote.id),
+                            }
+                        }
+                        Err(e) => warn!("⚠️  No adapter for {} ({})", proto_tag, e),
+                    }
+                });
+                continue;
+            }
+
             let Some(ctrl) = lambda_controller.as_ref() else {
                 info!("⏭️  Lambda controller disabled, skipping {}", intent_ref.id);
                 continue;
