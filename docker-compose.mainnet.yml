@@ -1,0 +1,66 @@
+# Mainnet overlay for taifoon-solver — pairs with docker-compose.yml.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up
+#
+# Required secrets (NEVER commit, source from vault/env):
+#   SOLVER_PRIVATE_KEY        — funded EVM hot wallet (≥$50 native per chain)
+#   SOLANA_KEYPAIR_PATH       — funded Solana keypair on solver host
+#   ARC_OPERATOR_PRIVATE_KEY  — wallet that signs DonutHook.recordFill calls
+#   *_RPC                     — dedicated RPC keys (not public endpoints)
+#
+# Two-key live-fill gate:
+#   SIMULATION_MODE=false AND LIVE_FILL_OK=yes
+# Flip one at a time; never both via env defaults.
+
+services:
+  solver:
+    environment:
+      - SIMULATION_MODE=false
+      - PROTOCOL_FILTER=across,debridge,mayan_swift,lifi
+      - MIN_PROFIT_USD=0.10
+      - MAX_NOTIONAL_USD=25
+      # Mainnet RPC overrides — required.
+      - ETHEREUM_RPC=${ETHEREUM_RPC}
+      - ARBITRUM_RPC=${ARBITRUM_RPC}
+      - BASE_RPC=${BASE_RPC}
+      - OPTIMISM_RPC=${OPTIMISM_RPC}
+      - POLYGON_RPC=${POLYGON_RPC}
+
+  # Sidecar runs as a sibling service so arc-api can dispatch fills into it
+  # without coupling to solver's SSE loop. Listens on :8090.
+  sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.solver
+    image: taifoon-solver:latest
+    container_name: taifoon-sidecar
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["/usr/local/bin/t3rn-sidecar"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    environment:
+      - SIDECAR_PORT=8090
+      - SIMULATION_MODE=false
+      - LIVE_FILL_OK=${LIVE_FILL_OK:-no}
+      - ARC_NETWORK=mainnet
+      - WARMBED_API_URL=https://api.taifoon.dev
+      - SOLVER_PRIVATE_KEY=${SOLVER_PRIVATE_KEY}
+    depends_on:
+      - solver
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8090/api/sidecar/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

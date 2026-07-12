@@ -4,7 +4,7 @@ use executor::{
     build_lambda_controller_from_env, Executor, LambdaClaimOutcome, LambdaExecuteOutcome,
     LiFiMetaRouter, OutcomeLog, OutcomeRecord, SkipRules,
 };
-use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, DlnSolanaSourcePoller, GenomeClient, Intent};
+use genome_client::{fetch_mayan_order_params, AcrossPoller, DeBridgePoller, DlnSolanaSourcePoller, GenomeClient, HardenedConsumer, Intent};
 use portfolio_sidecar::PortfolioSidecar;
 use profit_calc::ProfitCalculator;
 use protocol_adapters::AdapterFactory;
@@ -12,6 +12,8 @@ use solver_api::{
     AttemptData, IntentData, SolvedData, SolverApi, SolverEvent,
 };
 use solver_main::attestation_pump;
+use solver_main::hand_backend::{HandVenueConfig, TraderHandBackend};
+use solver_main::hand_relay;
 use solver_main::lifi_resolver::{resolve_lifi_bridge, LifiBridgeResult};
 use solver_main::messiah;
 use std::collections::{HashMap, HashSet};
@@ -149,6 +151,72 @@ async fn main() -> Result<()> {
     // path is the dev/local fallback so a fresh checkout doesn't lock its
     // own dashboard out by default.
     ensure_solver_api_token();
+
+    // ── Hand backend (P6) ─────────────────────────────────────────────────────
+    // Wire a concrete HandBackend into SolverApi so /api/hand/* stops
+    // returning 503. Uses the same OnceLock injection pattern as the
+    // outcome-log / wallet-manager handles below, so it can run after
+    // solver_api.router() is built. Config source is HANDS_CONFIG_PATH
+    // (default ./config/hands.toml); if absent, fall back to a single
+    // "internal" venue so a fresh checkout still answers status non-503.
+    {
+        let hands_config_path = std::env::var("HANDS_CONFIG_PATH")
+            .unwrap_or_else(|_| "./config/hands.toml".to_string());
+        let backend = match TraderHandBackend::from_config(&hands_config_path) {
+            Ok(b) => {
+                info!(
+                    "🤝 Hand backend: {} venue(s) from {}",
+                    b.registered(),
+                    hands_config_path
+                );
+                b
+            }
+            Err(e) => {
+                warn!(
+                    "🤝 Hand config {} unavailable ({}); defaulting to single 'internal' venue",
+                    hands_config_path, e
+                );
+                TraderHandBackend::new(vec![HandVenueConfig {
+                    venue: "internal".to_string(),
+                    capabilities: 0,
+                    connected: false,
+                }])
+                .with_default("internal")
+            }
+        };
+        // Share one Arc between the API surface and the P7 relay so the
+        // explorer sees exactly the hand state the /api/hand/* routes serve.
+        let hand_backend: Arc<dyn solver_api::hand::HandBackend> = Arc::new(backend);
+        solver_api.set_hand_backend(hand_backend.clone());
+
+        // ── Spinner hand-state relay (P7) ─────────────────────────────────────
+        // Forward solver-main hand state to the spinner explorer on a timer so
+        // the explorer can surface which venues this solver fronts + their
+        // connectivity. Best-effort, fail-open (mirrors attestation_pump):
+        // explorer downtime never affects the solver. Opt out with
+        // HAND_RELAY_DISABLE=1. solver_id is the messiah signer address when
+        // available (purely for explorer keying — relay runs without it too).
+        if std::env::var("HAND_RELAY_DISABLE").ok().as_deref() == Some("1") {
+            info!("🤝 hand_relay disabled (HAND_RELAY_DISABLE=1)");
+        } else {
+            let solver_id = messiah::load_messiah_signer()
+                .ok()
+                .map(|s| format!("{:?}", s.address()));
+            let relay_interval = std::env::var("HAND_RELAY_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(30);
+            hand_relay::spawn_hand_relay(
+                hand_backend,
+                hand_relay::HandRelayConfig {
+                    spinner_base_url: spinner_base.clone(),
+                    solver_id,
+                    poll_interval: std::time::Duration::from_secs(relay_interval),
+                },
+            );
+            info!("🤝 hand_relay spawned → {} (every {}s)", spinner_base, relay_interval);
+        }
+    }
 
     // ── Solver event API (SSE for dashboard) ──────────────────────────────────
     let api_router = solver_api.router();
@@ -401,7 +469,10 @@ async fn main() -> Result<()> {
     // EVM-destination Swift orders. The SSE stream emits null-field events and is
     // kept only for block/gas signals — all fillable intents come from the pollers.
     let genome_client = GenomeClient::new(&genome_sse_url);
-    let (intent_tx, mut intent_rx) = mpsc::channel(100);
+    // Pollers feed into a raw inner channel; HardenedConsumer wraps the SSE path
+    // with dedup, bounded-buffer, and metrics. Pollers bypass hardening (they
+    // handle their own dedup internally) but share the same outbound channel.
+    let (intent_tx, mut intent_rx) = mpsc::channel(256);
     let debridge_poller = DeBridgePoller::default_mainnet();
     let solver_evm_addr = lambda_controller.as_ref()
         .map(|c| format!("{:?}", c.signer.address()).to_lowercase());
@@ -417,16 +488,38 @@ async fn main() -> Result<()> {
         info!("🌊 DLN Solana source poller enabled");
     }
 
-    let _genome_handle = tokio::spawn(async move {
-        if let Err(e) = genome_client
-            .subscribe_with_all_pollers(intent_tx, vec![across_poller], Some(debridge_poller))
-            .await
-        {
-            error!("Genome stream error: {}", e);
-        }
+    // SSE path: HardenedConsumer provides reconnect+dedup+bounded-buffer.
+    let hardened = HardenedConsumer::new_default(genome_client);
+    let genome_metrics = std::sync::Arc::clone(&hardened.metrics);
+    // Build a separate channel for the hardened SSE consumer so the pollers
+    // can still use intent_tx directly (they manage their own replay-safety).
+    let (sse_intent_tx, sse_intent_rx) = mpsc::channel::<Intent>(256);
+    // Drain sse_intent_rx into intent_tx so the main loop sees all intents.
+    {
+        let fwd_tx = intent_tx.clone();
+        let mut sse_rx = sse_intent_rx;
+        tokio::spawn(async move {
+            while let Some(i) = sse_rx.recv().await {
+                if fwd_tx.send(i).await.is_err() { break; }
+            }
+        });
+    }
+    tokio::spawn(async move { hardened.run(sse_intent_tx).await });
+
+    // Pollers (Across + deBridge) feed directly into intent_tx.
+    let _poller_handle = tokio::spawn(async move {
+        let across_p = across_poller;
+        let across_tx = intent_tx.clone();
+        let deb_tx = intent_tx.clone();
+        let debridge_p = debridge_poller;
+        tokio::join!(
+            across_p.run(across_tx),
+            debridge_p.run(deb_tx),
+        );
     });
-    info!("✅ Genome SSE + deBridge on-chain + Across + Mayan pollers started");
+    info!("✅ Genome SSE (hardened) + deBridge on-chain + Across + Mayan pollers started");
     info!("⏳ Waiting for intents...");
+    let _ = genome_metrics; // retained for future log/metric export
 
     // Dedup: track intent IDs we've already dispatched in this session.
     // The genome stream emits deposit + placed + executed for the same
@@ -681,6 +774,12 @@ async fn main() -> Result<()> {
         let is_debridge = proto_lower.contains("debridge") || proto_lower.contains("dln");
         let is_lifi = proto_lower.contains("lifi") || proto_lower.contains("li.fi");
         let is_mayan = proto_lower.contains("mayan");
+        // New adapter protocols handled by AdapterFactory quote path (not lambda controller).
+        let is_new_adapter_proto = proto_lower.contains("stargate")
+            || proto_lower.contains("cctp")
+            || proto_lower.contains("circle_bridge")
+            || proto_lower.contains("circle_transfer")
+            || (proto_lower.contains("relay") && !proto_lower.contains("debridge") && !proto_lower.contains("dln"));
         let filter_match = protocol_filter == "all"
             || protocol_filter.split(',').any(|f| proto_lower.contains(f.trim()));
 
@@ -897,6 +996,7 @@ async fn main() -> Result<()> {
         let routable = is_across
             || is_debridge
             || is_mayan
+            || is_new_adapter_proto
             || (is_lifi && (effective_is_across || effective_is_debridge || effective_is_mayan));
 
         if filter_match && routable {
@@ -929,6 +1029,73 @@ async fn main() -> Result<()> {
                 info!("⏭️  {} skip (zero input amount): {}", intent_ref.protocol, intent_ref.id);
                 continue;
             }
+            // ── New adapter quote path (Stargate / Relay / CCTP) ─────────────────
+            // These protocols are not handled by lambda_controller. Route through
+            // AdapterFactory.build_fill_tx → execute_fill(dry_run). DRY_RUN is always
+            // respected: execute_fill(true) simulates without broadcasting.
+            if is_new_adapter_proto {
+                let intent_for_quote = intent_ref.to_owned();
+                let factory_for_quote = AdapterFactory::new(
+                    std::env::var("WARMBED_API_URL").unwrap_or_else(|_| "https://api.taifoon.dev".into())
+                );
+                let api_for_quote = solver_api.clone();
+                let dry_run_quote = dry_run;
+                let proto_tag = intent_for_quote.protocol.clone();
+                tokio::spawn(async move {
+                    match factory_for_quote.get_adapter(&intent_for_quote) {
+                        Ok(adapter) => {
+                            // Build a stub proof — real proof fetch is left to a future lambda path.
+                            let stub_proof = protocol_adapters::V5ProofBlob {
+                                l1_superroot: protocol_adapters::L1SuperRoot {
+                                    hash: "0x0".into(), timestamp: 0, chains_included: vec![],
+                                },
+                                l2_chain_header: protocol_adapters::L2ChainHeader {
+                                    chain_id: intent_for_quote.src_chain, block_number: 0,
+                                    block_hash: "0x0".into(), parent_hash: "0x0".into(),
+                                    state_root: "0x0".into(), timestamp: 0,
+                                },
+                                l3_superroot_proof: vec![],
+                                l4_block_proof: vec![],
+                                l5_chain_event: protocol_adapters::L5ChainEvent {
+                                    tx_hash: intent_for_quote.tx_hash.clone(),
+                                    tx_index: 0, log_index: None,
+                                    encoded_tx: "0x".into(), encoded_receipt: "0x".into(),
+                                },
+                                l6_finality: protocol_adapters::L6FinalityCommitment {
+                                    finality_type: "DEPTH_BASED".into(),
+                                    commitment_data: "{}".into(),
+                                },
+                            };
+                            match adapter.build_fill_tx(&intent_for_quote, &stub_proof).await {
+                                Ok(fill_tx) => {
+                                    info!("📋 {} quote: chain={} calldata_len={}",
+                                        proto_tag, fill_tx.chain_id, fill_tx.data.len() / 2);
+                                    match adapter.execute_fill(&intent_for_quote, fill_tx, dry_run_quote).await {
+                                        Ok(result) => {
+                                            if result.simulated {
+                                                info!("🧪 {} dry-run quote accepted: sim_tx={}", proto_tag, result.tx_hash);
+                                            } else {
+                                                info!("🎉 {} fill confirmed: {}", proto_tag, result.tx_hash);
+                                            }
+                                            api_for_quote.emit_event(SolverEvent::IntentSolved(SolvedData {
+                                                id: intent_for_quote.id.clone(),
+                                                tx_hash: result.tx_hash,
+                                                actual_profit_usd: 0.0,
+                                                gas_used: result.gas_used,
+                                            }));
+                                        }
+                                        Err(e) => error!("❌ {} execute_fill: {}", proto_tag, e),
+                                    }
+                                }
+                                Err(e) => info!("⏭️  {} quote failed ({}): {}", proto_tag, e, intent_for_quote.id),
+                            }
+                        }
+                        Err(e) => warn!("⚠️  No adapter for {} ({})", proto_tag, e),
+                    }
+                });
+                continue;
+            }
+
             let Some(ctrl) = lambda_controller.as_ref() else {
                 info!("⏭️  Lambda controller disabled, skipping {}", intent_ref.id);
                 continue;

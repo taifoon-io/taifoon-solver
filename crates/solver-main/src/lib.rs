@@ -3,5 +3,7 @@
 //! both consume.
 
 pub mod attestation_pump;
+pub mod hand_backend;
+pub mod hand_relay;
 pub mod lifi_resolver;
 pub mod messiah;

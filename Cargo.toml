@@ -17,6 +17,7 @@ members = [
     "crates/solver-sandbox",
     "crates/donut-adjudicator",
     "crates/spinner-signer",
+    "crates/t3rn-sidecar",
 ]
 
 [workspace.package]
@@ -69,6 +70,9 @@ tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 # Async trait support (donut-adjudicator uses this for the async FeeSplitAdjudicator trait)
 async-trait = "0.1"
+
+# UUID for sidecar intent id generation
+uuid = { version = "1", features = ["v4", "serde"] }
 
 # SHA-256 (donut-adjudicator hash-chain + canonical-JSON digesting)
 sha2 = "0.10"

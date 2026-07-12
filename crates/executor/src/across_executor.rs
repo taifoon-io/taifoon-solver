@@ -650,15 +650,14 @@ pub async fn fetch_relay_data_from_tx(
     let v: serde_json::Value = resp.json().await.ok()?;
     let logs = v["result"]["logs"].as_array()?;
 
-    // Two known V3FundsDeposited topics — same non-indexed data layout, different sig versions:
-    //   NEW (Optimism, Base, Arbitrum deployments): 0xa123dc29...
-    //   OLD (Linea, older deployments):             0x32ed1a40...
-    // Both: Indexed: destinationChainId (topic[1]), depositId (topic[2]), depositor (topic[3])
-    // Non-indexed data: inputToken, outputToken, inputAmount, outputAmount, quoteTimestamp,
-    //   fillDeadline, exclusivityDeadline, recipient, exclusiveRelayer, message
+    // V3FundsDeposited topic — keccak256(V3FundsDeposited(address,address,...)).
+    // Current SpokePool (all chains, post-2024 upgrade): 0x32ed1a40...
+    // Legacy topic (pre-upgrade, some older testnet logs): 0xa123dc29... — kept for
+    // backwards-compat but no longer emitted on mainnet SpokePool deployments.
+    // Both have identical non-indexed data layout.
     const V3_DEPOSITED_TOPICS: &[&str] = &[
-        "0xa123dc29aebf7d0c3322c8eeb5b999e859f39937950ed31056532713d0de396f",
         "0x32ed1a409ef04c7b0227189c3a103dc5ac10e775a15b785dcc510201f7c25ad3",
+        "0xa123dc29aebf7d0c3322c8eeb5b999e859f39937950ed31056532713d0de396f",
     ];
 
     for log in logs {
